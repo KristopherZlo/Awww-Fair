@@ -52,7 +52,7 @@ import {
 } from "./game/engine";
 import { createPartyGoals, normalizePartyGoal, PARTY_GOAL_REWARD, updatePartyGoalsAfterSales, type PartyGoal } from "./game/goals";
 import { chooseAiUpgrade, chooseWeakAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn, type AiInfluenceMove, type AiPlanningPlan } from "./game/ai";
-import { clampVolume, playSoundEffect, type SoundEffectId } from "./audio/soundEffects";
+import { clampVolume, playSoundEffect, primeSoundEffects, type SoundEffectId } from "./audio/soundEffects";
 import { CAMPAIGN_LEVELS, campaignProgressAfterWin, createDefaultCampaignProgress, isLevelUnlocked, type CampaignLevel, type CampaignProgress } from "./game/levels";
 import {
   LANGUAGE_OPTIONS,
@@ -65,8 +65,6 @@ import {
   coinText,
   cutsceneText,
   customerName,
-  customerPersonalityDescription,
-  customerPersonalityLabel,
   goalTitle,
   influenceDescription,
   influenceName,
@@ -121,6 +119,7 @@ const SOUND_ASSETS = {
   money: assetUrl("sounds/money.wav"),
   victory: assetUrl("sounds/victory.wav")
 } as const;
+const TURN_CUE_MS = 1200;
 
 const DEFAULT_AUDIO_SETTINGS = {
   musicEnabled: true,
@@ -129,6 +128,18 @@ const DEFAULT_AUDIO_SETTINGS = {
   effectsVolume: 1,
   turnTimeSeconds: DEFAULT_TURN_TIME_SECONDS,
   language: "ru" as Language
+};
+
+interface InitialStateOptions {
+  influenceHandSize: number;
+  trendCount: number;
+  partyGoalCount: number;
+}
+
+const DEFAULT_INITIAL_STATE_OPTIONS: InitialStateOptions = {
+  influenceHandSize: 2,
+  trendCount: 3,
+  partyGoalCount: 3
 };
 
 const CUTSCENE_FRAMES = [
@@ -312,7 +323,7 @@ function clampTurnTime(seconds: number) {
   return Math.max(MIN_TURN_TIME_SECONDS, Math.min(MAX_TURN_TIME_SECONDS, Math.round(seconds)));
 }
 
-function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SECONDS): GameState {
+function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SECONDS, options: InitialStateOptions = DEFAULT_INITIAL_STATE_OPTIONS): GameState {
   let productDeck = makeProductDeck();
   let influenceDeck = shuffleDeck([...INFLUENCE_CARDS]);
   let customerDeck = shuffleDeck([...CUSTOMER_CARDS]);
@@ -320,9 +331,9 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
 
   const [aProducts, afterAProducts] = draw(productDeck, 4);
   const [bProducts, afterBProducts] = draw(afterAProducts, 4);
-  const [aInfluence, afterAInfluence] = draw(influenceDeck, 2);
-  const [bInfluence, afterBInfluence] = draw(afterAInfluence, 2);
-  const [trends, afterTrends] = draw(trendDeck, 3);
+  const [aInfluence, afterAInfluence] = draw(influenceDeck, options.influenceHandSize);
+  const [bInfluence, afterBInfluence] = draw(afterAInfluence, options.influenceHandSize);
+  const [trends, afterTrends] = draw(trendDeck, options.trendCount);
   const [customers, afterCustomers] = draw(customerDeck, 1);
   const firstPlayer = Math.random() > 0.5 ? "A" : "B";
 
@@ -356,7 +367,7 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
     upgradeQueue: [],
     choiceDraft: null,
     pause: { active: false, pausedBy: null },
-    partyGoals: createPartyGoals(trends, customers),
+    partyGoals: options.partyGoalCount > 0 ? createPartyGoals(trends, customers, Math.random, options.partyGoalCount) : [],
     sound,
     aiPlayerId: null,
     aiMode: null,
@@ -366,6 +377,18 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
     campaignRun: null,
     turnTimeSeconds: clampTurnTime(turnTimeSeconds)
   };
+}
+
+function campaignInitialStateOptions(level: number): InitialStateOptions {
+  return {
+    trendCount: level >= 7 ? 3 : level >= 5 ? 2 : level >= 3 ? 1 : 0,
+    partyGoalCount: level >= 8 ? 3 : level >= 6 ? 2 : level >= 4 ? 1 : 0,
+    influenceHandSize: level >= 9 ? 2 : level >= 7 ? 1 : 0
+  };
+}
+
+function influenceHandSizeForState(state: GameState) {
+  return state.campaignRun ? campaignInitialStateOptions(state.campaignRun.level).influenceHandSize : DEFAULT_INITIAL_STATE_OPTIONS.influenceHandSize;
 }
 
 function opponentOf(playerId: PlayerId): PlayerId {
@@ -402,15 +425,25 @@ function displayPlayerNameFor(player: PlayerState | undefined, viewerId: PlayerI
   return player.name && !["Вы", "Оппонент"].includes(player.name) ? player.name : ui(language, "opponent");
 }
 
+function playerLogToken(playerId: PlayerId) {
+  return `{{player:${playerId}}}`;
+}
+
+function ownerLogToken(playerId: PlayerId) {
+  return `{{owner:${playerId}}}`;
+}
+
+function formatLogForViewer(log: string, viewerId: PlayerId, language: Language) {
+  return log
+    .replace(/\{\{player:([AB])\}\}/g, (_match, playerId: string) => displayPlayerName(playerId as PlayerId, viewerId, language))
+    .replace(/\{\{owner:([AB])\}\}/g, (_match, playerId: string) => ownerPhrase(playerId as PlayerId, viewerId, language));
+}
+
 function ownerPhrase(playerId: PlayerId, viewerId: PlayerId, language: Language) {
   if (language === "en") {
     return playerId === viewerId ? "for you" : "for the opponent";
   }
   return playerId === viewerId ? "у вас" : "у оппонента";
-}
-
-function actionPlayerName(playerId: PlayerId, viewerId: PlayerId, language: Language) {
-  return displayPlayerName(playerId, viewerId, language);
 }
 
 function formatTurnTime(seconds: number) {
@@ -513,9 +546,6 @@ function isWinningCandidate(result: PurchaseResult, candidate: PurchaseResult["c
 function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, language: Language) {
   if (language === "en") {
     if (!result.winner) {
-      if (result.customer.personality?.kind === "trend_chaser") {
-        return `${customerName(language, result.customer)} bought nothing: no product matched the needed trend.`;
-      }
       return `${customerName(language, result.customer)} bought nothing: no product reached ${PURCHASE_APPEAL_THRESHOLD} appeal.`;
     }
 
@@ -527,9 +557,6 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
   }
 
   if (!result.winner) {
-    if (result.customer.personality?.kind === "trend_chaser") {
-      return `${result.customer.name} ничего не купил: ни один товар не попал в нужный тренд.`;
-    }
     return `${result.customer.name} ничего не купил: ни один товар не набрал ${PURCHASE_APPEAL_THRESHOLD} привлекательности.`;
   }
 
@@ -538,7 +565,6 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
   const focusTrend = lines.find((line) => isFocusTrendLine(line.label));
   const primaryWish = lines.find((line) => line.label.startsWith("главное желание"));
   const secondaryWish = lines.find((line) => line.label.startsWith("второе желание"));
-  const personality = lines.find((line) => line.label.startsWith("характер"));
   const influence = lines.find((line) => result.winner && !line.label.includes("желание") && !line.label.includes("тренд") && Math.abs(line.value) >= 1);
   const regularTrend = lines.find((line) => !isFocusTrendLine(line.label) && result.winner && line.label.includes(":") && !line.label.includes("желание"));
 
@@ -549,8 +575,6 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
     reason = `совпало главное желание «${lineTag(primaryWish.label)}»`;
   } else if (secondaryWish) {
     reason = `совпало второе желание «${lineTag(secondaryWish.label)}»`;
-  } else if (personality) {
-    reason = `сработал характер клиента: ${lineTag(personality.label)}`;
   } else if (influence) {
     reason = `${winnerName} получил решающий бонус от «${lineSource(influence.label)}»`;
   } else if (regularTrend) {
@@ -767,21 +791,18 @@ function ProductCard({
 
 function CustomerCard({ customer, focusTags, language }: { customer: CustomerCardType; focusTags?: Set<Tag>; language: Language }) {
   const label = customerName(language, customer);
-  const personalityLabel = customerPersonalityLabel(language, customer);
-  const personalityDescription = customerPersonalityDescription(language, customer);
   return (
     <div
       className="card customer-card"
       title={
         language === "en"
-          ? `${label}: primary ${tagText(language, customer.primaryTag)}, secondary ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Personality: ${personalityDescription}` : ""}`
-          : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Характер: ${personalityDescription}` : ""}`
+          ? `${label}: primary ${tagText(language, customer.primaryTag)}, secondary ${tagText(language, customer.secondaryTag)}`
+          : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}`
       }
     >
       <Sprite atlas={CUSTOMER_ATLAS} atlas2x={CUSTOMER_ATLAS_2X} cols={4} rows={4} col={customer.sprite.col} row={customer.sprite.row} className="customer-sprite" />
       <div className="customer-copy card-copy">
         <strong>{label}</strong>
-        {customer.personality && <small className="personality-line">{personalityLabel}</small>}
         <div className="tag-row">
         <TagPill tag={customer.primaryTag} language={language} matched />
         <TagPill tag={customer.secondaryTag} language={language} matched={focusTags?.has(customer.secondaryTag)} />
@@ -864,8 +885,8 @@ function drawProductsToLimit(player: PlayerState, deck: ProductInstance[]): [Pla
   return [{ ...player, productHand: [...player.productHand, ...cards] }, rest];
 }
 
-function drawInfluencesToLimit(player: PlayerState, deck: InfluenceCardType[]): [PlayerState, InfluenceCardType[]] {
-  const needed = Math.max(0, 2 - player.influenceHand.length);
+function drawInfluencesToLimit(player: PlayerState, deck: InfluenceCardType[], limit = DEFAULT_INITIAL_STATE_OPTIONS.influenceHandSize): [PlayerState, InfluenceCardType[]] {
+  const needed = Math.max(0, limit - player.influenceHand.length);
   const [cards, rest] = draw(deck, needed);
   return [{ ...player, influenceHand: [...player.influenceHand, ...cards] }, rest];
 }
@@ -911,7 +932,7 @@ function normalizeSavedGameState(state: GameState): GameState {
     ...state,
     saleInsights: Array.isArray(state.saleInsights) ? state.saleInsights : [],
     pause: state.pause && typeof state.pause.active === "boolean" ? state.pause : { active: false, pausedBy: null },
-    partyGoals: Array.isArray(state.partyGoals) && state.partyGoals.length ? state.partyGoals.map(normalizePartyGoal) : createPartyGoals(state.activeTrends, state.currentCustomers),
+    partyGoals: Array.isArray(state.partyGoals) ? state.partyGoals.map(normalizePartyGoal) : createPartyGoals(state.activeTrends, state.currentCustomers),
     aiIntent: typeof state.aiIntent === "string" ? state.aiIntent : null,
     aiDifficulty: typeof (state as GameState & { aiDifficulty?: unknown }).aiDifficulty === "number" ? Math.max(1, Math.min(24, Math.round(state.aiDifficulty ?? 1))) : null,
     campaignRun: normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun),
@@ -1074,6 +1095,7 @@ export default function App() {
   const [musicStatus, setMusicStatus] = useState<MusicStatus>("idle");
   const [rejectedSlot, setRejectedSlot] = useState<string | null>(null);
   const [turnSecondsLeft, setTurnSecondsLeft] = useState(() => state.turnTimeSeconds);
+  const [turnCue, setTurnCue] = useState<{ key: string; label: string } | null>(null);
   const lobbyRef = useRef<LobbySession | null>(null);
   const applyingRemoteRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1086,6 +1108,8 @@ export default function App() {
   const gameEndJinglePlayedRef = useRef(false);
   const autoReadyTurnRef = useRef<string | null>(null);
   const rejectTimerRef = useRef<number | null>(null);
+  const turnCueTimerRef = useRef<number | null>(null);
+  const lastTurnCueKeyRef = useRef<string | null>(null);
   const skipNextSessionSaveRef = useRef(false);
   const language = audioSettings.language;
 
@@ -1095,9 +1119,10 @@ export default function App() {
   const localPlayer = state.players.find((player) => player.id === localPlayerId) ?? activePlayer;
   const opponentPlayer = state.players.find((player) => player.id === opponentOf(localPlayer.id)) ?? state.players[1];
   const handPlayer = lobby || state.aiPlayerId ? localPlayer : activePlayer;
-  const waitingForLobbyPlayer = Boolean(lobby && state.phase !== "game_end" && (state.phase === "menu" || !lobby.seats.A || !lobby.seats.B));
+  const waitingForLobbyPlayer = Boolean(lobby && state.phase !== "game_end" && (!lobby.seats.A || !lobby.seats.B));
   const localPlanningTurn = state.phase === "planning" && !waitingForLobbyPlayer && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer) && !state.choiceDraft;
   const canControlActivePlayer = !waitingForLobbyPlayer && !state.pause.active && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
+  const canResolveChoiceDraft = Boolean(state.choiceDraft && (!lobby || lobby.playerId === state.choiceDraft.playerId));
   const selectedInfluence = handPlayer.influenceHand.find((card) => card.id === state.selectedInfluenceId) ?? null;
   const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId, language), [state.players, localPlayerId, language]);
   const isTimedLocalTurn = localPlanningTurn && !state.pause.active;
@@ -1300,6 +1325,32 @@ export default function App() {
   }, [isTimedLocalTurn, state.phase, state.activePlayer, state.round]);
 
   useEffect(() => {
+    const shouldCue =
+      state.phase === "planning" &&
+      !waitingForLobbyPlayer &&
+      !state.pause.active &&
+      !isAiTurn &&
+      (!lobby || lobby.playerId === state.activePlayer);
+    const cueKey = `${lobby?.code ?? "local"}-${state.round}-${state.activePlayer}-${state.phase}`;
+
+    if (!shouldCue || lastTurnCueKeyRef.current === cueKey) {
+      return;
+    }
+
+    lastTurnCueKeyRef.current = cueKey;
+    if (turnCueTimerRef.current !== null) {
+      window.clearTimeout(turnCueTimerRef.current);
+    }
+
+    setTurnCue({ key: cueKey, label: ui(language, "you") });
+    playEffect("turn-start");
+    turnCueTimerRef.current = window.setTimeout(() => {
+      setTurnCue((current) => (current?.key === cueKey ? null : current));
+      turnCueTimerRef.current = null;
+    }, TURN_CUE_MS);
+  }, [state.phase, state.activePlayer, state.round, state.pause.active, waitingForLobbyPlayer, isAiTurn, lobby?.code, lobby?.playerId, language]);
+
+  useEffect(() => {
     const turnKey = `${state.round}-${state.activePlayer}-${state.phase}`;
     if (!isTimedLocalTurn || turnSecondsLeft > 0 || autoReadyTurnRef.current === turnKey) {
       return;
@@ -1313,6 +1364,9 @@ export default function App() {
     return () => {
       if (rejectTimerRef.current !== null) {
         window.clearTimeout(rejectTimerRef.current);
+      }
+      if (turnCueTimerRef.current !== null) {
+        window.clearTimeout(turnCueTimerRef.current);
       }
       clearMusicFade();
     };
@@ -1582,9 +1636,12 @@ export default function App() {
     playSoundEffect(audio.effectsEnabled, kind, audio.effectsVolume);
   }
 
-  function playSoundAsset(src: string, boost = 1) {
+  function playSoundAsset(src: string, boost = 1, fallback?: SoundEffectId) {
     const settings = audioSettingsRef.current;
     if (!settings.effectsEnabled || typeof Audio === "undefined") {
+      if (fallback) {
+        playEffect(fallback);
+      }
       return;
     }
 
@@ -1616,11 +1673,76 @@ export default function App() {
     try {
       playback = audio.play();
     } catch {
+      if (fallback) {
+        playEffect(fallback);
+      }
       return;
     }
 
     if (playback && typeof playback.catch === "function") {
-      void playback.catch(() => undefined);
+      void playback.catch(() => {
+        if (fallback) {
+          playEffect(fallback);
+        }
+      });
+    }
+  }
+
+  function shelfStateChanged(current: GameState, next: GameState) {
+    return next.players.some((nextPlayer) => {
+      const currentPlayer = current.players.find((player) => player.id === nextPlayer.id);
+      if (!currentPlayer) {
+        return false;
+      }
+
+      return nextPlayer.shelf.some((nextProduct, slotIndex) => {
+        const currentProduct = currentPlayer.shelf[slotIndex];
+        return nextProduct?.instanceId !== currentProduct?.instanceId || nextProduct?.stock !== currentProduct?.stock;
+      });
+    });
+  }
+
+  function soundEffectForStateTransition(current: GameState, next: GameState): SoundEffectId | undefined {
+    if (next === current) {
+      return undefined;
+    }
+    if (next.phase === "game_end" && current.phase !== "game_end") {
+      return "game-win";
+    }
+    if (next.saleResults.length > current.saleResults.length) {
+      return next.saleResults.some((result) => result.winner) ? "coin-sale" : "round-end";
+    }
+    if (next.playedInfluences.length > current.playedInfluences.length) {
+      return "influence-play";
+    }
+    if (next.phase === "upgrade" && current.phase !== "upgrade") {
+      return "trend-shift";
+    }
+    if (next.phase === "planning" && current.phase !== "planning") {
+      return "customer-arrive";
+    }
+    if (shelfStateChanged(current, next)) {
+      return "card-place";
+    }
+    if (next.activePlayer !== current.activePlayer) {
+      return "ready-confirm";
+    }
+    return undefined;
+  }
+
+  function playStateTransitionSounds(current: GameState, next: GameState, effect = soundEffectForStateTransition(current, next)) {
+    if (next === current) {
+      return;
+    }
+
+    const moneySoundPlayerId = moneySoundPlayerIdFor(current, lobbyRef.current);
+    const previousMoney = current.players.find((player) => player.id === moneySoundPlayerId)?.money ?? 0;
+    const nextMoney = next.players.find((player) => player.id === moneySoundPlayerId)?.money ?? previousMoney;
+    if (nextMoney > previousMoney) {
+      playSoundAsset(SOUND_ASSETS.money, 1.4, "coin-sale");
+    }
+    if (effect && effect !== "coin-sale") {
+      playEffect(effect);
     }
   }
 
@@ -1730,8 +1852,12 @@ export default function App() {
         );
 
         if (payload.version > session.version) {
+          const remoteState = normalizeSavedGameState(payload.state);
           applyingRemoteRef.current = true;
-          setState(normalizeSavedGameState(payload.state));
+          setState((current) => {
+            playStateTransitionSounds(current, remoteState);
+            return remoteState;
+          });
           window.setTimeout(() => {
             applyingRemoteRef.current = false;
           }, 0);
@@ -1761,15 +1887,7 @@ export default function App() {
         publishLobbyState(next);
       }
       const effect = typeof tone === "function" ? tone(current, next) : tone;
-      const moneySoundPlayerId = moneySoundPlayerIdFor(current, lobbyRef.current);
-      const previousMoney = current.players.find((player) => player.id === moneySoundPlayerId)?.money ?? 0;
-      const nextMoney = next.players.find((player) => player.id === moneySoundPlayerId)?.money ?? previousMoney;
-      if (nextMoney > previousMoney) {
-        playSoundAsset(SOUND_ASSETS.money, 1.4);
-      }
-      if (effect && effect !== "coin-sale") {
-        playEffect(effect);
-      }
+      playStateTransitionSounds(current, next, effect);
       return next;
     });
   }
@@ -1811,7 +1929,7 @@ export default function App() {
     setCutscene(null);
     setMenuView("main");
     patchState((current) => {
-      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
+      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds, campaignInitialStateOptions(level.level));
       const language = audioSettingsRef.current.language;
       const opponentName = language === "en" ? level.opponentNameEn : `${level.opponentName} (${level.opponentNameEn})`;
       const players = next.players.map((player) => {
@@ -2135,10 +2253,10 @@ export default function App() {
       const bonus = result.winner.payout - result.winner.product.price;
       logs.push(
         language === "en"
-          ? `${customerName(language, customer)} bought ${productName(language, result.winner.product)} ${ownerPhrase(owner.id, viewerId, language)} for ${
+          ? `${customerName(language, customer)} bought ${productName(language, result.winner.product)} ${ownerLogToken(owner.id)} for ${
               result.winner.payout
             } ${coinText(language, result.winner.payout)}.${bonus > 0 ? ` Bonus: +${bonus}.` : ""}`
-          : `${customer.name} купил ${result.winner.product.name} ${ownerPhrase(owner.id, viewerId, language)} за ${result.winner.payout} мон.${
+          : `${customer.name} купил ${result.winner.product.name} ${ownerLogToken(owner.id)} за ${result.winner.payout} мон.${
               bonus > 0 ? ` Бонус: +${bonus}.` : ""
             }`
       );
@@ -2158,13 +2276,12 @@ export default function App() {
       ...player,
       money: player.money + (goalRewardByPlayer.get(player.id) ?? 0)
     }));
-    const viewerId = viewerIdFor(lobbyRef.current, current.aiPlayerId);
     const language = audioSettingsRef.current.language;
     const goalLogs = goalProgress.rewards.map(
       (reward) =>
         language === "en"
-          ? `${displayPlayerName(reward.playerId, viewerId, language)} completed "${goalTitle(language, current.partyGoals.find((goal) => goal.title === reward.goalTitle) ?? { title: reward.goalTitle, kind: "sale_streak", target: 1, id: reward.goalTitle })}" and got +${reward.amount} ${coinText(language, reward.amount)}.`
-          : `${displayPlayerName(reward.playerId, viewerId, language)} выполнили цель «${reward.goalTitle}» и получили +${reward.amount} мон.`
+          ? `${playerLogToken(reward.playerId)} completed "${goalTitle(language, current.partyGoals.find((goal) => goal.title === reward.goalTitle) ?? { title: reward.goalTitle, kind: "sale_streak", target: 1, id: reward.goalTitle })}" and got +${reward.amount} ${coinText(language, reward.amount)}.`
+          : `${playerLogToken(reward.playerId)} выполнили цель «${reward.goalTitle}» и получили +${reward.amount} мон.`
     );
 
     return {
@@ -2179,7 +2296,6 @@ export default function App() {
       selectedInfluenceId: null,
       logs: [
         ...goalLogs.reverse(),
-        ...saleInsights.slice(0, 2).reverse(),
         ...logs.reverse(),
         language === "en" ? "Sales results are ready. Check the formulas and continue." : "Итоги продаж готовы. Проверьте формулы и продолжайте.",
         ...current.logs
@@ -2195,16 +2311,25 @@ export default function App() {
 
     let productDeck = current.productDeck;
     let influenceDeck = current.influenceDeck;
+    const influenceHandSize = influenceHandSizeForState(current);
     const drawnPlayers = clonePlayersForAi(current.players).map((player) => {
       let updated = player;
       [updated, productDeck] = drawProductsToLimit(updated, productDeck);
-      [updated, influenceDeck] = drawInfluencesToLimit(updated, influenceDeck);
+      [updated, influenceDeck] = drawInfluencesToLimit(updated, influenceDeck, influenceHandSize);
       return updated;
     });
 
-    const shiftedTrends = current.activeTrends.slice(1);
-    const [newTrend, trendDeck] = draw(current.trendDeck, 1);
+    const shouldShiftTrends = current.activeTrends.length > 0;
+    const shiftedTrends = shouldShiftTrends ? current.activeTrends.slice(1) : [];
+    const [newTrend, trendDeck]: [TrendCardType[], TrendCardType[]] = shouldShiftTrends ? draw(current.trendDeck, 1) : [[], current.trendDeck];
     const activeTrends = [...shiftedTrends, ...(newTrend.length ? newTrend : [])];
+    const trendLogs = shouldShiftTrends
+      ? [
+          language === "en"
+            ? `Trend shifted: ${activeTrends.map((trend) => trendName(language, trend)).join(", ")}.`
+            : `Тренд сдвинулся: ${activeTrends.map((trend) => trend.name).join(", ")}.`
+        ]
+      : [];
     const baseState = {
       ...current,
       players: drawnPlayers,
@@ -2213,9 +2338,7 @@ export default function App() {
       trendDeck,
       activeTrends,
       logs: [
-        language === "en"
-          ? `Trend shifted: ${activeTrends.map((trend) => trendName(language, trend)).join(", ")}.`
-          : `Тренд сдвинулся: ${activeTrends.map((trend) => trend.name).join(", ")}.`,
+        ...trendLogs,
         ...current.logs
       ].slice(0, 24)
     };
@@ -2243,8 +2366,8 @@ export default function App() {
         activePlayer: upgradeQueue[0],
         logs: [
           language === "en"
-            ? `Upgrade shop opened. ${actionPlayerName(upgradeQueue[0], viewerIdFor(lobbyRef.current, current.aiPlayerId), language)} chooses first.`
-            : `Открылся магазин апгрейдов. Первым выбирает ${actionPlayerName(upgradeQueue[0], viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`,
+            ? `Upgrade shop opened. ${playerLogToken(upgradeQueue[0])} chooses first.`
+            : `Открылся магазин апгрейдов. Первым выбирает ${playerLogToken(upgradeQueue[0])}.`,
           ...baseState.logs
         ].slice(0, 24)
       };
@@ -2301,8 +2424,8 @@ export default function App() {
         selectedProductId: null,
         logs: [
           audioSettingsRef.current.language === "en"
-            ? `Product placed: ${productName(audioSettingsRef.current.language, product)} (${actionPlayerName(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
-            : `Товар выставлен: ${product.name} (${actionPlayerName(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+            ? `Product placed: ${productName(audioSettingsRef.current.language, product)} (${playerLogToken(playerId)}).`
+            : `Товар выставлен: ${product.name} (${playerLogToken(playerId)}).`,
           ...current.logs
         ].slice(0, 24)
       };
@@ -2319,8 +2442,8 @@ export default function App() {
       playedInfluences: [...current.playedInfluences, played],
       logs: [
         audioSettingsRef.current.language === "en"
-          ? `Influence played: ${influenceName(audioSettingsRef.current.language, { id: played.id, name: played.name })} (${actionPlayerName(played.ownerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
-          : `Сыграно влияние: ${played.name} (${actionPlayerName(played.ownerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+          ? `Influence played: ${influenceName(audioSettingsRef.current.language, { id: played.id, name: played.name })} (${playerLogToken(played.ownerId)}).`
+          : `Сыграно влияние: ${played.name} (${playerLogToken(played.ownerId)}).`,
         ...current.logs
       ].slice(0, 24)
     };
@@ -2395,8 +2518,8 @@ export default function App() {
           ...next,
           logs: [
             language === "en"
-              ? `One more product replacement is available: ${actionPlayerName(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`
-              : `Можно ещё раз заменить товар: ${actionPlayerName(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`,
+              ? `One more product replacement is available: ${playerLogToken(player.id)}.`
+              : `Можно ещё раз заменить товар: ${playerLogToken(player.id)}.`,
             ...next.logs
           ].slice(0, 24)
         };
@@ -2459,6 +2582,10 @@ export default function App() {
       }
 
       const draft = current.choiceDraft;
+      if (lobbyRef.current && lobbyRef.current.playerId !== draft.playerId) {
+        return current;
+      }
+
       const keep = draft.cards[index];
       const players = current.players.map((player) => ({ ...player, productHand: [...player.productHand], influenceHand: [...player.influenceHand] }));
       const player = players.find((candidate) => candidate.id === draft.playerId)!;
@@ -2476,8 +2603,8 @@ export default function App() {
           audioSettingsRef.current.language === "en"
             ? `Card kept: ${
                 draft.type === "product" ? productName(audioSettingsRef.current.language, keep as ProductInstance) : influenceName(audioSettingsRef.current.language, keep as InfluenceCardType)
-              } (${actionPlayerName(draft.playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
-            : `Оставлена карта: ${keep.name} (${actionPlayerName(draft.playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+              } (${playerLogToken(draft.playerId)}).`
+            : `Оставлена карта: ${keep.name} (${playerLogToken(draft.playerId)}).`,
           ...current.logs
         ].slice(0, 24)
       };
@@ -2499,8 +2626,8 @@ export default function App() {
         roundBonuses: [...current.roundBonuses, { ownerId: playerId, slotIndex, value: 1, label: "Рекламный столик" }],
         logs: [
           audioSettingsRef.current.language === "en"
-            ? `Ad table boosted a product ${ownerPhrase(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`
-            : `Рекламный столик усилил товар ${ownerPhrase(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`,
+            ? `Ad table boosted a product ${ownerLogToken(playerId)}.`
+            : `Рекламный столик усилил товар ${ownerLogToken(playerId)}.`,
           ...current.logs
         ].slice(0, 24)
       };
@@ -2524,8 +2651,8 @@ export default function App() {
           selectedInfluenceId: null,
           logs: [
             audioSettingsRef.current.language === "en"
-              ? `Planning turn passes to ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`
-              : `Ход планирования переходит: ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`,
+              ? `Planning turn passes to ${playerLogToken(nextPlayer.id)}.`
+              : `Ход планирования переходит: ${playerLogToken(nextPlayer.id)}.`,
             ...current.logs
           ].slice(0, 24)
         };
@@ -2580,8 +2707,8 @@ export default function App() {
         activePlayer: queue[0] ?? current.firstPlayer,
         logs: [
           audioSettingsRef.current.language === "en"
-            ? `Upgrade bought: ${upgradeName(audioSettingsRef.current.language, upgrade)} (${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
-            : `Куплен апгрейд: ${upgrade.name} (${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+            ? `Upgrade bought: ${upgradeName(audioSettingsRef.current.language, upgrade)} (${playerLogToken(buyerId)}).`
+            : `Куплен апгрейд: ${upgrade.name} (${playerLogToken(buyerId)}).`,
           ...current.logs
         ].slice(0, 24)
       };
@@ -2600,8 +2727,8 @@ export default function App() {
         activePlayer: queue[0] ?? current.firstPlayer,
         logs: [
           audioSettingsRef.current.language === "en"
-            ? `Upgrade buy skipped: ${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`
-            : `Покупка апгрейда пропущена: ${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`,
+            ? `Upgrade buy skipped: ${playerLogToken(buyerId)}.`
+            : `Покупка апгрейда пропущена: ${playerLogToken(buyerId)}.`,
           ...current.logs
         ].slice(0, 24)
       };
@@ -2784,7 +2911,7 @@ export default function App() {
     if (plan.tableBonusMove && hasUpgrade(player.upgrades, "ad_table") && !player.tableBonusUsed) {
       player.tableBonusUsed = true;
       roundBonuses.push({ ownerId: player.id, slotIndex: plan.tableBonusMove.slotIndex, value: 1, label: "Рекламный столик" });
-      logs.push(language === "en" ? `Ad table boosted a product ${ownerPhrase(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.` : `Рекламный столик усилил товар ${ownerPhrase(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`);
+      logs.push(language === "en" ? `Ad table boosted a product ${ownerLogToken(player.id)}.` : `Рекламный столик усилил товар ${ownerLogToken(player.id)}.`);
     }
 
     player.planned = true;
@@ -2819,8 +2946,8 @@ export default function App() {
         activePlayer: nextPlayer.id,
         logs: [
           language === "en"
-            ? `Planning turn passes to ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`
-            : `Ход планирования переходит: ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`,
+            ? `Planning turn passes to ${playerLogToken(nextPlayer.id)}.`
+            : `Ход планирования переходит: ${playerLogToken(nextPlayer.id)}.`,
           ...baseState.logs
         ].slice(0, 24)
       };
@@ -2926,10 +3053,15 @@ export default function App() {
       : [];
   const forecastSaleResults = state.phase === "planning" ? calculateRoundSales(state).saleResults : [];
   const shownSaleResults = state.phase === "planning" ? forecastSaleResults : state.saleResults;
+  const shownSaleInsights =
+    state.phase === "sale_resolution" && state.saleResults.length > 0
+      ? state.saleResults.map((result) => describeSaleInsight(result, localPlayerId, language))
+      : state.saleInsights;
   const salePanelTitle = state.phase === "planning" ? ui(language, "saleForecast") : state.phase === "sale_resolution" ? ui(language, "saleResults") : ui(language, "saleCalculation");
   const nextCustomer = state.customerDeck[0] ?? null;
   const nextTrend = state.trendDeck[0] ?? null;
   const showUpcomingCards = state.round < 8 && state.phase !== "game_end";
+  const showUpcomingTrends = showUpcomingCards && (!state.campaignRun || state.activeTrends.length > 0);
   const influenceImpact = selectedInfluence ? influenceImpactLines(selectedInfluence, handPlayer, opponentPlayer, state.selectedTag) : [];
   const canAdvanceResolution = !state.pause.active && (!lobby || lobby.playerId === state.activePlayer);
   const coachPlan = useMemo(() => {
@@ -2979,12 +3111,20 @@ export default function App() {
   const focusTrendTags = useMemo(() => new Set(state.activeTrends[0]?.modifiers.map((modifier) => modifier.tag) ?? []), [state.activeTrends]);
   const canEditTurnTime = !lobby || lobby.playerId === "A";
   const turnTimeSettingValue = lobby ? state.turnTimeSeconds : audioSettings.turnTimeSeconds;
+  const influenceEnabled =
+    state.playedInfluences.length > 0 ||
+    state.players.some((player) => player.influenceHand.length > 0) ||
+    (!state.campaignRun && state.influenceDeck.length > 0) ||
+    Boolean(state.campaignRun && influenceHandSizeForState(state) > 0);
 
   return (
     <main
       className={`app-shell phase-${state.phase}`}
       style={{ backgroundImage: `linear-gradient(rgba(38, 27, 17, 0.78), rgba(18, 13, 9, 0.9)), url(${MARKET_BG})` }}
-      onPointerDownCapture={() => requestMusicPlayback()}
+      onPointerDownCapture={() => {
+        primeSoundEffects();
+        requestMusicPlayback();
+      }}
     >
       {state.phase === "menu" && (
         <section className="menu-screen">
@@ -3159,6 +3299,12 @@ export default function App() {
         </section>
       )}
 
+      {turnCue && (
+        <div className="turn-cue-backdrop" aria-live="assertive" aria-atomic="true">
+          <div className="turn-cue">{turnCue.label}</div>
+        </div>
+      )}
+
       <header className="top-bar">
         <div className="top-brand">
           <h1>{GAME_TITLE}</h1>
@@ -3204,7 +3350,7 @@ export default function App() {
         {state.activeTrends.map((trend, index) => (
           <TrendCard key={trend.id} trend={trend} focused={index === 0} language={language} />
         ))}
-        {nextTrend && showUpcomingCards && (
+        {nextTrend && showUpcomingTrends && (
           <div className="trend-card preview-card" title={`${ui(language, "soon")}: ${trendName(language, nextTrend)}: ${formatModifiers(nextTrend.modifiers, language)}`}>
             <Sparkles size={18} />
             <div className="trend-copy">
@@ -3357,10 +3503,10 @@ export default function App() {
           {state.phase === "planning" && <p className="sale-note">{ui(language, "forecastNote")}</p>}
         </div>
           <div className="sale-results">
-            {state.phase === "sale_resolution" && state.saleInsights.length > 0 && (
+            {state.phase === "sale_resolution" && shownSaleInsights.length > 0 && (
               <div className="sale-insights" aria-label={ui(language, "saleInsights")}>
                 <h3>{ui(language, "saleInsights")}</h3>
-                {state.saleInsights.map((insight) => (
+                {shownSaleInsights.map((insight) => (
                   <p key={insight}>{insight}</p>
                 ))}
               </div>
@@ -3394,13 +3540,13 @@ export default function App() {
           <h2>{ui(language, "log")}</h2>
           <ol className="event-log">
             {state.logs.map((log, index) => (
-              <li key={`${log}-${index}`}>{log}</li>
+              <li key={`${log}-${index}`}>{formatLogForViewer(log, localPlayerId, language)}</li>
             ))}
           </ol>
       </aside>
 
       <section className="hand-panel">
-        {state.phase !== "menu" && (
+        {state.phase !== "menu" && state.partyGoals.length > 0 && (
           <div className="party-goals">
             <div className="party-goals-heading">
               <h2>{ui(language, "partyGoals")}</h2>
@@ -3427,7 +3573,7 @@ export default function App() {
                 </h2>
                 <div className="action-steps">
                   <span className={handPlayer.productActionUsed ? "done" : ""}>{handPlayer.productActionUsed ? ui(language, "productChosen") : ui(language, "productToSlot")}</span>
-                  <span className={handPlayer.influenceActionUsed ? "done" : ""}>{handPlayer.influenceActionUsed ? ui(language, "influencePlayed") : ui(language, "influenceOrSkip")}</span>
+                  {influenceEnabled && <span className={handPlayer.influenceActionUsed ? "done" : ""}>{handPlayer.influenceActionUsed ? ui(language, "influencePlayed") : ui(language, "influenceOrSkip")}</span>}
                   <span>{ui(language, "readyStep")}</span>
                 </div>
               </div>
@@ -3464,7 +3610,7 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              <div>
+              {influenceEnabled && <div>
                 <h3>{ui(language, "influence")}</h3>
                 <div className="hand-row influence-row">
                   {handPlayer.influenceHand.map((card) => (
@@ -3519,7 +3665,7 @@ export default function App() {
                     )}
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           </>
         )}
@@ -3562,7 +3708,7 @@ export default function App() {
             <span className="end-kicker">{finalResult.tone === "victory" ? ui(language, "marketSmiles") : finalResult.tone === "defeat" ? ui(language, "newDay") : ui(language, "friendlyFinal")}</span>
             <h2 id="game-end-title">{finalResult.title}</h2>
             <p>{finalResult.message}</p>
-            <div className="goal-badge">{ui(language, "partyGoals")}: {completedGoalCount} / {state.partyGoals.length}</div>
+            {state.partyGoals.length > 0 && <div className="goal-badge">{ui(language, "partyGoals")}: {completedGoalCount} / {state.partyGoals.length}</div>}
             <div className="end-actions">
               <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : startGame}>
                 {state.campaignRun && campaignCanAdvance && nextCampaignLevel ? <SkipForward size={18} /> : <RefreshCw size={18} />} {primaryEndActionLabel}
@@ -3600,7 +3746,7 @@ export default function App() {
         </div>
       )}
 
-      {state.choiceDraft && (
+      {canResolveChoiceDraft && state.choiceDraft && (
         <div className="modal-backdrop">
           <div className="choice-modal">
             <h2>{ui(language, "keepOneCard")}</h2>
@@ -3612,7 +3758,7 @@ export default function App() {
                     product={card as ProductInstance}
                     language={language}
                     focusTags={focusTrendTags}
-                    disabled={Boolean(lobby && lobby.playerId !== state.choiceDraft?.playerId)}
+                    disabled={false}
                     onClick={() => keepDraftCard(index)}
                   />
                 ) : (
@@ -3621,7 +3767,7 @@ export default function App() {
                     card={card as InfluenceCardType}
                     language={language}
                     selected={false}
-                    disabled={Boolean(lobby && lobby.playerId !== state.choiceDraft?.playerId)}
+                    disabled={false}
                     onClick={() => keepDraftCard(index)}
                   />
                 )

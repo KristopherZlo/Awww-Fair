@@ -572,6 +572,19 @@ describe("App layout shell", () => {
     expect(screen.getAllByText(/Биби \(Bibi\)/i).length).toBeGreaterThan(0);
   });
 
+  it("starts the first campaign level without trends, goals, or influence cards", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Ярмарка мира Ааах/i }));
+    await user.click(screen.getByRole("button", { name: /^Уровень 1$/i }));
+    await user.click(screen.getByRole("button", { name: /Пропустить/i }));
+
+    expect(container.querySelectorAll(".trend-strip .trend-card")).toHaveLength(0);
+    expect(container.querySelectorAll(".party-goal")).toHaveLength(0);
+    expect(screen.queryByRole("heading", { name: /^Влияние$/i })).not.toBeInTheDocument();
+  });
+
   it("plays the cutscene music during the campaign intro and returns to game music after skipping", async () => {
     vi.useFakeTimers();
     render(<App />);
@@ -876,6 +889,23 @@ describe("App layout shell", () => {
     expect(screen.getByText(/Ход: 00:44/i)).toBeInTheDocument();
   });
 
+  it("shows a short animated cue when control passes to the local turn", async () => {
+    vi.useFakeTimers();
+    const { container } = render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
+
+    const cue = container.querySelector(".turn-cue-backdrop");
+    expect(cue).not.toBeNull();
+    expect(cue).toHaveTextContent("Вы");
+
+    act(() => {
+      vi.advanceTimersByTime(1400);
+    });
+
+    expect(container.querySelector(".turn-cue-backdrop")).toBeNull();
+  });
+
   it("uses the configured turn time for new local games", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -958,7 +988,7 @@ describe("App layout shell", () => {
     expect(screen.getByRole("button", { name: /2 игрока/i })).toBeInTheDocument();
   });
 
-  it("shows the lobby code waiting dialog again when a synced lobby returns to the menu", () => {
+  it("does not reopen the lobby code waiting dialog when both lobby seats are still occupied", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     saveGameState(
       { phase: "menu" },
@@ -973,8 +1003,54 @@ describe("App layout shell", () => {
 
     render(<App />);
 
-    expect(screen.getByRole("dialog", { name: /Ожидание второго игрока/i })).toBeInTheDocument();
-    expect(screen.getByText("ABCD2")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /Ожидание второго игрока/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("ABCD2")).not.toBeInTheDocument();
+  });
+
+  it("does not show a locked choice modal while the online opponent is choosing a drawn card", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    saveGameState(
+      {
+        activePlayer: "B",
+        choiceDraft: {
+          playerId: "B",
+          type: "influence",
+          cards: INFLUENCE_CARDS.slice(0, 2)
+        }
+      },
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 3,
+        seats: { A: true, B: true }
+      }
+    );
+
+    render(<App />);
+
+    expect(screen.queryByText(/Оставьте одну карту/i)).not.toBeInTheDocument();
+  });
+
+  it("renders shared lobby log player tokens from the local viewer perspective", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    saveGameState(
+      {
+        logs: ["Сыграно влияние: Реклама напитков ({{player:B}})."]
+      },
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 3,
+        seats: { A: true, B: true }
+      }
+    );
+
+    render(<App />);
+
+    expect(screen.getByText(/Сыграно влияние: Реклама напитков \(Оппонент\)\./i)).toBeInTheDocument();
+    expect(screen.queryByText(/\{\{player:B\}\}/)).not.toBeInTheDocument();
   });
 
   it("plays one money sound when the current hotseat player earns from a sale", async () => {
@@ -1025,6 +1101,49 @@ describe("App layout shell", () => {
 
     expect(document.querySelector(".app-shell.phase-sale_resolution")).not.toBeNull();
     expect(mockAudioInstances.filter((audio) => /money\.wav/.test(audio.src))).toHaveLength(0);
+  });
+
+  it("plays the money sound when a remote lobby update gives the local player coins", async () => {
+    saveGameState(
+      {},
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 1,
+        seats: { A: true, B: true }
+      }
+    );
+    const saved = JSON.parse(window.localStorage.getItem("trend-market-session-v1") ?? "{}") as { state: Record<string, unknown> };
+    const remoteState = {
+      ...saved.state,
+      players: (saved.state.players as PlayerState[]).map((player) => (player.id === "A" ? { ...player, money: player.money + 3 } : player))
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/network") {
+          return new Response(JSON.stringify({ urls: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+
+        return new Response(
+          JSON.stringify({
+            code: "ABCD2",
+            version: 2,
+            state: remoteState,
+            seats: { A: true, B: true }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      })
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockAudioInstances.filter((audio) => /money\.wav/.test(audio.src))).toHaveLength(1);
+    });
   });
 
   it("calculates a random zero-to-five second delay for AI turns", () => {
