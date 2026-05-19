@@ -10,6 +10,7 @@ export const SOUND_EFFECT_IDS = [
   "trend-shift",
   "upgrade-buy",
   "round-end",
+  "turn-start",
   "timer-tick",
   "game-win"
 ] as const;
@@ -151,6 +152,15 @@ export const SOUND_EFFECTS: Record<SoundEffectId, SoundEffectRecipe> = {
       { kind: "osc", wave: "sine", start: 0.5, duration: 0.38, gain: 0.16, frequency: 660, endFrequency: 880, attack: 0.018, release: 0.28 }
     ]
   },
+  "turn-start": {
+    duration: 0.75,
+    prompt:
+      "Short gentle your-turn cue, warm two-note wooden chime, cozy card game notification, clear but soft, no alarm, no voice, no music.",
+    layers: [
+      { kind: "osc", wave: "triangle", start: 0, duration: 0.16, gain: 0.2, frequency: 520, endFrequency: 620, attack: 0.008, release: 0.11 },
+      { kind: "osc", wave: "sine", start: 0.12, duration: 0.3, gain: 0.22, frequency: 780, endFrequency: 1040, attack: 0.014, release: 0.22 }
+    ]
+  },
   "timer-tick": {
     duration: 0.35,
     prompt:
@@ -175,6 +185,34 @@ export const SOUND_EFFECTS: Record<SoundEffectId, SoundEffectRecipe> = {
 
 export function clampVolume(volume: number) {
   return Math.min(1, Math.max(0, volume));
+}
+
+let sharedAudioContext: AudioContext | null = null;
+
+function getSharedAudioContext() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
+  if (!AudioContextClass) {
+    return null;
+  }
+
+  if (!sharedAudioContext || sharedAudioContext.state === "closed") {
+    sharedAudioContext = new AudioContextClass();
+  }
+
+  return sharedAudioContext;
+}
+
+export function primeSoundEffects() {
+  const audio = getSharedAudioContext();
+  if (!audio || audio.state !== "suspended") {
+    return;
+  }
+
+  void audio.resume().catch(() => undefined);
 }
 
 function scheduleGain(gain: AudioParam, start: number, duration: number, peakVolume: number, attack = 0.006, release = 0.08) {
@@ -239,19 +277,7 @@ function playNoiseLayer(audio: AudioContext, layer: NoiseLayer, masterGain: numb
   source.stop(start + layer.duration + 0.02);
 }
 
-export function playSoundEffect(enabled: boolean, id: SoundEffectId, volume = 1) {
-  const recipe = SOUND_EFFECTS[id];
-  const masterGain = 0.28 * clampVolume(volume);
-  if (!enabled || masterGain <= 0 || typeof window === "undefined") {
-    return;
-  }
-
-  const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
-  if (!AudioContextClass) {
-    return;
-  }
-
-  const audio = new AudioContextClass();
+function scheduleSoundEffect(audio: AudioContext, recipe: SoundEffectRecipe, masterGain: number) {
   for (const layer of recipe.layers) {
     if (layer.kind === "osc") {
       playOscLayer(audio, layer, masterGain);
@@ -259,10 +285,29 @@ export function playSoundEffect(enabled: boolean, id: SoundEffectId, volume = 1)
       playNoiseLayer(audio, layer, masterGain);
     }
   }
+}
 
-  window.setTimeout(() => {
-    void audio.close().catch(() => undefined);
-  }, recipe.duration * 1000 + 120);
+export function playSoundEffect(enabled: boolean, id: SoundEffectId, volume = 1) {
+  const recipe = SOUND_EFFECTS[id];
+  const masterGain = 0.28 * clampVolume(volume);
+  if (!enabled || masterGain <= 0) {
+    return;
+  }
+
+  const audio = getSharedAudioContext();
+  if (!audio) {
+    return;
+  }
+
+  if (audio.state === "suspended") {
+    void audio
+      .resume()
+      .then(() => scheduleSoundEffect(audio, recipe, masterGain))
+      .catch(() => undefined);
+    return;
+  }
+
+  scheduleSoundEffect(audio, recipe, masterGain);
 }
 
 declare global {

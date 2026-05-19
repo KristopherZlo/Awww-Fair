@@ -13,6 +13,7 @@ const requestedDurations = {
   "trend-shift": 1.2,
   "upgrade-buy": 1.2,
   "round-end": 1.8,
+  "turn-start": 0.75,
   "timer-tick": 0.35,
   "game-win": 2.5
 } as const;
