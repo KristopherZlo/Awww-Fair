@@ -19,7 +19,7 @@ export const CAMPAIGN_LEVELS: CampaignLevel[] = [
   { level: 2, title: "Сладкий ряд", district: "Пекарская улица", opponentName: "Лулу", opponentNameEn: "Lulu", opponentSpecies: "котёнок", aiDifficulty: 2, story: "Наша лавка становится всё популярнее." },
   { level: 3, title: "Кофейный звон", district: "Утренний навес", opponentName: "Мими", opponentNameEn: "Mimi", opponentSpecies: "бельчонок", aiDifficulty: 3, story: "Соседи по рынку уже смотрят на нас с завистью." },
   { level: 4, title: "Игрушечная очередь", district: "Детская аллея", opponentName: "Тото", opponentNameEn: "Toto", opponentSpecies: "щенок", aiDifficulty: 4, story: "Ещё один удачный день - и мечта станет ближе." },
-  { level: 5, title: "Лимонадный шум", district: "Солнечная площадь", opponentName: "Пипа", opponentNameEn: "Pipa", opponentSpecies: "утёнок", aiDifficulty: 5, story: "До новой шляпы осталось совсем немного." },
+  { level: 5, title: "Лимонадный шум", district: "Солнечная площадь", opponentName: "Луми", opponentNameEn: "Lumi", opponentSpecies: "утёнок", aiDifficulty: 5, story: "До новой шляпы осталось совсем немного." },
   { level: 6, title: "Ягодный час", district: "Садовый проход", opponentName: "Нори", opponentNameEn: "Nori", opponentSpecies: "ежонок", aiDifficulty: 6, story: "Финал первого ярмарочного дня уже рядом." },
   { level: 7, title: "Сырный поворот", district: "Фермерский круг", opponentName: "Коко", opponentNameEn: "Koko", opponentSpecies: "козлёнок", aiDifficulty: 7, story: "Новые покупатели ищут самые свежие товары." },
   { level: 8, title: "Быстрый обед", district: "Обеденный мостик", opponentName: "Руми", opponentNameEn: "Rumi", opponentSpecies: "енотик", aiDifficulty: 8, story: "Покупатели спешат, и каждая витрина на счету." },
@@ -38,7 +38,7 @@ export const CAMPAIGN_LEVELS: CampaignLevel[] = [
   { level: 21, title: "Шляпный намёк", district: "Улица модистов", opponentName: "Виви", opponentNameEn: "Vivi", opponentSpecies: "кролик", aiDifficulty: 21, story: "В витрине магазина шляп уже видно нашу мечту." },
   { level: 22, title: "Последние монеты", district: "Кассовый дворик", opponentName: "Роро", opponentNameEn: "Roro", opponentSpecies: "морская свинка", aiDifficulty: 22, story: "Каждый клиент может решить судьбу покупки." },
   { level: 23, title: "Главный соперник", district: "Большой шатёр", opponentName: "Кира", opponentNameEn: "Kira", opponentSpecies: "лиса", aiDifficulty: 23, story: "Лучшие продавцы мира Ааах собрались у главного шатра." },
-  { level: 24, title: "Новая шляпа", district: "Шляпная лавка", opponentName: "Ари", opponentNameEn: "Ari", opponentSpecies: "кошечка", aiDifficulty: 24, story: "Последняя победа отделяет нас от красивой новой шляпы." }
+  { level: 24, title: "Новая шляпа", district: "Шляпная лавка", opponentName: "Йода", opponentNameEn: "Yoda", opponentSpecies: "кошечка", aiDifficulty: 24, story: "Последняя победа отделяет нас от красивой новой шляпы." }
 ];
 
 export function createDefaultCampaignProgress(): CampaignProgress {

@@ -23,6 +23,15 @@ describe("campaign levels", () => {
     expect(difficulties[difficulties.length - 1]).toBe(24);
   });
 
+  it("uses requested safe opponent names for level five and the finale", () => {
+    const levelFive = CAMPAIGN_LEVELS.find((level) => level.level === 5);
+    const finalLevel = CAMPAIGN_LEVELS.find((level) => level.level === 24);
+
+    expect(CAMPAIGN_LEVELS.some((level) => level.opponentName === "Пипа" || level.opponentNameEn === "Pipa")).toBe(false);
+    expect(levelFive).toMatchObject({ opponentName: "Луми", opponentNameEn: "Lumi" });
+    expect(finalLevel).toMatchObject({ opponentName: "Йода", opponentNameEn: "Yoda" });
+  });
+
   it("unlocks only the first level by default and opens the next level after a win", () => {
     const initial = createDefaultCampaignProgress();
 
