@@ -1214,6 +1214,34 @@ button.card {
     rgba(0, 0, 0, 0.42);
 }
 
+.turn-cue-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 17;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.46);
+  animation: turn-cue-backdrop 1200ms ease both;
+}
+
+.turn-cue {
+  display: grid;
+  place-items: center;
+  min-width: min(320px, 80vw);
+  padding: 22px 36px;
+  border: 1px solid rgba(248, 234, 210, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 248, 233, 0.94);
+  color: #24160d;
+  font-size: 2.75rem;
+  font-weight: 950;
+  line-height: 1;
+  text-align: center;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
+  animation: turn-cue-card 1200ms ease both;
+}
+
 .end-panel {
   display: grid;
   justify-items: center;
@@ -1869,6 +1897,35 @@ button.card {
   }
 }
 
+@keyframes turn-cue-backdrop {
+  0% {
+    opacity: 0;
+  }
+  18%,
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes turn-cue-card {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  18%,
+  72% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
 @media (max-width: 980px) {
   body {
     overflow: auto;
@@ -2001,6 +2058,11 @@ button.card {
   }
 
   .shelf-slot.slot-rejecting {
+    animation: none;
+  }
+
+  .turn-cue-backdrop,
+  .turn-cue {
     animation: none;
   }
 }
