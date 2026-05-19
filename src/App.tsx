@@ -1,10 +1,14 @@
 import {
   BadgeHelp,
   Bot,
+  ChevronLeft,
   Check,
   Coins,
+  Flag,
   HandCoins,
+  Lock,
   LogOut,
+  Map as MapIcon,
   Music,
   PackagePlus,
   Pause,
@@ -40,8 +44,9 @@ import {
   trendModifierValue
 } from "./game/engine";
 import { createPartyGoals, normalizePartyGoal, PARTY_GOAL_REWARD, updatePartyGoalsAfterSales, type PartyGoal } from "./game/goals";
-import { chooseAiUpgrade, chooseWeakAiUpgrade, planAiPlanningTurn, planWeakAiPlanningTurn, type AiInfluenceMove, type AiPlanningPlan } from "./game/ai";
+import { chooseAiUpgrade, chooseWeakAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn, type AiInfluenceMove, type AiPlanningPlan } from "./game/ai";
 import { clampVolume, playSoundEffect, type SoundEffectId } from "./audio/soundEffects";
+import { CAMPAIGN_LEVELS, campaignProgressAfterWin, createDefaultCampaignProgress, isLevelUnlocked, type CampaignLevel, type CampaignProgress } from "./game/levels";
 import type {
   CustomerCard as CustomerCardType,
   InfluenceCard as InfluenceCardType,
@@ -74,6 +79,7 @@ const MUSIC_FADE_MS = 2000;
 const TURN_TIME_SECONDS = 60;
 const SESSION_STORAGE_KEY = "trend-market-session-v1";
 const SESSION_STORAGE_VERSION = 1;
+const CAMPAIGN_STORAGE_KEY = "trend-market-campaign-v1";
 const SOUND_ASSETS = {
   defeat: assetUrl("sounds/defeat.wav"),
   money: assetUrl("sounds/money.wav"),
@@ -87,8 +93,44 @@ const DEFAULT_AUDIO_SETTINGS = {
   effectsVolume: 1
 };
 
+const CUTSCENE_FRAMES = [
+  {
+    image: assetUrl("cutscene/aaakh-01.png"),
+    text: "В мире Ааах начинается большая ярмарка."
+  },
+  {
+    image: assetUrl("cutscene/aaakh-02.png"),
+    text: "Каждый год лучшие продавцы собираются на Великой Ярмарке Аааха."
+  },
+  {
+    image: assetUrl("cutscene/aaakh-03.png"),
+    text: "Но в этот раз у нас есть цель - заработать на новую шляпу."
+  },
+  {
+    image: assetUrl("cutscene/aaakh-04.png"),
+    text: "Чтобы купить её, нужно стать лучшими продавцами ярмарки."
+  },
+  {
+    image: assetUrl("cutscene/aaakh-05.png"),
+    text: "Наша лавка готова. Всё только начинается."
+  },
+  {
+    image: assetUrl("cutscene/aaakh-06.png"),
+    text: "Но победа не достанется просто так."
+  },
+  {
+    image: assetUrl("cutscene/aaakh-07.png"),
+    text: "Первый клиент уже идёт!"
+  },
+  {
+    image: assetUrl("cutscene/aaakh-08.png"),
+    text: "Пора открыть лавку и начать путь к новой шляпе."
+  }
+] as const;
+
 type MusicStatus = "idle" | "playing" | "paused" | "blocked";
 type AiMode = "opponent" | "training";
+type MenuView = "main" | "levels";
 const AI_PLAYER_ID: PlayerId = "B";
 const AI_TURN_DELAY_MS = 450;
 
@@ -108,6 +150,14 @@ interface ChoiceDraft {
 interface PauseState {
   active: boolean;
   pausedBy: PlayerId | null;
+}
+
+interface CampaignRun {
+  level: number;
+  aiDifficulty: number;
+  opponentName: string;
+  opponentNameEn: string;
+  unlockRecorded: boolean;
 }
 
 interface GameState {
@@ -141,6 +191,12 @@ interface GameState {
   aiMode: AiMode | null;
   aiScore: number;
   aiIntent: string | null;
+  campaignRun: CampaignRun | null;
+}
+
+interface CutsceneState {
+  level: CampaignLevel;
+  frameIndex: number;
 }
 
 interface LobbySession {
@@ -246,7 +302,8 @@ function buildInitialState(sound = true): GameState {
     aiPlayerId: null,
     aiMode: null,
     aiScore: 0,
-    aiIntent: null
+    aiIntent: null,
+    campaignRun: null
   };
 }
 
@@ -260,6 +317,13 @@ function viewerIdFor(lobby: LobbySession | null, aiPlayerId: PlayerId | null): P
 
 function displayPlayerName(playerId: PlayerId, viewerId: PlayerId) {
   return playerId === viewerId ? "Вы" : "Оппонент";
+}
+
+function displayPlayerNameFor(player: PlayerState | undefined, viewerId: PlayerId) {
+  if (!player) {
+    return "Оппонент";
+  }
+  return player.id === viewerId ? "Вы" : player.name || "Оппонент";
 }
 
 function ownerPhrase(playerId: PlayerId, viewerId: PlayerId) {
@@ -312,6 +376,17 @@ function gameOutcome(players: PlayerState[], viewerId: PlayerId) {
     message: `${scoreLine}${decidedBySales ? " Победителя решили продажи." : ""}`,
     sound: won ? ("victory" as const) : ("defeat" as const)
   };
+}
+
+function winningPlayerId(players: PlayerState[]): PlayerId | null {
+  const [a, b] = players;
+  if (a.money === b.money) {
+    if (a.sales === b.sales) {
+      return null;
+    }
+    return a.sales > b.sales ? a.id : b.id;
+  }
+  return a.money > b.money ? a.id : b.id;
 }
 
 function formatModifiers(modifiers: { tag: Tag; value: number }[], focused = false) {
@@ -701,7 +776,8 @@ function normalizeSavedGameState(state: GameState): GameState {
     saleInsights: Array.isArray(state.saleInsights) ? state.saleInsights : [],
     pause: state.pause && typeof state.pause.active === "boolean" ? state.pause : { active: false, pausedBy: null },
     partyGoals: Array.isArray(state.partyGoals) && state.partyGoals.length ? state.partyGoals.map(normalizePartyGoal) : createPartyGoals(state.activeTrends, state.currentCustomers),
-    aiIntent: typeof state.aiIntent === "string" ? state.aiIntent : null
+    aiIntent: typeof state.aiIntent === "string" ? state.aiIntent : null,
+    campaignRun: normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun)
   };
 }
 
@@ -727,6 +803,60 @@ function normalizeSavedAudioSettings(value: unknown): AudioSettings {
     musicVolume: typeof value.musicVolume === "number" ? clampVolume(value.musicVolume) : DEFAULT_AUDIO_SETTINGS.musicVolume,
     effectsVolume: typeof value.effectsVolume === "number" ? clampVolume(value.effectsVolume) : DEFAULT_AUDIO_SETTINGS.effectsVolume
   };
+}
+
+function normalizeSavedCampaignRun(value: unknown): CampaignRun | null {
+  if (!isRecord(value) || typeof value.level !== "number" || typeof value.aiDifficulty !== "number") {
+    return null;
+  }
+
+  return {
+    level: Math.max(1, Math.min(CAMPAIGN_LEVELS.length, Math.round(value.level))),
+    aiDifficulty: Math.max(1, Math.min(24, Math.round(value.aiDifficulty))),
+    opponentName: typeof value.opponentName === "string" ? value.opponentName : "Оппонент",
+    opponentNameEn: typeof value.opponentNameEn === "string" ? value.opponentNameEn : "Opponent",
+    unlockRecorded: typeof value.unlockRecorded === "boolean" ? value.unlockRecorded : false
+  };
+}
+
+function normalizeCampaignProgress(value: unknown): CampaignProgress {
+  if (!isRecord(value) || typeof value.highestUnlockedLevel !== "number" || !Array.isArray(value.completedLevels)) {
+    return createDefaultCampaignProgress();
+  }
+
+  const completedLevels = value.completedLevels
+    .filter((level): level is number => typeof level === "number")
+    .map((level) => Math.max(1, Math.min(CAMPAIGN_LEVELS.length, Math.round(level))));
+
+  return {
+    highestUnlockedLevel: Math.max(1, Math.min(CAMPAIGN_LEVELS.length, Math.round(value.highestUnlockedLevel))),
+    completedLevels: Array.from(new Set(completedLevels)).sort((left, right) => left - right)
+  };
+}
+
+function loadCampaignProgress(): CampaignProgress {
+  if (typeof window === "undefined") {
+    return createDefaultCampaignProgress();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CAMPAIGN_STORAGE_KEY);
+    return raw ? normalizeCampaignProgress(JSON.parse(raw) as unknown) : createDefaultCampaignProgress();
+  } catch {
+    return createDefaultCampaignProgress();
+  }
+}
+
+function saveCampaignProgress(progress: CampaignProgress) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(CAMPAIGN_STORAGE_KEY, JSON.stringify(progress));
+  } catch {
+    // Campaign progress is optional persistence; the active game can continue.
+  }
 }
 
 function clearSavedSession() {
@@ -785,6 +915,9 @@ function saveSession(snapshot: SavedSession) {
 export default function App() {
   const [initialSession] = useState<SavedSession | null>(() => loadSavedSession());
   const [state, setState] = useState<GameState>(() => initialSession?.state ?? buildInitialState(true));
+  const [menuView, setMenuView] = useState<MenuView>("main");
+  const [campaignProgress, setCampaignProgress] = useState<CampaignProgress>(() => loadCampaignProgress());
+  const [cutscene, setCutscene] = useState<CutsceneState | null>(null);
   const [showRules, setShowRules] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [lobby, setLobby] = useState<LobbySession | null>(() => initialSession?.lobby ?? null);
@@ -906,6 +1039,30 @@ export default function App() {
       playSoundAsset(SOUND_ASSETS[finalResult.sound], 1.35);
     }
   }, [state.phase, finalResult.sound]);
+
+  useEffect(() => {
+    if (state.phase !== "game_end" || !state.campaignRun || state.campaignRun.unlockRecorded) {
+      return;
+    }
+
+    const campaignWinner = winningPlayerId(state.players);
+    if (campaignWinner === "A") {
+      setCampaignProgress((current) => {
+        const next = campaignProgressAfterWin(current, state.campaignRun!.level);
+        saveCampaignProgress(next);
+        return next;
+      });
+    }
+
+    patchState((current) =>
+      current.campaignRun
+        ? {
+            ...current,
+            campaignRun: { ...current.campaignRun, unlockRecorded: true }
+          }
+        : current
+    );
+  }, [state.phase, state.campaignRun, state.players]);
 
   useEffect(() => {
     setTurnSecondsLeft(TURN_TIME_SECONDS);
@@ -1323,6 +1480,88 @@ export default function App() {
     patchState((current) => ({ ...buildInitialState(current.sound), phase: "planning" }), "customer-arrive");
   }
 
+  function startCampaignLevel(level: CampaignLevel) {
+    musicModeRef.current = "menu";
+    lobbyRef.current = null;
+    setLobby(null);
+    setLobbyError("");
+    setSyncStatus("local");
+    setCutscene(null);
+    setMenuView("main");
+    patchState((current) => {
+      const next = buildInitialState(current.sound);
+      const opponentName = `${level.opponentName} (${level.opponentNameEn})`;
+      const players = next.players.map((player) => {
+        if (player.id !== AI_PLAYER_ID) {
+          return player;
+        }
+
+        const startingMoney = level.aiDifficulty >= 22 ? 3 : level.aiDifficulty >= 19 ? 2 : level.aiDifficulty >= 15 ? 1 : 0;
+        return {
+          ...player,
+          name: opponentName,
+          money: startingMoney
+        };
+      });
+
+      return {
+        ...next,
+        phase: "planning",
+        players,
+        aiPlayerId: AI_PLAYER_ID,
+        aiMode: "opponent",
+        aiScore: 0,
+        aiIntent: `${opponentName} готовит лавку.`,
+        campaignRun: {
+          level: level.level,
+          aiDifficulty: level.aiDifficulty,
+          opponentName: level.opponentName,
+          opponentNameEn: level.opponentNameEn,
+          unlockRecorded: false
+        },
+        logs: [`Уровень ${level.level}: ${level.story}`, `Соперник: ${opponentName}, ${level.opponentSpecies}.`, ...next.logs].slice(0, 24)
+      };
+    }, "customer-arrive");
+  }
+
+  function requestCampaignLevel(level: CampaignLevel) {
+    if (!isLevelUnlocked(campaignProgress, level.level)) {
+      playEffect("ui-click");
+      return;
+    }
+
+    playEffect("ui-click");
+    if (level.level === 1) {
+      setCutscene({ level, frameIndex: 0 });
+      return;
+    }
+
+    startCampaignLevel(level);
+  }
+
+  function advanceCutscene() {
+    if (!cutscene) {
+      return;
+    }
+
+    if (cutscene.frameIndex >= CUTSCENE_FRAMES.length - 1) {
+      startCampaignLevel(cutscene.level);
+      return;
+    }
+
+    playEffect("ui-click");
+    setCutscene((current) => (current ? { ...current, frameIndex: current.frameIndex + 1 } : current));
+  }
+
+  function skipCutscene() {
+    if (!cutscene) {
+      return;
+    }
+
+    playEffect("ui-click");
+    startCampaignLevel(cutscene.level);
+  }
+
   function pauseGame() {
     patchState((current) => {
       if (current.phase === "menu" || current.phase === "game_end" || current.pause.active) {
@@ -1357,6 +1596,8 @@ export default function App() {
     clearSavedSession();
     setShowSettings(false);
     setShowRules(false);
+    setCutscene(null);
+    setMenuView("main");
     setLobbyError("");
     setJoinCode("");
     setSyncStatus("local");
@@ -2057,7 +2298,11 @@ export default function App() {
       influenceDeckLength: current.influenceDeck.length
     };
     const isTrainingMode = current.aiMode === "training";
-    const plan = isTrainingMode ? planWeakAiPlanningTurn(input, aiPlayerId) : planAiPlanningTurn(input, aiPlayerId);
+    const plan = current.campaignRun
+      ? planAiPlanningTurnForDifficulty(input, aiPlayerId, current.campaignRun.aiDifficulty)
+      : isTrainingMode
+        ? planWeakAiPlanningTurn(input, aiPlayerId)
+        : planAiPlanningTurn(input, aiPlayerId);
     const aiIntent = buildAiPlanningIntent(current, player, plan);
     const logs: string[] = [];
     const playedInfluences = [...current.playedInfluences];
@@ -2120,7 +2365,8 @@ export default function App() {
     const players = clonePlayersForAi(current.players);
     const buyer = players.find((player) => player.id === aiPlayerId)!;
     const isTrainingMode = current.aiMode === "training";
-    const choice = isTrainingMode ? chooseWeakAiUpgrade(buyer, current.upgradeOffer) : chooseAiUpgrade(buyer, current.upgradeOffer);
+    const useWeakUpgradePlan = isTrainingMode || Boolean(current.campaignRun && current.campaignRun.aiDifficulty <= 10);
+    const choice = useWeakUpgradePlan ? chooseWeakAiUpgrade(buyer, current.upgradeOffer) : chooseAiUpgrade(buyer, current.upgradeOffer);
     const queue = current.upgradeQueue.slice(1);
     let upgradeOffer = current.upgradeOffer;
     let aiScore = current.aiScore;
@@ -2246,6 +2492,8 @@ export default function App() {
   const tablePlayers = [opponentPlayer, localPlayer];
   const aiPlayer = state.aiPlayerId ? state.players.find((player) => player.id === state.aiPlayerId) ?? null : null;
   const completedGoalCount = state.partyGoals.filter((goal) => goal.completed).length;
+  const currentCampaignLevel = state.campaignRun ? CAMPAIGN_LEVELS.find((level) => level.level === state.campaignRun?.level) ?? null : null;
+  const cutsceneFrame = cutscene ? CUTSCENE_FRAMES[cutscene.frameIndex] : null;
   const focusTrendTags = useMemo(() => new Set(state.activeTrends[0]?.modifiers.map((modifier) => modifier.tag) ?? []), [state.activeTrends]);
 
   return (
@@ -2256,76 +2504,139 @@ export default function App() {
     >
       {state.phase === "menu" && (
         <section className="menu-screen">
-          <div className="menu-box">
-            <div className="menu-intro">
-              <h1>Trend Market</h1>
-              <p>Управляйте лавками, меняйте моду и продавайте милым покупателям-животным лучше соперника.</p>
-            </div>
+          {menuView === "main" ? (
+            <div className="menu-box">
+              <div className="menu-intro">
+                <h1>Trend Market</h1>
+                <p>Управляйте лавками, меняйте моду и продавайте милым покупателям-животным лучше соперника.</p>
+              </div>
 
-            <div className="menu-sections">
-              <section className="menu-section" aria-labelledby="play-mode-title">
-                <h2 id="play-mode-title">Выберите режим</h2>
-                <div className="menu-primary-grid">
-                  <button className="primary-action" onClick={startGame}>
-                    <Play size={18} /> Новая игра
-                  </button>
-                  <button className="primary-action" onClick={() => startAiGame("opponent")}>
-                    <Bot size={18} /> Против ИИ
-                  </button>
-                  <button className="primary-action" onClick={() => startAiGame("training")}>
-                    <Bot size={18} /> Обучение с ИИ
-                  </button>
-                </div>
-              </section>
-
-              <section className="menu-section" aria-labelledby="online-mode-title">
-                <h2 id="online-mode-title">Игра по сети</h2>
-                <div className="menu-online-row">
-                  <button
-                    className="primary-action"
-                    onClick={() => {
-                      playEffect("ui-click");
-                      void createLobby();
-                    }}
-                  >
-                    <PackagePlus size={18} /> Создать стол
-                  </button>
-                  <div className="join-lobby">
-                    <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="Код лобби" maxLength={6} />
-                    <button
-                      onClick={() => {
-                        playEffect("ui-click");
-                        void joinLobby();
-                      }}
-                    >
-                      Войти за стол
+              <div className="menu-sections">
+                <section className="menu-section" aria-labelledby="play-mode-title">
+                  <h2 id="play-mode-title">Выберите режим</h2>
+                  <div className="menu-primary-grid">
+                    <button className="primary-action" onClick={startGame}>
+                      <Play size={18} /> Новая игра
+                    </button>
+                    <button className="primary-action" onClick={() => setMenuView("levels")}>
+                      <MapIcon size={18} /> Уровни
+                    </button>
+                    <button className="primary-action" onClick={() => startAiGame("opponent")}>
+                      <Bot size={18} /> Против ИИ
+                    </button>
+                    <button className="primary-action" onClick={() => startAiGame("training")}>
+                      <Bot size={18} /> Обучение с ИИ
                     </button>
                   </div>
-                </div>
-              </section>
+                </section>
 
-              <div className="menu-secondary-actions">
+                <section className="menu-section" aria-labelledby="online-mode-title">
+                  <h2 id="online-mode-title">Игра по сети</h2>
+                  <div className="menu-online-row">
+                    <button
+                      className="primary-action"
+                      onClick={() => {
+                        playEffect("ui-click");
+                        void createLobby();
+                      }}
+                    >
+                      <PackagePlus size={18} /> Создать стол
+                    </button>
+                    <div className="join-lobby">
+                      <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="Код лобби" maxLength={6} />
+                      <button
+                        onClick={() => {
+                          playEffect("ui-click");
+                          void joinLobby();
+                        }}
+                      >
+                        Войти за стол
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <div className="menu-secondary-actions">
+                  <button
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowRules(true);
+                    }}
+                  >
+                    <BadgeHelp size={18} /> Правила
+                  </button>
+                  <button
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowSettings(true);
+                    }}
+                  >
+                    <Settings size={18} /> Настройки
+                  </button>
+                </div>
+              </div>
+
+              {lobbyError && <p className="lobby-error">{lobbyError}</p>}
+              <small>Для игры с двух компьютеров запустите `npm run lobby` и откройте приложение у обоих игроков.</small>
+            </div>
+          ) : (
+            <div className="menu-box level-map-box">
+              <div className="level-map-heading">
                 <button
                   onClick={() => {
                     playEffect("ui-click");
-                    setShowRules(true);
+                    setMenuView("main");
                   }}
                 >
-                  <BadgeHelp size={18} /> Правила
+                  <ChevronLeft size={18} /> Назад
                 </button>
-                <button
-                  onClick={() => {
-                    playEffect("ui-click");
-                    setShowSettings(true);
-                  }}
-                >
-                  <Settings size={18} /> Настройки
-                </button>
+                <div>
+                  <h1>Ярмарка Аааха</h1>
+                  <p>Пройдите 24 лавки, открывая новых соперников и приближаясь к красивой новой шляпе.</p>
+                </div>
+              </div>
+
+              <div className="level-road" aria-label="Выбор уровня">
+                {CAMPAIGN_LEVELS.map((level) => {
+                  const unlocked = isLevelUnlocked(campaignProgress, level.level);
+                  const completed = campaignProgress.completedLevels.includes(level.level);
+                  return (
+                    <button
+                      key={level.level}
+                      className={`level-node ${unlocked ? "unlocked" : "locked"} ${completed ? "completed" : ""}`}
+                      aria-label={`Уровень ${level.level}`}
+                      disabled={!unlocked}
+                      onClick={() => requestCampaignLevel(level)}
+                    >
+                      <span className="level-node-icon">{completed ? <Check size={16} /> : unlocked ? <Flag size={16} /> : <Lock size={16} />}</span>
+                      <strong>Уровень {level.level}</strong>
+                      <span>{level.opponentName} ({level.opponentNameEn})</span>
+                      <small>{level.district}</small>
+                    </button>
+                  );
+                })}
               </div>
             </div>
+          )}
+        </section>
+      )}
 
-            {lobbyError && <p className="lobby-error">{lobbyError}</p>}
-            <small>Для игры с двух компьютеров запустите `npm run lobby` и откройте приложение у обоих игроков.</small>
+      {cutscene && cutsceneFrame && (
+        <section className="cutscene-overlay" role="dialog" aria-label="Вступительная катсцена">
+          <img src={cutsceneFrame.image} alt="" />
+          <div className="cutscene-controls">
+            <div className="cutscene-progress">
+              {cutscene.frameIndex + 1} / {CUTSCENE_FRAMES.length}
+            </div>
+            <button onClick={skipCutscene}>
+              <SkipForward size={18} /> Пропустить
+            </button>
+          </div>
+          <div className="cutscene-subtitles">
+            <p>{cutsceneFrame.text}</p>
+            <button className="primary-action" onClick={advanceCutscene}>
+              {cutscene.frameIndex >= CUTSCENE_FRAMES.length - 1 ? "Начать уровень" : "Далее"}
+            </button>
           </div>
         </section>
       )}
@@ -2333,7 +2644,11 @@ export default function App() {
       <header className="top-bar">
         <div className="top-brand">
           <h1>Trend Market</h1>
-          <span>Раунд {state.round} / 8 · первый ход: {displayPlayerName(state.firstPlayer, localPlayerId)}</span>
+          <span>
+            {state.campaignRun
+              ? `Уровень ${state.campaignRun.level} / ${CAMPAIGN_LEVELS.length} · раунд ${state.round} / 8`
+              : `Раунд ${state.round} / 8 · первый ход: ${displayPlayerName(state.firstPlayer, localPlayerId)}`}
+          </span>
         </div>
         <div className="top-actions">
           <div className={`sync-pill sync-${syncStatus}`}>
@@ -2342,7 +2657,7 @@ export default function App() {
           {aiPlayer && (
             <div className="ai-score">
               <b>
-                <Bot size={16} /> ИИ: {displayPlayerName(aiPlayer.id, localPlayerId)}
+                <Bot size={16} /> ИИ: {displayPlayerNameFor(aiPlayer, localPlayerId)}
               </b>
               <span>{state.aiMode === "training" ? `оценка хода ${formatSignedScore(state.aiScore)}` : state.aiIntent ?? "Оппонент присматривается к рынку."}</span>
               {state.aiMode === "training" && state.aiIntent && <small>{state.aiIntent}</small>}
@@ -2352,7 +2667,7 @@ export default function App() {
         <div className="score-row">
           {state.players.map((player) => (
             <div key={player.id} className={`score score-${player.color}`}>
-              <b>{displayPlayerName(player.id, localPlayerId)}</b>
+              <b>{displayPlayerNameFor(player, localPlayerId)}</b>
               <span>
                 <Coins size={17} /> {player.money}
               </span>
@@ -2403,7 +2718,7 @@ export default function App() {
             }`}
           >
             <div className="shop-heading">
-              <h2>{player.id === localPlayer.id ? "Ваш прилавок" : "Прилавок соперника"} · {displayPlayerName(player.id, localPlayerId)}</h2>
+              <h2>{player.id === localPlayer.id ? "Ваш прилавок" : "Прилавок соперника"} · {displayPlayerNameFor(player, localPlayerId)}</h2>
               <span>{player.upgrades.length ? player.upgrades.map((upgrade) => upgrade.name).join(", ") : "без апгрейдов"}</span>
             </div>
             <div className="shelf-grid" style={{ gridTemplateColumns: `repeat(${player.shelfSlots}, minmax(112px, 1fr))` }}>
@@ -2538,7 +2853,7 @@ export default function App() {
                   {result.candidates.map((candidate) => (
                     <div key={`${candidate.ownerId}-${candidate.slotIndex}`} className={isWinningCandidate(result, candidate) ? "formula winner" : "formula"}>
                       <b>
-                        {candidate.product.name} · {displayPlayerName(candidate.ownerId, localPlayerId)}
+                        {candidate.product.name} · {displayPlayerNameFor(state.players.find((player) => player.id === candidate.ownerId), localPlayerId)}
                       </b>
                       {candidate.appeal.breakdown.map((line) => (
                         <span key={`${line.label}-${line.value}`} className={isFocusTrendLine(line.label) ? "focus-formula-line" : undefined}>
@@ -2585,7 +2900,7 @@ export default function App() {
               <div>
                 <h2>
                   {canControlActivePlayer ? "Ваш ход" : "Ход соперника"} ·{" "}
-                  {displayPlayerName((canControlActivePlayer ? handPlayer : activePlayer).id, localPlayerId)}
+                  {displayPlayerNameFor(canControlActivePlayer ? handPlayer : activePlayer, localPlayerId)}
                 </h2>
                 <div className="action-steps">
                   <span className={handPlayer.productActionUsed ? "done" : ""}>{handPlayer.productActionUsed ? "товар выбран" : "1. товар -> слот"}</span>
@@ -2700,7 +3015,7 @@ export default function App() {
           <div className="upgrade-shop">
             <div>
               <h2>Магазин апгрейдов</h2>
-              <span>Выбирает {displayPlayerName(state.upgradeQueue[0], localPlayerId)}. Можно купить один апгрейд или пропустить.</span>
+              <span>Выбирает {displayPlayerNameFor(state.players.find((player) => player.id === state.upgradeQueue[0]), localPlayerId)}. Можно купить один апгрейд или пропустить.</span>
             </div>
             <div className="upgrade-row">
               {state.upgradeOffer.map((upgrade) => {
@@ -2724,9 +3039,19 @@ export default function App() {
             <p>{finalResult.message}</p>
             <div className="goal-badge">Цели партии: {completedGoalCount} / {state.partyGoals.length}</div>
             <div className="end-actions">
-              <button className="primary-action" onClick={startGame}>
+              <button className="primary-action" onClick={currentCampaignLevel ? () => startCampaignLevel(currentCampaignLevel) : startGame}>
                 <RefreshCw size={18} /> Сыграть ещё
               </button>
+              {state.campaignRun && (
+                <button
+                  onClick={() => {
+                    exitToMenu();
+                    setMenuView("levels");
+                  }}
+                >
+                  <MapIcon size={18} /> Карта уровней
+                </button>
+              )}
               <button onClick={exitToMenu}>
                 <X size={18} /> Выйти
               </button>

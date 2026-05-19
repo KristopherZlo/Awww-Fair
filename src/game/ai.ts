@@ -379,6 +379,36 @@ export function planWeakAiPlanningTurn(current: AiPlanningInput, playerId: Playe
   };
 }
 
+export function planAiPlanningTurnForDifficulty(current: AiPlanningInput, playerId: PlayerId, difficulty: number): AiPlanningPlan {
+  const level = Math.max(1, Math.min(24, Math.round(difficulty)));
+
+  if (level <= 6) {
+    return planWeakAiPlanningTurn(current, playerId);
+  }
+
+  const strongPlan = planAiPlanningTurn(current, playerId);
+
+  if (level <= 12) {
+    return {
+      ...strongPlan,
+      influenceMove: null,
+      tableBonusMove: null,
+      scoreDelta: Math.max(0, Math.round(strongPlan.scoreDelta * 0.55)),
+      notes: ["частичный план уровня ярмарки"]
+    };
+  }
+
+  if (level <= 18) {
+    return strongPlan;
+  }
+
+  return {
+    ...strongPlan,
+    scoreDelta: strongPlan.scoreDelta + 1,
+    notes: [...strongPlan.notes, "+1 за опыт финального соперника"]
+  };
+}
+
 export function chooseAiUpgrade(player: PlayerState, upgrades: UpgradeCard[]): AiUpgradeChoice | null {
   const upgradeScores: Record<UpgradeCard["effect"], number> = {
     extra_shelf: 8,

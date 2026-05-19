@@ -445,8 +445,57 @@ describe("App layout shell", () => {
 
     expect(screen.getByText(/выберите режим/i)).toBeInTheDocument();
     expect(screen.getByText(/игра по сети/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /уровни/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /против ии/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /обучение/i })).toBeInTheDocument();
+  });
+
+  it("opens the level map and starts level one through a skippable full-screen cutscene", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /уровни/i }));
+
+    expect(screen.getByText(/Ярмарка Аааха/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Уровень 1$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Уровень 2$/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /^Уровень 1$/i }));
+
+    const cutscene = screen.getByRole("dialog", { name: /Вступительная катсцена/i });
+    expect(cutscene).toBeInTheDocument();
+    expect(cutscene).toHaveClass("cutscene-overlay");
+    expect(screen.getByText(/В мире Ааах начинается большая ярмарка/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Пропустить/i }));
+
+    expect(screen.getByText(/Уровень 1 \/ 24/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Биби \(Bibi\)/i).length).toBeGreaterThan(0);
+  });
+
+  it("records a campaign win and unlocks the next level", async () => {
+    saveGameState({
+      phase: "game_end",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      campaignRun: {
+        level: 1,
+        aiDifficulty: 1,
+        opponentName: "Биби",
+        opponentNameEn: "Bibi",
+        unlockRecorded: false
+      },
+      players: [
+        { ...testPlayer("A"), money: 8 },
+        { ...testPlayer("B"), name: "Биби (Bibi)", money: 2 }
+      ]
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("trend-market-campaign-v1")).toContain('"highestUnlockedLevel":2');
+    });
   });
 
   it("opens audio settings with separate music and effects controls", async () => {

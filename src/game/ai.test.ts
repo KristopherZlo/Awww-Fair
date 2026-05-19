@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CUSTOMER_CARDS, INFLUENCE_CARDS, PRODUCT_CARDS, TREND_CARDS, UPGRADE_CARDS } from "../data/cards";
 import { createProductInstance } from "./engine";
-import { chooseAiUpgrade, planAiPlanningTurn, planWeakAiPlanningTurn } from "./ai";
+import { chooseAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn } from "./ai";
 import type { InfluenceCard, PlayerId, PlayerState, ProductInstance, UpgradeCard } from "./types";
 
 function product(id: string, instanceId = id): ProductInstance {
@@ -148,5 +148,27 @@ describe("AI planner", () => {
     expect(weak.productMove?.productInstanceId).toBe("bread-1");
     expect(weak.influenceMove).toBeNull();
     expect(weak.scoreDelta).toBeLessThan(strong.scoreDelta);
+  });
+
+  it("uses weak plans for early campaign levels and full plans for later levels", () => {
+    const input = {
+      players: [
+        player("A", [null, null, null], []),
+        player("B", [null, null, null], [product("bread", "bread-1"), product("toy", "toy-1")], [influence("kids_party")])
+      ],
+      currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
+      activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+      playedInfluences: [],
+      roundBonuses: [],
+      productDeckLength: 3,
+      influenceDeckLength: 3
+    };
+
+    const earlyLevel = planAiPlanningTurnForDifficulty(input, "B", 3);
+    const lateLevel = planAiPlanningTurnForDifficulty(input, "B", 18);
+
+    expect(earlyLevel.influenceMove).toBeNull();
+    expect(lateLevel.influenceMove?.cardId).toBe("kids_party");
+    expect(lateLevel.scoreDelta).toBeGreaterThan(earlyLevel.scoreDelta);
   });
 });
