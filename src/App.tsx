@@ -68,6 +68,7 @@ const PRODUCT_ATLAS = assetUrl("product-atlas.png");
 const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.png");
 const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.png");
 const MARKET_BG = assetUrl("market-bg.png");
+const GAME_TITLE = "Awww Fair: Hat Hustle";
 const MENU_TRACK = { title: "Main Menu", src: assetUrl("music/main-menu.mp3") } as const;
 const CUTSCENE_TRACK = { title: "Cutscene", src: assetUrl("music/cutscene.mp3") } as const;
 const MUSIC_TRACKS = [
@@ -301,7 +302,7 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
     roundBonuses: [],
     saleResults: [],
     saleInsights: [],
-    logs: ["Добро пожаловать на Trend Market."],
+    logs: [`Добро пожаловать в ${GAME_TITLE}.`],
     selectedProductId: null,
     selectedInfluenceId: null,
     selectedTag: "сладкое",
@@ -987,7 +988,10 @@ export default function App() {
     const handleEnded = () => {
       if (musicModeRef.current === "game") {
         playMusicTrack(currentTrackIndexRef.current + 1, audioSettingsRef.current.musicEnabled, 0);
+        return;
       }
+
+      restartCurrentMusic(audio);
     };
 
     audio.addEventListener("ended", handleEnded);
@@ -1266,6 +1270,31 @@ export default function App() {
     }
 
     setMusicStatus("playing");
+  }
+
+  function restartCurrentMusic(audio: HTMLAudioElement | null = audioRef.current) {
+    const settings = audioSettingsRef.current;
+    if (!audio || !settings.musicEnabled) {
+      return;
+    }
+
+    try {
+      audio.currentTime = 0;
+      const playback = audio.play();
+      if (playback && typeof playback.then === "function") {
+        void playback
+          .then(() => {
+            setMusicStatus("playing");
+          })
+          .catch(() => {
+            setMusicStatus("blocked");
+          });
+        return;
+      }
+      setMusicStatus("playing");
+    } catch {
+      setMusicStatus("blocked");
+    }
   }
 
   function switchMusicSource(track: { title: string; src: string }, shouldPlay: boolean) {
@@ -2586,7 +2615,7 @@ export default function App() {
           {menuView === "main" ? (
             <div className="menu-box">
               <div className="menu-intro">
-                <h1>Trend Market</h1>
+                <h1>{GAME_TITLE}</h1>
                 <p>Разложите товары и постарайтесь заработать больше соперника.</p>
               </div>
 
@@ -2722,7 +2751,7 @@ export default function App() {
 
       <header className="top-bar">
         <div className="top-brand">
-          <h1>Trend Market</h1>
+          <h1>{GAME_TITLE}</h1>
           <span>
             {state.campaignRun
               ? `Уровень ${state.campaignRun.level} / ${CAMPAIGN_LEVELS.length} · раунд ${state.round} / 8`

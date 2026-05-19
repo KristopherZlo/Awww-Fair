@@ -210,6 +210,12 @@ describe("App layout shell", () => {
     expect(shell?.classList.contains("phase-menu")).toBe(true);
   });
 
+  it("uses Awww Fair: Hat Hustle as the visible game title", () => {
+    render(<App />);
+
+    expect(screen.getAllByRole("heading", { name: "Awww Fair: Hat Hustle", level: 1 }).length).toBeGreaterThan(0);
+  });
+
   it("explains the rules in short child-friendly steps", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -603,6 +609,25 @@ describe("App layout shell", () => {
 
     expect(mockAudioInstances[0].src).toContain("stroll.mp3");
     expect(mockAudioInstances[0].currentTime).toBe(0);
+  });
+
+  it("restarts menu music if the browser reports that the menu track ended", () => {
+    render(<App />);
+    const shell = document.querySelector(".app-shell");
+
+    expect(shell).not.toBeNull();
+    fireEvent.pointerDown(shell!);
+    expect(mockAudioInstances[0].play).toHaveBeenCalledTimes(1);
+
+    mockAudioInstances[0].currentTime = 12;
+    act(() => {
+      mockAudioInstances[0].emit("ended");
+    });
+
+    expect(mockAudioInstances[0].src).toContain("main-menu.mp3");
+    expect(mockAudioInstances[0].currentTime).toBe(0);
+    expect(mockAudioInstances[0].play).toHaveBeenCalledTimes(2);
+    expect(mockAudioInstances[0].loop).toBe(true);
   });
 
   it("keeps a manually selected game track across phase changes and advances after it ends", async () => {
