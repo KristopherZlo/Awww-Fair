@@ -3,11 +3,13 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { lanUrls } from "./network-info.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
 const port = Number(process.env.PORT ?? 5176);
+const publicPort = Number(process.env.PUBLIC_PORT ?? port);
 const seatTimeoutMs = Number(process.env.LOBBY_SEAT_TIMEOUT_MS ?? 7000);
 const rooms = new Map();
 
@@ -138,6 +140,14 @@ const server = createServer(async (request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
   const parts = requestUrl.pathname.split("/").filter(Boolean);
 
+  if (request.method === "GET" && parts[0] === "api" && parts[1] === "network") {
+    json(response, 200, {
+      port: publicPort,
+      urls: lanUrls(publicPort)
+    });
+    return;
+  }
+
   if (parts[0] !== "api" || parts[1] !== "lobbies") {
     await serveStatic(request, response);
     return;
@@ -243,5 +253,10 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`Trend Market lobby server: http://127.0.0.1:${port}`);
+  const urls = lanUrls(publicPort);
+  console.log(`Trend Market app: http://127.0.0.1:${publicPort}`);
+  urls.forEach((url) => console.log(`Trend Market LAN: ${url}`));
+  if (publicPort !== port) {
+    console.log(`Trend Market lobby API: http://127.0.0.1:${port}`);
+  }
 });

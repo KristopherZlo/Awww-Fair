@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:5175": "vite --host 127.0.0.1 --port 5175",
-    "dev:lan": "vite --host 0.0.0.0 --port 5175",
+    "dev:lan": "node server/lan-dev-server.mjs",
+    "lan": "node server/lan-dev-server.mjs",
     "lobby": "node server/lobby-server.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",

@@ -10,6 +10,7 @@ import {
   Github,
   HandCoins,
   Info,
+  Languages,
   Lock,
   LogOut,
   Mail,
@@ -53,6 +54,30 @@ import { createPartyGoals, normalizePartyGoal, PARTY_GOAL_REWARD, updatePartyGoa
 import { chooseAiUpgrade, chooseWeakAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn, type AiInfluenceMove, type AiPlanningPlan } from "./game/ai";
 import { clampVolume, playSoundEffect, type SoundEffectId } from "./audio/soundEffects";
 import { CAMPAIGN_LEVELS, campaignProgressAfterWin, createDefaultCampaignProgress, isLevelUnlocked, type CampaignLevel, type CampaignProgress } from "./game/levels";
+import {
+  LANGUAGE_OPTIONS,
+  type Language,
+  aiDifficultyLabel,
+  campaignLevelDistrict,
+  campaignLevelSpecies,
+  campaignLevelStory,
+  campaignLevelTitle,
+  coinText,
+  cutsceneText,
+  customerName,
+  customerPersonalityDescription,
+  customerPersonalityLabel,
+  goalTitle,
+  influenceDescription,
+  influenceName,
+  normalizeLanguage,
+  productName,
+  tagText,
+  trendName,
+  ui,
+  upgradeDescription,
+  upgradeName
+} from "./i18n";
 import type {
   CustomerCard as CustomerCardType,
   InfluenceCard as InfluenceCardType,
@@ -102,7 +127,8 @@ const DEFAULT_AUDIO_SETTINGS = {
   effectsEnabled: true,
   musicVolume: 0.3,
   effectsVolume: 1,
-  turnTimeSeconds: DEFAULT_TURN_TIME_SECONDS
+  turnTimeSeconds: DEFAULT_TURN_TIME_SECONDS,
+  language: "ru" as Language
 };
 
 const CUTSCENE_FRAMES = [
@@ -161,6 +187,7 @@ interface AudioSettings {
   musicVolume: number;
   effectsVolume: number;
   turnTimeSeconds: number;
+  language: Language;
 }
 
 interface ChoiceDraft {
@@ -238,6 +265,10 @@ interface LobbyResponse {
   version: number;
   state: GameState;
   seats: Record<PlayerId, boolean>;
+}
+
+interface NetworkResponse {
+  urls?: unknown;
 }
 
 const LOBBY_API = "/api/lobbies";
@@ -357,23 +388,29 @@ function moneySoundPlayerIdFor(state: GameState, lobby: LobbySession | null): Pl
   return state.activePlayer;
 }
 
-function displayPlayerName(playerId: PlayerId, viewerId: PlayerId) {
-  return playerId === viewerId ? "Вы" : "Оппонент";
+function displayPlayerName(playerId: PlayerId, viewerId: PlayerId, language: Language) {
+  return playerId === viewerId ? ui(language, "you") : ui(language, "opponent");
 }
 
-function displayPlayerNameFor(player: PlayerState | undefined, viewerId: PlayerId) {
+function displayPlayerNameFor(player: PlayerState | undefined, viewerId: PlayerId, language: Language) {
   if (!player) {
-    return "Оппонент";
+    return ui(language, "opponent");
   }
-  return player.id === viewerId ? "Вы" : player.name || "Оппонент";
+  if (player.id === viewerId) {
+    return ui(language, "you");
+  }
+  return player.name && !["Вы", "Оппонент"].includes(player.name) ? player.name : ui(language, "opponent");
 }
 
-function ownerPhrase(playerId: PlayerId, viewerId: PlayerId) {
+function ownerPhrase(playerId: PlayerId, viewerId: PlayerId, language: Language) {
+  if (language === "en") {
+    return playerId === viewerId ? "for you" : "for the opponent";
+  }
   return playerId === viewerId ? "у вас" : "у оппонента";
 }
 
-function actionPlayerName(playerId: PlayerId, viewerId: PlayerId) {
-  return playerId === viewerId ? "Вы" : "Оппонент";
+function actionPlayerName(playerId: PlayerId, viewerId: PlayerId, language: Language) {
+  return displayPlayerName(playerId, viewerId, language);
 }
 
 function formatTurnTime(seconds: number) {
@@ -389,7 +426,7 @@ export function randomAiTurnDelayMs() {
   return Math.floor(Math.random() * (AI_TURN_DELAY_MAX_MS + 1));
 }
 
-function gameOutcome(players: PlayerState[], viewerId: PlayerId) {
+function gameOutcome(players: PlayerState[], viewerId: PlayerId, language: Language) {
   const [a, b] = players;
   const winner =
     a.money === b.money
@@ -402,24 +439,29 @@ function gameOutcome(players: PlayerState[], viewerId: PlayerId) {
         ? a.id
         : b.id;
   const decidedBySales = winner !== null && a.money === b.money && a.sales !== b.sales;
-  const scoreLine = `Вы — ${players.find((player) => player.id === viewerId)?.money ?? 0} монет, Оппонент — ${
+  const viewerMoney = players.find((player) => player.id === viewerId)?.money ?? 0;
+  const opponentMoney = players.find((player) => player.id === opponentOf(viewerId))?.money ?? 0;
+  const scoreLine =
+    language === "en"
+      ? `You: ${viewerMoney} coins, Opponent: ${opponentMoney} coins.`
+      : `Вы — ${viewerMoney} монет, Оппонент — ${
     players.find((player) => player.id === opponentOf(viewerId))?.money ?? 0
   } монет.`;
 
   if (!winner) {
     return {
-      title: "Ничья",
+      title: language === "en" ? "Draw" : "Ничья",
       tone: "draw" as const,
-      message: `${scoreLine} Продажи тоже равны, рынок остался дружеским.`,
+      message: language === "en" ? `${scoreLine} Sales are tied too, so the market stays friendly.` : `${scoreLine} Продажи тоже равны, рынок остался дружеским.`,
       sound: "victory" as const
     };
   }
 
   const won = winner === viewerId;
   return {
-    title: won ? "Вы победили" : "Вы проиграли",
+    title: won ? (language === "en" ? "You won" : "Вы победили") : language === "en" ? "You lost" : "Вы проиграли",
     tone: won ? ("victory" as const) : ("defeat" as const),
-    message: `${scoreLine}${decidedBySales ? " Победителя решили продажи." : ""}`,
+    message: `${scoreLine}${decidedBySales ? (language === "en" ? " Sales decided the winner." : " Победителя решили продажи.") : ""}`,
     sound: won ? ("victory" as const) : ("defeat" as const)
   };
 }
@@ -435,11 +477,11 @@ function winningPlayerId(players: PlayerState[]): PlayerId | null {
   return a.money > b.money ? a.id : b.id;
 }
 
-function formatModifiers(modifiers: { tag: Tag; value: number }[], focused = false) {
+function formatModifiers(modifiers: { tag: Tag; value: number }[], language: Language, focused = false) {
   return modifiers
     .map((modifier) => {
       const value = trendModifierValue(modifier.value, focused);
-      return `${modifier.tag} ${value > 0 ? "+" : ""}${value}`;
+      return `${tagText(language, modifier.tag)} ${value > 0 ? "+" : ""}${value}`;
     })
     .join(", ");
 }
@@ -468,7 +510,22 @@ function isWinningCandidate(result: PurchaseResult, candidate: PurchaseResult["c
   );
 }
 
-function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId) {
+function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, language: Language) {
+  if (language === "en") {
+    if (!result.winner) {
+      if (result.customer.personality?.kind === "trend_chaser") {
+        return `${customerName(language, result.customer)} bought nothing: no product matched the needed trend.`;
+      }
+      return `${customerName(language, result.customer)} bought nothing: no product reached ${PURCHASE_APPEAL_THRESHOLD} appeal.`;
+    }
+
+    return `${customerName(language, result.customer)} chose ${productName(language, result.winner.product)}: ${displayPlayerName(
+      result.winner.ownerId,
+      viewerId,
+      language
+    )} had the best appeal.`;
+  }
+
   if (!result.winner) {
     if (result.customer.personality?.kind === "trend_chaser") {
       return `${result.customer.name} ничего не купил: ни один товар не попал в нужный тренд.`;
@@ -476,7 +533,7 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId) {
     return `${result.customer.name} ничего не купил: ни один товар не набрал ${PURCHASE_APPEAL_THRESHOLD} привлекательности.`;
   }
 
-  const winnerName = displayPlayerName(result.winner.ownerId, viewerId);
+  const winnerName = displayPlayerName(result.winner.ownerId, viewerId, language);
   const lines = result.winner.appeal.breakdown;
   const focusTrend = lines.find((line) => isFocusTrendLine(line.label));
   const primaryWish = lines.find((line) => line.label.startsWith("главное желание"));
@@ -528,7 +585,7 @@ function influenceImpactLines(card: InfluenceCardType, owner: PlayerState, oppon
   });
 }
 
-function buildCoachAdvice(plan: AiPlanningPlan | null, player: PlayerState): string[] {
+function buildCoachAdvice(plan: AiPlanningPlan | null, player: PlayerState, language: Language): string[] {
   if (!plan) {
     return [];
   }
@@ -537,19 +594,27 @@ function buildCoachAdvice(plan: AiPlanningPlan | null, player: PlayerState): str
   if (plan.productMove && !player.productActionUsed) {
     const product = player.productHand.find((candidate) => candidate.instanceId === plan.productMove?.productInstanceId);
     if (product) {
-      advice.push(`Лучше выставить ${product.name} в слот ${plan.productMove.slotIndex + 1}: его теги сильнее работают с текущими клиентами и трендами.`);
+      advice.push(
+        language === "en"
+          ? `Place ${productName(language, product)} in slot ${plan.productMove.slotIndex + 1}: its tags fit the current customers and trends better.`
+          : `Лучше выставить ${product.name} в слот ${plan.productMove.slotIndex + 1}: его теги сильнее работают с текущими клиентами и трендами.`
+      );
     }
   } else if (!player.productActionUsed && player.productHand.length > 0) {
-    advice.push("Лучше не менять полку вслепую: текущая замена не даёт явного прироста продаж.");
+    advice.push(language === "en" ? "Do not change the shelf blindly: the current replacement does not clearly improve sales." : "Лучше не менять полку вслепую: текущая замена не даёт явного прироста продаж.");
   }
 
   if (plan.influenceMove && !player.influenceActionUsed) {
     const card = player.influenceHand.find((candidate) => candidate.id === plan.influenceMove?.cardId);
     if (card) {
-      advice.push(`Лучше сыграть ${card.name}: эта карта сильнее меняет текущую продажу в вашу пользу.`);
+      advice.push(
+        language === "en"
+          ? `Play ${influenceName(language, card)}: this card shifts the current sale more in your favor.`
+          : `Лучше сыграть ${card.name}: эта карта сильнее меняет текущую продажу в вашу пользу.`
+      );
     }
   } else if (!player.influenceActionUsed && player.influenceHand.length > 0) {
-    advice.push("Лучше сохранить влияние: сейчас карта не даёт достаточно сильного преимущества.");
+    advice.push(language === "en" ? "Save the influence card: it does not give enough advantage right now." : "Лучше сохранить влияние: сейчас карта не даёт достаточно сильного преимущества.");
   }
 
   return advice;
@@ -569,9 +634,9 @@ function bestIntentTag(current: Pick<GameState, "currentCustomers" | "activeTren
   return [...product.tags].sort((left, right) => tagDemandForIntent(current, right) - tagDemandForIntent(current, left))[0] ?? product.tags[0];
 }
 
-function focusTrendNameForTag(current: Pick<GameState, "activeTrends">, tag: Tag) {
+function focusTrendNameForTag(current: Pick<GameState, "activeTrends">, tag: Tag, language: Language) {
   const focusTrend = current.activeTrends[0];
-  return focusTrend?.modifiers.some((modifier) => modifier.tag === tag) ? focusTrend.name : null;
+  return focusTrend?.modifiers.some((modifier) => modifier.tag === tag) ? trendName(language, focusTrend) : null;
 }
 
 function partyGoalClassName(goal: PartyGoal, localPlayerId: PlayerId) {
@@ -579,28 +644,33 @@ function partyGoalClassName(goal: PartyGoal, localPlayerId: PlayerId) {
   return ["party-goal", goal.completed ? "completed" : "", ownerClass].filter(Boolean).join(" ");
 }
 
-function buildAiPlanningIntent(current: GameState, player: PlayerState, plan: AiPlanningPlan) {
+function buildAiPlanningIntent(current: GameState, player: PlayerState, plan: AiPlanningPlan, language: Language) {
   if (plan.productMove) {
     const product = player.productHand.find((candidate) => candidate.instanceId === plan.productMove?.productInstanceId);
     if (product) {
       const tag = bestIntentTag(current, product);
-      const trendName = focusTrendNameForTag(current, tag);
-      return `Оппонент делает ставку на ${tag}: выставил ${product.name}${trendName ? ` под ${trendName}` : ""}.`;
+      const focusName = focusTrendNameForTag(current, tag, language);
+      if (language === "en") {
+        return `Opponent is leaning into ${tagText(language, tag)}: placed ${productName(language, product)}${focusName ? ` for ${focusName}` : ""}.`;
+      }
+      return `Оппонент делает ставку на ${tag}: выставил ${product.name}${focusName ? ` под ${focusName}` : ""}.`;
     }
   }
 
   if (plan.influenceMove) {
     const influence = player.influenceHand.find((candidate) => candidate.id === plan.influenceMove?.cardId);
     if (influence) {
-      return `Оппонент сыграл ${influence.name}: пытается изменить ближайшую продажу.`;
+      return language === "en"
+        ? `Opponent played ${influenceName(language, influence)}: trying to shift the next sale.`
+        : `Оппонент сыграл ${influence.name}: пытается изменить ближайшую продажу.`;
     }
   }
 
   if (plan.tableBonusMove) {
-    return "Оппонент усилил товар рекламным столиком.";
+    return language === "en" ? "Opponent boosted a product with the ad table." : "Оппонент усилил товар рекламным столиком.";
   }
 
-  return "Оппонент копит ресурсы и ждёт более сильный ход.";
+  return language === "en" ? "Opponent is saving resources and waiting for a stronger move." : "Оппонент копит ресурсы и ждёт более сильный ход.";
 }
 
 function Sprite({
@@ -635,13 +705,13 @@ function Sprite({
   );
 }
 
-function TagPill({ tag, matched }: { tag: Tag; matched?: boolean }) {
+function TagPill({ tag, language, matched }: { tag: Tag; language: Language; matched?: boolean }) {
   return (
     <span
       className={`tag ${matched ? "matched" : ""}`}
       style={{ "--tag-color": TAG_COLORS[tag] } as React.CSSProperties}
     >
-      {tag}
+      {tagText(language, tag)}
     </span>
   );
 }
@@ -655,7 +725,8 @@ function ProductCard({
   ariaDisabled = false,
   onClick,
   title,
-  focusTags
+  focusTags,
+  language
 }: {
   product: ProductInstance;
   compact?: boolean;
@@ -666,7 +737,9 @@ function ProductCard({
   onClick?: () => void;
   title?: string;
   focusTags?: Set<Tag>;
+  language: Language;
 }) {
+  const label = productName(language, product);
   return (
     <button
       className={`card product-card ${compact ? "compact" : ""} ${selected ? "selected" : ""} ${recommended ? "coach-recommended" : ""}`}
@@ -677,48 +750,57 @@ function ProductCard({
     >
       <Sprite atlas={PRODUCT_ATLAS} cols={4} rows={3} col={product.sprite.col} row={product.sprite.row} className="product-sprite" />
       <span className="product-copy card-copy">
-        <strong>{product.name}</strong>
+        <strong>{label}</strong>
         <span className="tag-row">
         {product.tags.map((tag) => (
-          <TagPill key={tag} tag={tag} matched={focusTags?.has(tag)} />
+          <TagPill key={tag} tag={tag} language={language} matched={focusTags?.has(tag)} />
         ))}
         </span>
         <span className="card-meta">
-        <span>{product.price} мон.</span>
-        <span>запас {product.stock}</span>
+        <span>{product.price} {coinText(language, product.price)}</span>
+        <span>{language === "en" ? "stock" : "запас"} {product.stock}</span>
         </span>
       </span>
     </button>
   );
 }
 
-function CustomerCard({ customer, focusTags }: { customer: CustomerCardType; focusTags?: Set<Tag> }) {
+function CustomerCard({ customer, focusTags, language }: { customer: CustomerCardType; focusTags?: Set<Tag>; language: Language }) {
+  const label = customerName(language, customer);
+  const personalityLabel = customerPersonalityLabel(language, customer);
+  const personalityDescription = customerPersonalityDescription(language, customer);
   return (
     <div
       className="card customer-card"
-      title={`${customer.name}: главное ${customer.primaryTag}, второе ${customer.secondaryTag}${customer.personality ? `. Характер: ${customer.personality.description}` : ""}`}
+      title={
+        language === "en"
+          ? `${label}: primary ${tagText(language, customer.primaryTag)}, secondary ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Personality: ${personalityDescription}` : ""}`
+          : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Характер: ${personalityDescription}` : ""}`
+      }
     >
       <Sprite atlas={CUSTOMER_ATLAS} atlas2x={CUSTOMER_ATLAS_2X} cols={4} rows={4} col={customer.sprite.col} row={customer.sprite.row} className="customer-sprite" />
       <div className="customer-copy card-copy">
-        <strong>{customer.name}</strong>
-        {customer.personality && <small className="personality-line">{customer.personality.label}</small>}
+        <strong>{label}</strong>
+        {customer.personality && <small className="personality-line">{personalityLabel}</small>}
         <div className="tag-row">
-        <TagPill tag={customer.primaryTag} matched />
-        <TagPill tag={customer.secondaryTag} matched={focusTags?.has(customer.secondaryTag)} />
+        <TagPill tag={customer.primaryTag} language={language} matched />
+        <TagPill tag={customer.secondaryTag} language={language} matched={focusTags?.has(customer.secondaryTag)} />
         </div>
       </div>
     </div>
   );
 }
 
-function TrendCard({ trend, focused = false }: { trend: TrendCardType; focused?: boolean }) {
+function TrendCard({ trend, focused = false, language }: { trend: TrendCardType; focused?: boolean; language: Language }) {
+  const label = trendName(language, trend);
+  const modifiers = formatModifiers(trend.modifiers, language, focused);
   return (
-    <div className={`trend-card ${focused ? "focus-trend" : ""}`} title={`${trend.name}: ${formatModifiers(trend.modifiers, focused)}`}>
+    <div className={`trend-card ${focused ? "focus-trend" : ""}`} title={`${label}: ${modifiers}`}>
       <Sparkles size={18} />
       <div className="trend-copy">
-        {focused && <em>Главный тренд</em>}
-        <strong>{trend.name}</strong>
-        <span>{formatModifiers(trend.modifiers, focused)}</span>
+        {focused && <em>{ui(language, "focusTrend")}</em>}
+        <strong>{label}</strong>
+        <span>{modifiers}</span>
       </div>
     </div>
   );
@@ -729,20 +811,24 @@ function InfluenceCard({
   selected,
   recommended = false,
   disabled,
-  onClick
+  onClick,
+  language
 }: {
   card: InfluenceCardType;
   selected: boolean;
   recommended?: boolean;
   disabled: boolean;
   onClick: () => void;
+  language: Language;
 }) {
+  const label = influenceName(language, card);
+  const description = influenceDescription(language, card);
   return (
-    <button className={`card influence-card ${selected ? "selected" : ""} ${recommended ? "coach-recommended" : ""}`} disabled={disabled} onClick={onClick} title={card.description}>
+    <button className={`card influence-card ${selected ? "selected" : ""} ${recommended ? "coach-recommended" : ""}`} disabled={disabled} onClick={onClick} title={description}>
       <ScrollText size={20} />
       <span className="influence-copy card-copy">
-        <strong>{card.name}</strong>
-        <span>{card.description}</span>
+        <strong>{label}</strong>
+        <span>{description}</span>
       </span>
     </button>
   );
@@ -751,18 +837,22 @@ function InfluenceCard({
 function UpgradeCard({
   upgrade,
   canBuy,
-  onBuy
+  onBuy,
+  language
 }: {
   upgrade: UpgradeCardType;
   canBuy: boolean;
   onBuy: () => void;
+  language: Language;
 }) {
+  const label = upgradeName(language, upgrade);
+  const description = upgradeDescription(language, upgrade);
   return (
-    <button className="card upgrade-card" disabled={!canBuy} onClick={onBuy} title={upgrade.description}>
+    <button className="card upgrade-card" disabled={!canBuy} onClick={onBuy} title={description}>
       <PackagePlus size={22} />
-      <strong>{upgrade.name}</strong>
-      <span>{upgrade.description}</span>
-      <b>{upgrade.cost} мон.</b>
+      <strong>{label}</strong>
+      <span>{description}</span>
+      <b>{upgrade.cost} {coinText(language, upgrade.cost)}</b>
     </button>
   );
 }
@@ -850,7 +940,8 @@ function normalizeSavedAudioSettings(value: unknown): AudioSettings {
     effectsEnabled: typeof value.effectsEnabled === "boolean" ? value.effectsEnabled : DEFAULT_AUDIO_SETTINGS.effectsEnabled,
     musicVolume: typeof value.musicVolume === "number" ? clampVolume(value.musicVolume) : DEFAULT_AUDIO_SETTINGS.musicVolume,
     effectsVolume: typeof value.effectsVolume === "number" ? clampVolume(value.effectsVolume) : DEFAULT_AUDIO_SETTINGS.effectsVolume,
-    turnTimeSeconds: typeof value.turnTimeSeconds === "number" ? clampTurnTime(value.turnTimeSeconds) : DEFAULT_AUDIO_SETTINGS.turnTimeSeconds
+    turnTimeSeconds: typeof value.turnTimeSeconds === "number" ? clampTurnTime(value.turnTimeSeconds) : DEFAULT_AUDIO_SETTINGS.turnTimeSeconds,
+    language: normalizeLanguage(value.language)
   };
 }
 
@@ -977,6 +1068,7 @@ export default function App() {
   const [lobbyError, setLobbyError] = useState("");
   const [syncStatus, setSyncStatus] = useState<"local" | "online" | "syncing" | "offline">(() => (initialSession?.lobby ? "online" : "local"));
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
+  const [networkUrls, setNetworkUrls] = useState<string[]>([]);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>("idle");
@@ -995,6 +1087,7 @@ export default function App() {
   const autoReadyTurnRef = useRef<string | null>(null);
   const rejectTimerRef = useRef<number | null>(null);
   const skipNextSessionSaveRef = useRef(false);
+  const language = audioSettings.language;
 
   const activePlayer = state.players.find((player) => player.id === state.activePlayer) ?? state.players[0];
   const isAiTurn = Boolean(state.aiPlayerId && state.activePlayer === state.aiPlayerId);
@@ -1006,10 +1099,54 @@ export default function App() {
   const localPlanningTurn = state.phase === "planning" && !waitingForLobbyPlayer && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer) && !state.choiceDraft;
   const canControlActivePlayer = !waitingForLobbyPlayer && !state.pause.active && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
   const selectedInfluence = handPlayer.influenceHand.find((card) => card.id === state.selectedInfluenceId) ?? null;
-  const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId), [state.players, localPlayerId]);
+  const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId, language), [state.players, localPlayerId, language]);
   const isTimedLocalTurn = localPlanningTurn && !state.pause.active;
   const musicStatusText =
-    musicStatus === "playing" ? "играет" : musicStatus === "blocked" ? "ждет клика" : musicStatus === "paused" ? "пауза" : "готова";
+    language === "en"
+      ? musicStatus === "playing"
+        ? "playing"
+        : musicStatus === "blocked"
+          ? "waiting for click"
+          : musicStatus === "paused"
+            ? "paused"
+            : "ready"
+      : musicStatus === "playing"
+        ? "играет"
+        : musicStatus === "blocked"
+          ? "ждет клика"
+          : musicStatus === "paused"
+            ? "пауза"
+            : "готова";
+
+  useEffect(() => {
+    if (typeof fetch === "undefined") {
+      return;
+    }
+
+    let disposed = false;
+
+    async function loadNetworkUrls() {
+      try {
+        const response = await fetch("/api/network");
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as NetworkResponse;
+        const urls = Array.isArray(payload.urls) ? payload.urls.filter((url): url is string => typeof url === "string") : [];
+        if (!disposed) {
+          setNetworkUrls(urls);
+        }
+      } catch {
+        // Local hotseat mode can run without the lobby server.
+      }
+    }
+
+    void loadNetworkUrls();
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof Audio === "undefined") {
@@ -1655,7 +1792,14 @@ export default function App() {
     setLobby(null);
     setLobbyError("");
     setSyncStatus("local");
-    patchState((current) => ({ ...buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds), phase: "planning" }), "customer-arrive");
+    patchState((current) => {
+      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
+      return {
+        ...next,
+        phase: "planning",
+        logs: audioSettingsRef.current.language === "en" ? [`Welcome to ${GAME_TITLE}.`] : next.logs
+      };
+    }, "customer-arrive");
   }
 
   function startCampaignLevel(level: CampaignLevel) {
@@ -1668,7 +1812,8 @@ export default function App() {
     setMenuView("main");
     patchState((current) => {
       const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
-      const opponentName = `${level.opponentName} (${level.opponentNameEn})`;
+      const language = audioSettingsRef.current.language;
+      const opponentName = language === "en" ? level.opponentNameEn : `${level.opponentName} (${level.opponentNameEn})`;
       const players = next.players.map((player) => {
         if (player.id !== AI_PLAYER_ID) {
           return player;
@@ -1689,7 +1834,7 @@ export default function App() {
         aiPlayerId: AI_PLAYER_ID,
         aiMode: "opponent",
         aiScore: 0,
-        aiIntent: `${opponentName} готовит лавку.`,
+        aiIntent: language === "en" ? `${opponentName} is preparing a stall.` : `${opponentName} готовит лавку.`,
         campaignRun: {
           level: level.level,
           aiDifficulty: level.aiDifficulty,
@@ -1697,7 +1842,11 @@ export default function App() {
           opponentNameEn: level.opponentNameEn,
           unlockRecorded: false
         },
-        logs: [`Уровень ${level.level}: ${level.story}`, `Соперник: ${opponentName}, ${level.opponentSpecies}.`, ...next.logs].slice(0, 24)
+        logs: [
+          language === "en" ? `Level ${level.level}: ${campaignLevelStory(language, level)}` : `Уровень ${level.level}: ${level.story}`,
+          language === "en" ? `Opponent: ${opponentName}, ${campaignLevelSpecies(language, level)}.` : `Соперник: ${opponentName}, ${level.opponentSpecies}.`,
+          ...(language === "en" ? [`Welcome to ${GAME_TITLE}.`] : next.logs)
+        ].slice(0, 24)
       };
     }, "customer-arrive");
   }
@@ -1809,12 +1958,18 @@ export default function App() {
     setShowAiDifficulty(false);
     patchState((current) => {
       const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
+      const language = audioSettingsRef.current.language;
+      const difficultyName = difficulty ? aiDifficultyLabel(language, difficulty) : aiDifficultyLabel(language, AI_DIFFICULTIES[2]);
       const intro =
         mode === "training"
-          ? "Режим обучения: слабый ИИ играет за оппонента."
-          : `Игра против ИИ: сложность ${difficulty?.label ?? "Зазывала"}.`;
+          ? language === "en"
+            ? "Training mode: weak AI plays as the opponent."
+            : "Режим обучения: слабый ИИ играет за оппонента."
+          : language === "en"
+            ? `Versus AI: difficulty ${difficultyName}.`
+            : `Игра против ИИ: сложность ${difficulty?.label ?? "Зазывала"}.`;
       const aiDifficulty = mode === "opponent" ? difficulty?.value ?? 14 : null;
-      const aiIntent = mode === "opponent" ? `Сложность: ${difficulty?.label ?? "Зазывала"}` : null;
+      const aiIntent = mode === "opponent" ? (language === "en" ? `Difficulty: ${difficultyName}` : `Сложность: ${difficulty?.label ?? "Зазывала"}`) : null;
       return {
         ...next,
         phase: "planning",
@@ -1823,16 +1978,20 @@ export default function App() {
         aiDifficulty,
         aiScore: 0,
         aiIntent,
-        logs: [intro, ...next.logs].slice(0, 24)
+        logs: [intro, ...(language === "en" ? [`Welcome to ${GAME_TITLE}.`] : next.logs)].slice(0, 24)
       };
     }, "customer-arrive");
   }
 
   async function createLobby() {
+    const language = audioSettingsRef.current.language;
     const next = {
       ...buildInitialState(state.sound, audioSettingsRef.current.turnTimeSeconds),
       phase: "planning" as Phase,
-      logs: ["Стол создан. Оппонент входит по коду лобби.", ...state.logs].slice(0, 24)
+      logs: [
+        language === "en" ? "Table created. The opponent joins with the lobby code." : "Стол создан. Оппонент входит по коду лобби.",
+        ...state.logs
+      ].slice(0, 24)
     };
 
     setLobbyError("");
@@ -1868,7 +2027,7 @@ export default function App() {
   async function joinLobby() {
     const code = joinCode.trim().toUpperCase();
     if (!code) {
-      setLobbyError("Введите код лобби");
+      setLobbyError(language === "en" ? "Enter a lobby code" : "Введите код лобби");
       return;
     }
 
@@ -1884,7 +2043,7 @@ export default function App() {
       );
 
       if (!payload.playerId || !payload.token) {
-        throw new Error("Сервер не выдал место игрока");
+        throw new Error(language === "en" ? "The server did not assign a player seat" : "Сервер не выдал место игрока");
       }
 
       setState(normalizeSavedGameState(payload.state));
@@ -1898,13 +2057,14 @@ export default function App() {
       setJoinCode(payload.code);
       setSyncStatus("online");
     } catch (error) {
-      setLobbyError(error instanceof Error ? error.message : "Не удалось войти за стол");
+      setLobbyError(error instanceof Error ? error.message : language === "en" ? "Could not join the table" : "Не удалось войти за стол");
       setSyncStatus("offline");
     }
   }
 
   function nextRoundAfterBreak(current: GameState): GameState {
     const nextRound = current.round + 1;
+    const language = audioSettingsRef.current.language;
     const nextFirstPlayer = opponentOf(current.firstPlayer);
     const customerCount = nextRound <= 2 ? 1 : 2;
     const [customers, customerDeck] = draw(current.customerDeck, customerCount);
@@ -1926,7 +2086,7 @@ export default function App() {
       saleInsights: [],
       upgradeOffer: [],
       upgradeQueue: [],
-      logs: [`Раунд ${nextRound}: покупатели подходят к лавкам.`, ...current.logs].slice(0, 20)
+      logs: [language === "en" ? `Round ${nextRound}: customers approach the stalls.` : `Раунд ${nextRound}: покупатели подходят к лавкам.`, ...current.logs].slice(0, 20)
     };
   }
 
@@ -1936,6 +2096,7 @@ export default function App() {
     const saleInsights: string[] = [];
     const saleResults: PurchaseResult[] = [];
     const viewerId = viewerIdFor(lobbyRef.current, current.aiPlayerId);
+    const language = audioSettingsRef.current.language;
 
     current.currentCustomers.forEach((customer, customerIndex) => {
       const result = resolveCustomerPurchase({
@@ -1950,9 +2111,13 @@ export default function App() {
       });
 
       saleResults.push(result);
-      saleInsights.push(describeSaleInsight(result, viewerId));
+      saleInsights.push(describeSaleInsight(result, viewerId, language));
       if (!result.winner) {
-        logs.push(`${customer.name} ничего не купил: совпадение ниже ${PURCHASE_APPEAL_THRESHOLD}.`);
+        logs.push(
+          language === "en"
+            ? `${customerName(language, customer)} bought nothing: appeal was below ${PURCHASE_APPEAL_THRESHOLD}.`
+            : `${customer.name} ничего не купил: совпадение ниже ${PURCHASE_APPEAL_THRESHOLD}.`
+        );
         return;
       }
 
@@ -1969,9 +2134,13 @@ export default function App() {
 
       const bonus = result.winner.payout - result.winner.product.price;
       logs.push(
-        `${customer.name} купил ${result.winner.product.name} ${ownerPhrase(owner.id, viewerId)} за ${result.winner.payout} мон.${
-          bonus > 0 ? ` Бонус: +${bonus}.` : ""
-        }`
+        language === "en"
+          ? `${customerName(language, customer)} bought ${productName(language, result.winner.product)} ${ownerPhrase(owner.id, viewerId, language)} for ${
+              result.winner.payout
+            } ${coinText(language, result.winner.payout)}.${bonus > 0 ? ` Bonus: +${bonus}.` : ""}`
+          : `${customer.name} купил ${result.winner.product.name} ${ownerPhrase(owner.id, viewerId, language)} за ${result.winner.payout} мон.${
+              bonus > 0 ? ` Бонус: +${bonus}.` : ""
+            }`
       );
     });
 
@@ -1990,8 +2159,12 @@ export default function App() {
       money: player.money + (goalRewardByPlayer.get(player.id) ?? 0)
     }));
     const viewerId = viewerIdFor(lobbyRef.current, current.aiPlayerId);
+    const language = audioSettingsRef.current.language;
     const goalLogs = goalProgress.rewards.map(
-      (reward) => `${displayPlayerName(reward.playerId, viewerId)} выполнили цель «${reward.goalTitle}» и получили +${reward.amount} мон.`
+      (reward) =>
+        language === "en"
+          ? `${displayPlayerName(reward.playerId, viewerId, language)} completed "${goalTitle(language, current.partyGoals.find((goal) => goal.title === reward.goalTitle) ?? { title: reward.goalTitle, kind: "sale_streak", target: 1, id: reward.goalTitle })}" and got +${reward.amount} ${coinText(language, reward.amount)}.`
+          : `${displayPlayerName(reward.playerId, viewerId, language)} выполнили цель «${reward.goalTitle}» и получили +${reward.amount} мон.`
     );
 
     return {
@@ -2004,7 +2177,13 @@ export default function App() {
       partyGoals: goalProgress.goals,
       selectedProductId: null,
       selectedInfluenceId: null,
-      logs: [...goalLogs.reverse(), ...saleInsights.slice(0, 2).reverse(), ...logs.reverse(), "Итоги продаж готовы. Проверьте формулы и продолжайте.", ...current.logs].slice(0, 24)
+      logs: [
+        ...goalLogs.reverse(),
+        ...saleInsights.slice(0, 2).reverse(),
+        ...logs.reverse(),
+        language === "en" ? "Sales results are ready. Check the formulas and continue." : "Итоги продаж готовы. Проверьте формулы и продолжайте.",
+        ...current.logs
+      ].slice(0, 24)
     };
   }
 
@@ -2012,6 +2191,7 @@ export default function App() {
     if (current.phase !== "sale_resolution") {
       return current;
     }
+    const language = audioSettingsRef.current.language;
 
     let productDeck = current.productDeck;
     let influenceDeck = current.influenceDeck;
@@ -2032,7 +2212,12 @@ export default function App() {
       influenceDeck,
       trendDeck,
       activeTrends,
-      logs: [`Тренд сдвинулся: ${activeTrends.map((trend) => trend.name).join(", ")}.`, ...current.logs].slice(0, 24)
+      logs: [
+        language === "en"
+          ? `Trend shifted: ${activeTrends.map((trend) => trendName(language, trend)).join(", ")}.`
+          : `Тренд сдвинулся: ${activeTrends.map((trend) => trend.name).join(", ")}.`,
+        ...current.logs
+      ].slice(0, 24)
     };
 
     if (current.round === 8) {
@@ -2056,7 +2241,12 @@ export default function App() {
         upgradeOffer: offer,
         upgradeQueue,
         activePlayer: upgradeQueue[0],
-        logs: [`Открылся магазин апгрейдов. Первым выбирает ${actionPlayerName(upgradeQueue[0], viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`, ...baseState.logs].slice(0, 24)
+        logs: [
+          language === "en"
+            ? `Upgrade shop opened. ${actionPlayerName(upgradeQueue[0], viewerIdFor(lobbyRef.current, current.aiPlayerId), language)} chooses first.`
+            : `Открылся магазин апгрейдов. Первым выбирает ${actionPlayerName(upgradeQueue[0], viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`,
+          ...baseState.logs
+        ].slice(0, 24)
       };
     }
 
@@ -2109,7 +2299,12 @@ export default function App() {
         ...current,
         players,
         selectedProductId: null,
-        logs: [`Товар выставлен: ${product.name} (${actionPlayerName(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId))}).`, ...current.logs].slice(0, 24)
+        logs: [
+          audioSettingsRef.current.language === "en"
+            ? `Product placed: ${productName(audioSettingsRef.current.language, product)} (${actionPlayerName(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
+            : `Товар выставлен: ${product.name} (${actionPlayerName(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+          ...current.logs
+        ].slice(0, 24)
       };
     }, "card-place");
   }
@@ -2122,7 +2317,12 @@ export default function App() {
     return {
       ...current,
       playedInfluences: [...current.playedInfluences, played],
-      logs: [`Сыграно влияние: ${played.name} (${actionPlayerName(played.ownerId, viewerIdFor(lobbyRef.current, current.aiPlayerId))}).`, ...current.logs].slice(0, 24)
+      logs: [
+        audioSettingsRef.current.language === "en"
+          ? `Influence played: ${influenceName(audioSettingsRef.current.language, { id: played.id, name: played.name })} (${actionPlayerName(played.ownerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
+          : `Сыграно влияние: ${played.name} (${actionPlayerName(played.ownerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+        ...current.logs
+      ].slice(0, 24)
     };
   }
 
@@ -2138,6 +2338,7 @@ export default function App() {
       if (!card || player.influenceActionUsed) {
         return current;
       }
+      const language = audioSettingsRef.current.language;
 
       let productDeck = current.productDeck;
       let influenceDeck = current.influenceDeck;
@@ -2190,7 +2391,15 @@ export default function App() {
 
       if (card.effect.kind === "rearrange") {
         player.productActionUsed = false;
-        next = { ...next, logs: [`Можно ещё раз заменить товар: ${actionPlayerName(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`, ...next.logs].slice(0, 24) };
+        next = {
+          ...next,
+          logs: [
+            language === "en"
+              ? `One more product replacement is available: ${actionPlayerName(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`
+              : `Можно ещё раз заменить товар: ${actionPlayerName(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`,
+            ...next.logs
+          ].slice(0, 24)
+        };
       }
 
       if (card.effect.kind === "draw_product") {
@@ -2198,9 +2407,18 @@ export default function App() {
         productDeck = rest;
         if (cards.length > 0) {
           choiceDraft = { playerId: player.id, type: "product", cards };
-          next = { ...next, logs: [`${card.name}: выбери одну из ${cards.length} карт товаров.`, ...next.logs].slice(0, 24) };
+          next = {
+            ...next,
+            logs: [
+              language === "en" ? `${influenceName(language, card)}: choose one of ${cards.length} product cards.` : `${card.name}: выбери одну из ${cards.length} карт товаров.`,
+              ...next.logs
+            ].slice(0, 24)
+          };
         } else {
-          next = { ...next, logs: [`${card.name}: колода товаров пуста.`, ...next.logs].slice(0, 24) };
+          next = {
+            ...next,
+            logs: [language === "en" ? `${influenceName(language, card)}: product deck is empty.` : `${card.name}: колода товаров пуста.`, ...next.logs].slice(0, 24)
+          };
         }
       }
 
@@ -2209,9 +2427,18 @@ export default function App() {
         influenceDeck = rest;
         if (cards.length > 0) {
           choiceDraft = { playerId: player.id, type: "influence", cards };
-          next = { ...next, logs: [`${card.name}: выбери одну из ${cards.length} карт влияния.`, ...next.logs].slice(0, 24) };
+          next = {
+            ...next,
+            logs: [
+              language === "en" ? `${influenceName(language, card)}: choose one of ${cards.length} influence cards.` : `${card.name}: выбери одну из ${cards.length} карт влияния.`,
+              ...next.logs
+            ].slice(0, 24)
+          };
         } else {
-          next = { ...next, logs: [`${card.name}: колода влияния пуста.`, ...next.logs].slice(0, 24) };
+          next = {
+            ...next,
+            logs: [language === "en" ? `${influenceName(language, card)}: influence deck is empty.` : `${card.name}: колода влияния пуста.`, ...next.logs].slice(0, 24)
+          };
         }
       }
 
@@ -2245,7 +2472,14 @@ export default function App() {
         ...current,
         players,
         choiceDraft: null,
-        logs: [`Оставлена карта: ${keep.name} (${actionPlayerName(draft.playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId))}).`, ...current.logs].slice(0, 24)
+        logs: [
+          audioSettingsRef.current.language === "en"
+            ? `Card kept: ${
+                draft.type === "product" ? productName(audioSettingsRef.current.language, keep as ProductInstance) : influenceName(audioSettingsRef.current.language, keep as InfluenceCardType)
+              } (${actionPlayerName(draft.playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
+            : `Оставлена карта: ${keep.name} (${actionPlayerName(draft.playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+          ...current.logs
+        ].slice(0, 24)
       };
     }, "card-select");
   }
@@ -2263,7 +2497,12 @@ export default function App() {
         ...current,
         players,
         roundBonuses: [...current.roundBonuses, { ownerId: playerId, slotIndex, value: 1, label: "Рекламный столик" }],
-        logs: [`Рекламный столик усилил товар ${ownerPhrase(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`, ...current.logs].slice(0, 24)
+        logs: [
+          audioSettingsRef.current.language === "en"
+            ? `Ad table boosted a product ${ownerPhrase(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`
+            : `Рекламный столик усилил товар ${ownerPhrase(playerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`,
+          ...current.logs
+        ].slice(0, 24)
       };
     }, "influence-play");
   }
@@ -2283,7 +2522,12 @@ export default function App() {
           activePlayer: nextPlayer.id,
           selectedProductId: null,
           selectedInfluenceId: null,
-          logs: [`Ход планирования переходит: ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`, ...current.logs].slice(0, 24)
+          logs: [
+            audioSettingsRef.current.language === "en"
+              ? `Planning turn passes to ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`
+              : `Ход планирования переходит: ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`,
+            ...current.logs
+          ].slice(0, 24)
         };
       }
 
@@ -2334,7 +2578,12 @@ export default function App() {
         upgradeOffer: current.upgradeOffer.filter((candidate) => candidate.id !== upgrade.id),
         upgradeQueue: queue,
         activePlayer: queue[0] ?? current.firstPlayer,
-        logs: [`Куплен апгрейд: ${upgrade.name} (${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId))}).`, ...current.logs].slice(0, 24)
+        logs: [
+          audioSettingsRef.current.language === "en"
+            ? `Upgrade bought: ${upgradeName(audioSettingsRef.current.language, upgrade)} (${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`
+            : `Куплен апгрейд: ${upgrade.name} (${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}).`,
+          ...current.logs
+        ].slice(0, 24)
       };
 
       return queue.length ? next : nextRoundAfterBreak(next);
@@ -2349,7 +2598,12 @@ export default function App() {
         ...current,
         upgradeQueue: queue,
         activePlayer: queue[0] ?? current.firstPlayer,
-        logs: [`Покупка апгрейда пропущена: ${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`, ...current.logs].slice(0, 24)
+        logs: [
+          audioSettingsRef.current.language === "en"
+            ? `Upgrade buy skipped: ${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`
+            : `Покупка апгрейда пропущена: ${actionPlayerName(buyerId, viewerIdFor(lobbyRef.current, current.aiPlayerId), audioSettingsRef.current.language)}.`,
+          ...current.logs
+        ].slice(0, 24)
       };
       return queue.length ? next : nextRoundAfterBreak(next);
     }, "ui-click");
@@ -2365,12 +2619,12 @@ export default function App() {
     }));
   }
 
-  function addAiInfluence(playedInfluences: PlayedInfluence[], played: PlayedInfluence, logs: string[]) {
+  function addAiInfluence(playedInfluences: PlayedInfluence[], played: PlayedInfluence, logs: string[], language: Language) {
     playedInfluences.push(played);
-    logs.push(`ИИ сыграл ${played.name}.`);
+    logs.push(language === "en" ? `AI played ${influenceName(language, { id: played.id, name: played.name })}.` : `ИИ сыграл ${played.name}.`);
   }
 
-  function applyAiProductMove(current: GameState, player: PlayerState, move: NonNullable<ReturnType<typeof planAiPlanningTurn>["productMove"]>, logs: string[]) {
+  function applyAiProductMove(current: GameState, player: PlayerState, move: NonNullable<ReturnType<typeof planAiPlanningTurn>["productMove"]>, logs: string[], language: Language) {
     if (player.productActionUsed) {
       return;
     }
@@ -2390,7 +2644,7 @@ export default function App() {
     player.shelf[move.slotIndex] = placedProduct;
     player.productHand.splice(productIndex, 1);
     player.productActionUsed = true;
-    logs.push(`ИИ выставил ${product.name} в слот ${move.slotIndex + 1}.`);
+    logs.push(language === "en" ? `AI placed ${productName(language, product)} in slot ${move.slotIndex + 1}.` : `ИИ выставил ${product.name} в слот ${move.slotIndex + 1}.`);
   }
 
   function applyAiInfluenceMove(
@@ -2398,7 +2652,8 @@ export default function App() {
     player: PlayerState,
     move: AiInfluenceMove,
     playedInfluences: PlayedInfluence[],
-    logs: string[]
+    logs: string[],
+    language: Language
   ): { productDeck: ProductInstance[]; influenceDeck: InfluenceCardType[] } {
     let productDeck = current.productDeck;
     let influenceDeck = current.influenceDeck;
@@ -2412,11 +2667,11 @@ export default function App() {
     player.influenceActionUsed = true;
 
     if (card.effect.kind === "tag_modifier") {
-      addAiInfluence(playedInfluences, { id: card.id, name: card.name, ownerId: player.id, modifiers: card.effect.modifiers }, logs);
+      addAiInfluence(playedInfluences, { id: card.id, name: card.name, ownerId: player.id, modifiers: card.effect.modifiers }, logs, language);
     }
 
     if (card.effect.kind === "anti_tag" && move.targetTag) {
-      addAiInfluence(playedInfluences, { id: card.id, name: card.name, ownerId: player.id, modifiers: [{ tag: move.targetTag, value: card.effect.value }] }, logs);
+      addAiInfluence(playedInfluences, { id: card.id, name: card.name, ownerId: player.id, modifiers: [{ tag: move.targetTag, value: card.effect.value }] }, logs, language);
     }
 
     if ((card.effect.kind === "target_own_bonus" || card.effect.kind === "target_opponent_penalty") && move.targetOwnerId && move.targetSlotIndex !== undefined) {
@@ -2436,17 +2691,18 @@ export default function App() {
             }
           ]
         },
-        logs
+        logs,
+        language
       );
     }
 
     if (card.effect.kind === "tie_preference") {
-      addAiInfluence(playedInfluences, { id: card.id, name: card.name, ownerId: player.id, tieOwner: player.id }, logs);
+      addAiInfluence(playedInfluences, { id: card.id, name: card.name, ownerId: player.id, tieOwner: player.id }, logs, language);
     }
 
     if (card.effect.kind === "rearrange") {
       player.productActionUsed = false;
-      logs.push("ИИ освободил себе ещё одну замену товара.");
+      logs.push(language === "en" ? "AI opened one more product replacement." : "ИИ освободил себе ещё одну замену товара.");
     }
 
     if (card.effect.kind === "draw_product") {
@@ -2454,7 +2710,15 @@ export default function App() {
       productDeck = rest;
       const kept = cards.slice(0, card.effect.keep);
       player.productHand.push(...kept);
-      logs.push(kept.length ? `ИИ оставил ${kept.map((product) => product.name).join(", ")}.` : `${card.name}: колода товаров пуста.`);
+      logs.push(
+        kept.length
+          ? language === "en"
+            ? `AI kept ${kept.map((product) => productName(language, product)).join(", ")}.`
+            : `ИИ оставил ${kept.map((product) => product.name).join(", ")}.`
+          : language === "en"
+            ? `${influenceName(language, card)}: product deck is empty.`
+            : `${card.name}: колода товаров пуста.`
+      );
     }
 
     if (card.effect.kind === "draw_influence") {
@@ -2462,7 +2726,15 @@ export default function App() {
       influenceDeck = rest;
       const kept = cards.slice(0, card.effect.keep);
       player.influenceHand.push(...kept);
-      logs.push(kept.length ? `ИИ оставил ${kept.map((influence) => influence.name).join(", ")}.` : `${card.name}: колода влияний пуста.`);
+      logs.push(
+        kept.length
+          ? language === "en"
+            ? `AI kept ${kept.map((influence) => influenceName(language, influence)).join(", ")}.`
+            : `ИИ оставил ${kept.map((influence) => influence.name).join(", ")}.`
+          : language === "en"
+            ? `${influenceName(language, card)}: influence deck is empty.`
+            : `${card.name}: колода влияний пуста.`
+      );
     }
 
     return { productDeck, influenceDeck };
@@ -2493,17 +2765,18 @@ export default function App() {
       : isTrainingMode
         ? planWeakAiPlanningTurn(input, aiPlayerId)
         : planAiPlanningTurn(input, aiPlayerId);
-    const aiIntent = buildAiPlanningIntent(current, player, plan);
+    const language = audioSettingsRef.current.language;
+    const aiIntent = buildAiPlanningIntent(current, player, plan, language);
     const logs: string[] = [];
     const playedInfluences = [...current.playedInfluences];
     const roundBonuses = [...current.roundBonuses];
 
     if (plan.productMove) {
-      applyAiProductMove(current, player, plan.productMove, logs);
+      applyAiProductMove(current, player, plan.productMove, logs, language);
     }
 
     if (plan.influenceMove) {
-      const decks = applyAiInfluenceMove(current, player, plan.influenceMove, playedInfluences, logs);
+      const decks = applyAiInfluenceMove(current, player, plan.influenceMove, playedInfluences, logs, language);
       productDeck = decks.productDeck;
       influenceDeck = decks.influenceDeck;
     }
@@ -2511,13 +2784,17 @@ export default function App() {
     if (plan.tableBonusMove && hasUpgrade(player.upgrades, "ad_table") && !player.tableBonusUsed) {
       player.tableBonusUsed = true;
       roundBonuses.push({ ownerId: player.id, slotIndex: plan.tableBonusMove.slotIndex, value: 1, label: "Рекламный столик" });
-      logs.push(`Рекламный столик усилил товар ${ownerPhrase(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`);
+      logs.push(language === "en" ? `Ad table boosted a product ${ownerPhrase(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.` : `Рекламный столик усилил товар ${ownerPhrase(player.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`);
     }
 
     player.planned = true;
     logs.push(aiIntent);
     if (isTrainingMode) {
-      logs.push(`Оценка хода ИИ: ${formatSignedScore(plan.scoreDelta)}${plan.notes.length ? ` (${plan.notes.join(", ")})` : ""}.`);
+      logs.push(
+        language === "en"
+          ? `AI turn score: ${formatSignedScore(plan.scoreDelta)}${plan.notes.length ? ` (${plan.notes.join(", ")})` : ""}.`
+          : `Оценка хода ИИ: ${formatSignedScore(plan.scoreDelta)}${plan.notes.length ? ` (${plan.notes.join(", ")})` : ""}.`
+      );
     }
 
     const nextAiScore = current.aiScore + plan.scoreDelta;
@@ -2540,7 +2817,12 @@ export default function App() {
       return {
         ...baseState,
         activePlayer: nextPlayer.id,
-        logs: [`Ход планирования переходит: ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId))}.`, ...baseState.logs].slice(0, 24)
+        logs: [
+          language === "en"
+            ? `Planning turn passes to ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`
+            : `Ход планирования переходит: ${actionPlayerName(nextPlayer.id, viewerIdFor(lobbyRef.current, current.aiPlayerId), language)}.`,
+          ...baseState.logs
+        ].slice(0, 24)
       };
     }
 
@@ -2552,6 +2834,7 @@ export default function App() {
       return current;
     }
 
+    const language = audioSettingsRef.current.language;
     const players = clonePlayersForAi(current.players);
     const buyer = players.find((player) => player.id === aiPlayerId)!;
     const isTrainingMode = current.aiMode === "training";
@@ -2561,8 +2844,8 @@ export default function App() {
     const queue = current.upgradeQueue.slice(1);
     let upgradeOffer = current.upgradeOffer;
     let aiScore = current.aiScore;
-    let log = `ИИ (${aiPlayerId}) пропустил покупку апгрейда.`;
-    let aiIntent = "Оппонент копит деньги на апгрейд.";
+    let log = language === "en" ? `AI (${aiPlayerId}) skipped buying an upgrade.` : `ИИ (${aiPlayerId}) пропустил покупку апгрейда.`;
+    let aiIntent = language === "en" ? "Opponent is saving money for an upgrade." : "Оппонент копит деньги на апгрейд.";
 
     if (choice) {
       const upgrade = current.upgradeOffer.find((candidate) => candidate.id === choice.upgradeId);
@@ -2577,8 +2860,14 @@ export default function App() {
         upgradeOffer = current.upgradeOffer.filter((candidate) => candidate.id !== upgrade.id);
         const reward = Math.max(1, Math.round(choice.score));
         aiScore += reward;
-        log = `${isTrainingMode ? "Слабый ИИ" : "ИИ"} (${aiPlayerId}) купил ${upgrade.name}: баллы ${formatSignedScore(reward)}.`;
-        aiIntent = `Оппонент купил ${upgrade.name}: усиливает лавку.`;
+        log =
+          language === "en"
+            ? `${isTrainingMode ? "Weak AI" : "AI"} (${aiPlayerId}) bought ${upgradeName(language, upgrade)}: score ${formatSignedScore(reward)}.`
+            : `${isTrainingMode ? "Слабый ИИ" : "ИИ"} (${aiPlayerId}) купил ${upgrade.name}: баллы ${formatSignedScore(reward)}.`;
+        aiIntent =
+          language === "en"
+            ? `Opponent bought ${upgradeName(language, upgrade)}: improving the stall.`
+            : `Оппонент купил ${upgrade.name}: усиливает лавку.`;
       }
     }
 
@@ -2637,7 +2926,7 @@ export default function App() {
       : [];
   const forecastSaleResults = state.phase === "planning" ? calculateRoundSales(state).saleResults : [];
   const shownSaleResults = state.phase === "planning" ? forecastSaleResults : state.saleResults;
-  const salePanelTitle = state.phase === "planning" ? "Прогноз продаж" : state.phase === "sale_resolution" ? "Итоги продаж" : "Расчёт продаж";
+  const salePanelTitle = state.phase === "planning" ? ui(language, "saleForecast") : state.phase === "sale_resolution" ? ui(language, "saleResults") : ui(language, "saleCalculation");
   const nextCustomer = state.customerDeck[0] ?? null;
   const nextTrend = state.trendDeck[0] ?? null;
   const showUpcomingCards = state.round < 8 && state.phase !== "game_end";
@@ -2673,7 +2962,7 @@ export default function App() {
     state.influenceDeck.length,
     localPlayer.id
   ]);
-  const coachAdvice = buildCoachAdvice(coachPlan, localPlayer);
+  const coachAdvice = buildCoachAdvice(coachPlan, localPlayer, language);
   const coachProductId = coachPlan?.productMove?.productInstanceId ?? null;
   const coachSlotIndex = coachPlan?.productMove?.slotIndex ?? null;
   const coachInfluenceId = coachPlan?.influenceMove?.cardId ?? null;
@@ -2685,7 +2974,7 @@ export default function App() {
   const nextCampaignLevel =
     campaignCanAdvance && state.campaignRun ? CAMPAIGN_LEVELS.find((level) => level.level === state.campaignRun!.level + 1) ?? null : null;
   const primaryCampaignEndLevel = state.campaignRun ? (campaignCanAdvance ? nextCampaignLevel ?? currentCampaignLevel : currentCampaignLevel) : null;
-  const primaryEndActionLabel = state.campaignRun ? (campaignCanAdvance && nextCampaignLevel ? "Следующий уровень" : "Повторить уровень") : "Сыграть ещё";
+  const primaryEndActionLabel = state.campaignRun ? (campaignCanAdvance && nextCampaignLevel ? ui(language, "nextLevel") : ui(language, "retryLevel")) : ui(language, "playAgain");
   const cutsceneFrame = cutscene ? CUTSCENE_FRAMES[cutscene.frameIndex] : null;
   const focusTrendTags = useMemo(() => new Set(state.activeTrends[0]?.modifiers.map((modifier) => modifier.tag) ?? []), [state.activeTrends]);
   const canEditTurnTime = !lobby || lobby.playerId === "A";
@@ -2703,18 +2992,18 @@ export default function App() {
             <div className="menu-box">
               <div className="menu-intro">
                 <h1>{GAME_TITLE}</h1>
-                <p>Разложите товары и постарайтесь заработать больше соперника.</p>
+                <p>{ui(language, "menuSubtitle")}</p>
               </div>
 
               <div className="menu-sections">
                 <section className="menu-section" aria-labelledby="play-mode-title">
-                  <h2 id="play-mode-title">Выберите режим</h2>
+                  <h2 id="play-mode-title">{ui(language, "chooseMode")}</h2>
                   <div className="menu-primary-grid">
                     <button className="primary-action" onClick={() => setMenuView("levels")}>
-                      <MapIcon size={18} /> Ярмарка мира Ааах
+                      <MapIcon size={18} /> {ui(language, "campaignMode")}
                     </button>
                     <button className="primary-action" onClick={startGame}>
-                      <Play size={18} /> 2 игрока
+                      <Play size={18} /> {ui(language, "twoPlayers")}
                     </button>
                     <button
                       className="primary-action"
@@ -2723,16 +3012,16 @@ export default function App() {
                         setShowAiDifficulty(true);
                       }}
                     >
-                      <Bot size={18} /> Против ИИ
+                      <Bot size={18} /> {ui(language, "versusAi")}
                     </button>
                     <button className="primary-action" onClick={() => startAiGame("training")}>
-                      <Bot size={18} /> Обучение с ИИ
+                      <Bot size={18} /> {ui(language, "aiTraining")}
                     </button>
                   </div>
                 </section>
 
                 <section className="menu-section" aria-labelledby="online-mode-title">
-                  <h2 id="online-mode-title">Игра по сети</h2>
+                  <h2 id="online-mode-title">{ui(language, "onlineGame")}</h2>
                   <div className="menu-online-row">
                     <button
                       className="primary-action"
@@ -2741,20 +3030,30 @@ export default function App() {
                         void createLobby();
                       }}
                     >
-                      <PackagePlus size={18} /> Создать стол
+                      <PackagePlus size={18} /> {ui(language, "createTable")}
                     </button>
                     <div className="join-lobby">
-                      <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="Код лобби" maxLength={6} />
+                      <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder={ui(language, "lobbyCodePlaceholder")} maxLength={6} />
                       <button
                         onClick={() => {
                           playEffect("ui-click");
                           void joinLobby();
                         }}
                       >
-                        Войти за стол
+                        {ui(language, "joinTable")}
                       </button>
                     </div>
                   </div>
+                  {networkUrls.length > 0 && (
+                    <div className="lan-addresses" aria-label={ui(language, "lanAddressLabel")}>
+                      <span>{ui(language, "lanAddressLabel")}</span>
+                      {networkUrls.map((url) => (
+                        <a key={url} href={url} target="_blank" rel="noreferrer">
+                          <ExternalLink size={14} /> {url}
+                        </a>
+                      ))}
+                    </div>
+                  )}
                   <div className="menu-network-divider" aria-hidden="true" />
                 </section>
 
@@ -2765,7 +3064,7 @@ export default function App() {
                       setShowRules(true);
                     }}
                   >
-                    <BadgeHelp size={18} /> Правила
+                    <BadgeHelp size={18} /> {ui(language, "rules")}
                   </button>
                   <button
                     onClick={() => {
@@ -2773,7 +3072,7 @@ export default function App() {
                       setShowSettings(true);
                     }}
                   >
-                    <Settings size={18} /> Настройки
+                    <Settings size={18} /> {ui(language, "settings")}
                   </button>
                   <button
                     onClick={() => {
@@ -2781,11 +3080,11 @@ export default function App() {
                       setShowAbout(true);
                     }}
                   >
-                    <Info size={18} /> Об игре
+                    <Info size={18} /> {ui(language, "about")}
                   </button>
                 </div>
 
-                <div className="menu-support-actions" aria-label="Поддержать проект">
+                <div className="menu-support-actions" aria-label={ui(language, "supportProject")}>
                   <a href="https://buymeacoffee.com/zl0yxp" target="_blank" rel="noreferrer">
                     <Coffee size={18} /> Buy Me a Coffee
                   </a>
@@ -2796,7 +3095,7 @@ export default function App() {
               </div>
 
               {lobbyError && <p className="lobby-error">{lobbyError}</p>}
-              <small>Для игры с двух компьютеров запустите `npm run lobby` и откройте приложение у обоих игроков.</small>
+              <small>{ui(language, "lobbyHint")}</small>
             </div>
           ) : (
             <div className="menu-box level-map-box">
@@ -2807,15 +3106,15 @@ export default function App() {
                     setMenuView("main");
                   }}
                 >
-                  <ChevronLeft size={18} /> Назад
+                  <ChevronLeft size={18} /> {ui(language, "back")}
                 </button>
                 <div>
-                  <h1>Ярмарка мира Ааах</h1>
-                  <p>Пройдите 24 лавки, открывая новых соперников и приближаясь к красивой новой шляпе.</p>
+                  <h1>{ui(language, "campaignMode")}</h1>
+                  <p>{ui(language, "levelMapIntro")}</p>
                 </div>
               </div>
 
-              <div className="level-road" aria-label="Выбор уровня">
+              <div className="level-road" aria-label={language === "en" ? "Level selection" : "Выбор уровня"}>
                 {CAMPAIGN_LEVELS.map((level) => {
                   const unlocked = isLevelUnlocked(campaignProgress, level.level);
                   const completed = campaignProgress.completedLevels.includes(level.level);
@@ -2823,14 +3122,14 @@ export default function App() {
                     <button
                       key={level.level}
                       className={`level-node ${unlocked ? "unlocked" : "locked"} ${completed ? "completed" : ""}`}
-                      aria-label={`Уровень ${level.level}`}
+                      aria-label={`${ui(language, "level")} ${level.level}`}
                       disabled={!unlocked}
                       onClick={() => requestCampaignLevel(level)}
                     >
                       <span className="level-node-icon">{completed ? <Check size={16} /> : unlocked ? <Flag size={16} /> : <Lock size={16} />}</span>
-                      <strong>Уровень {level.level}</strong>
-                      <span>{level.opponentName} ({level.opponentNameEn})</span>
-                      <small>{level.district}</small>
+                      <strong>{ui(language, "level")} {level.level}</strong>
+                      <span>{language === "en" ? level.opponentNameEn : level.opponentName} · {campaignLevelTitle(language, level)}</span>
+                      <small>{campaignLevelDistrict(language, level)}</small>
                     </button>
                   );
                 })}
@@ -2841,20 +3140,20 @@ export default function App() {
       )}
 
       {cutscene && cutsceneFrame && (
-        <section className="cutscene-overlay" role="dialog" aria-label="Вступительная катсцена">
+        <section className="cutscene-overlay" role="dialog" aria-label={ui(language, "cutsceneLabel")}>
           <img key={cutsceneFrame.image} className="cutscene-frame" src={cutsceneFrame.image} alt="" />
           <div className="cutscene-controls">
             <div className="cutscene-progress">
               {cutscene.frameIndex + 1} / {CUTSCENE_FRAMES.length}
             </div>
             <button onClick={skipCutscene}>
-              <SkipForward size={18} /> Пропустить
+              <SkipForward size={18} /> {ui(language, "skip")}
             </button>
           </div>
           <div className="cutscene-subtitles">
-            <p>{cutsceneFrame.text}</p>
+            <p>{cutsceneText(language, cutscene.frameIndex, cutsceneFrame.text)}</p>
             <button className="primary-action" onClick={advanceCutscene}>
-              {cutscene.frameIndex >= CUTSCENE_FRAMES.length - 1 ? "Начать уровень" : "Далее"}
+              {cutscene.frameIndex >= CUTSCENE_FRAMES.length - 1 ? ui(language, "startLevel") : ui(language, "next")}
             </button>
           </div>
         </section>
@@ -2865,20 +3164,20 @@ export default function App() {
           <h1>{GAME_TITLE}</h1>
           <span>
             {state.campaignRun
-              ? `Уровень ${state.campaignRun.level} / ${CAMPAIGN_LEVELS.length} · раунд ${state.round} / 8`
-              : `Раунд ${state.round} / 8 · первый ход: ${displayPlayerName(state.firstPlayer, localPlayerId)}`}
+              ? ui(language, "campaignRound", { level: state.campaignRun.level, total: CAMPAIGN_LEVELS.length, round: state.round })
+              : ui(language, "roundFirstTurn", { round: state.round, player: displayPlayerName(state.firstPlayer, localPlayerId, language) })}
           </span>
         </div>
         <div className="top-actions">
           <div className={`sync-pill sync-${syncStatus}`}>
-            {lobby ? `лобби ${lobby.code} · вы ${lobby.playerId}` : "локальный стол"} · {syncStatus}
+            {lobby ? `${ui(language, "lobbyCode").toLowerCase()} ${lobby.code} · ${ui(language, "you").toLowerCase()} ${lobby.playerId}` : ui(language, "localTable")} · {syncStatus}
           </div>
           {aiPlayer && (
             <div className="ai-score">
               <b>
-                <Bot size={16} /> ИИ: {displayPlayerNameFor(aiPlayer, localPlayerId)}
+                <Bot size={16} /> {ui(language, "ai")}: {displayPlayerNameFor(aiPlayer, localPlayerId, language)}
               </b>
-              <span>{state.aiMode === "training" ? `оценка хода ${formatSignedScore(state.aiScore)}` : state.aiIntent ?? "Оппонент присматривается к рынку."}</span>
+              <span>{state.aiMode === "training" ? ui(language, "aiScore", { score: formatSignedScore(state.aiScore) }) : state.aiIntent ?? ui(language, "aiWaiting")}</span>
               {state.aiMode === "training" && state.aiIntent && <small>{state.aiIntent}</small>}
             </div>
           )}
@@ -2886,31 +3185,31 @@ export default function App() {
         <div className="score-row">
           {state.players.map((player) => (
             <div key={player.id} className={`score score-${player.color}`}>
-              <b>{displayPlayerNameFor(player, localPlayerId)}</b>
+              <b>{displayPlayerNameFor(player, localPlayerId, language)}</b>
               <span>
                 <Coins size={17} /> {player.money}
               </span>
-              <small>продажи {player.sales}</small>
+              <small>{ui(language, "sales")} {player.sales}</small>
             </div>
           ))}
         </div>
         {state.phase !== "menu" && state.phase !== "game_end" && (
           <button className="settings-toggle top-pause" onClick={pauseGame}>
-            <Pause size={18} /> Пауза
+            <Pause size={18} /> {ui(language, "pause")}
           </button>
         )}
       </header>
 
       <section className="trend-strip">
         {state.activeTrends.map((trend, index) => (
-          <TrendCard key={trend.id} trend={trend} focused={index === 0} />
+          <TrendCard key={trend.id} trend={trend} focused={index === 0} language={language} />
         ))}
         {nextTrend && showUpcomingCards && (
-          <div className="trend-card preview-card" title={`Скоро: ${nextTrend.name}: ${formatModifiers(nextTrend.modifiers)}`}>
+          <div className="trend-card preview-card" title={`${ui(language, "soon")}: ${trendName(language, nextTrend)}: ${formatModifiers(nextTrend.modifiers, language)}`}>
             <Sparkles size={18} />
             <div className="trend-copy">
-              <strong>Скоро: {nextTrend.name}</strong>
-              <span>{formatModifiers(nextTrend.modifiers)}</span>
+              <strong>{ui(language, "soon")}: {trendName(language, nextTrend)}</strong>
+              <span>{formatModifiers(nextTrend.modifiers, language)}</span>
             </div>
           </div>
         )}
@@ -2918,12 +3217,12 @@ export default function App() {
 
       <section className="customer-strip">
         {state.currentCustomers.map((customer) => (
-          <CustomerCard key={customer.id} customer={customer} focusTags={focusTrendTags} />
+          <CustomerCard key={customer.id} customer={customer} focusTags={focusTrendTags} language={language} />
         ))}
         {nextCustomer && showUpcomingCards && (
           <div className="next-customer">
-            <span>Скоро</span>
-            <CustomerCard customer={nextCustomer} focusTags={focusTrendTags} />
+            <span>{ui(language, "soon")}</span>
+            <CustomerCard customer={nextCustomer} focusTags={focusTrendTags} language={language} />
           </div>
         )}
       </section>
@@ -2937,8 +3236,8 @@ export default function App() {
             }`}
           >
             <div className="shop-heading">
-              <h2>{player.id === localPlayer.id ? "Ваш прилавок" : "Прилавок соперника"} · {displayPlayerNameFor(player, localPlayerId)}</h2>
-              <span>{player.upgrades.length ? player.upgrades.map((upgrade) => upgrade.name).join(", ") : "без апгрейдов"}</span>
+              <h2>{player.id === localPlayer.id ? ui(language, "yourStall") : ui(language, "opponentStall")} · {displayPlayerNameFor(player, localPlayerId, language)}</h2>
+              <span>{player.upgrades.length ? player.upgrades.map((upgrade) => upgradeName(language, upgrade)).join(", ") : ui(language, "noUpgrades")}</span>
             </div>
             <div className="shelf-grid" style={{ gridTemplateColumns: `repeat(${player.shelfSlots}, minmax(112px, 1fr))` }}>
               {player.shelf.map((product, slotIndex) => (
@@ -2961,6 +3260,7 @@ export default function App() {
                     <>
                       <ProductCard
                         product={product}
+                        language={language}
                         compact
                         focusTags={focusTrendTags}
                         ariaDisabled={
@@ -2987,7 +3287,11 @@ export default function App() {
                           }
                           rejectShelfAction(`${player.id}-${slotIndex}`);
                         }}
-                        title={`${product.name}. Теги: ${product.tags.join(", ")}. Цена ${product.price}. Запас ${product.stock}.`}
+                        title={
+                          language === "en"
+                            ? `${productName(language, product)}. Tags: ${product.tags.map((tag) => tagText(language, tag)).join(", ")}. Price ${product.price}. Stock ${product.stock}.`
+                            : `${product.name}. Теги: ${product.tags.join(", ")}. Цена ${product.price}. Запас ${product.stock}.`
+                        }
                       />
                       {state.phase === "planning" &&
                         (!lobby || lobby.playerId === player.id) &&
@@ -2995,7 +3299,7 @@ export default function App() {
                         state.selectedProductId &&
                         !player.productActionUsed &&
                         !state.choiceDraft && (
-                        <span className="slot-badge">заменить</span>
+                        <span className="slot-badge">{ui(language, "replace")}</span>
                       )}
                       {state.phase === "planning" &&
                         (!lobby || lobby.playerId === player.id) &&
@@ -3036,7 +3340,7 @@ export default function App() {
                       }}
                     >
                       <ShoppingBasket size={18} />
-                      {(!lobby || lobby.playerId === player.id) && state.activePlayer === player.id && state.selectedProductId ? "поставить сюда" : "слот товара"}
+                      {(!lobby || lobby.playerId === player.id) && state.activePlayer === player.id && state.selectedProductId ? ui(language, "placeHere") : ui(language, "productSlot")}
                     </button>
                   )}
                 </div>
@@ -3050,29 +3354,29 @@ export default function App() {
       <aside className="event-panel">
         <div className="sale-panel-heading">
           <h2>{salePanelTitle}</h2>
-          {state.phase === "planning" && <p className="sale-note">Прогноз: если считать сейчас.</p>}
+          {state.phase === "planning" && <p className="sale-note">{ui(language, "forecastNote")}</p>}
         </div>
           <div className="sale-results">
             {state.phase === "sale_resolution" && state.saleInsights.length > 0 && (
-              <div className="sale-insights" aria-label="Коротко о продажах">
-                <h3>Коротко о продажах</h3>
+              <div className="sale-insights" aria-label={ui(language, "saleInsights")}>
+                <h3>{ui(language, "saleInsights")}</h3>
                 {state.saleInsights.map((insight) => (
                   <p key={insight}>{insight}</p>
                 ))}
               </div>
             )}
             {shownSaleResults.length === 0 ? (
-              <p>{state.phase === "planning" ? "Пока на полках нет подходящих товаров для прогноза." : "После готовности обоих игроков здесь появится формула выбора клиента."}</p>
+              <p>{state.phase === "planning" ? ui(language, "noForecastProducts") : ui(language, "saleFormulaAfterReady")}</p>
             ) : (
               shownSaleResults.map((result) => (
                 <details key={result.customer.id} open>
                   <summary>
-                    {result.customer.name}: {result.winner ? `${result.winner.product.name} ${ownerPhrase(result.winner.ownerId, localPlayerId)}` : "без покупки"}
+                    {customerName(language, result.customer)}: {result.winner ? `${productName(language, result.winner.product)} ${ownerPhrase(result.winner.ownerId, localPlayerId, language)}` : ui(language, "noPurchase")}
                   </summary>
                   {result.candidates.map((candidate) => (
                     <div key={`${candidate.ownerId}-${candidate.slotIndex}`} className={isWinningCandidate(result, candidate) ? "formula winner" : "formula"}>
                       <b>
-                        {candidate.product.name} · {displayPlayerNameFor(state.players.find((player) => player.id === candidate.ownerId), localPlayerId)}
+                        {productName(language, candidate.product)} · {displayPlayerNameFor(state.players.find((player) => player.id === candidate.ownerId), localPlayerId, language)}
                       </b>
                       {candidate.appeal.breakdown.map((line) => (
                         <span key={`${line.label}-${line.value}`} className={isFocusTrendLine(line.label) ? "focus-formula-line" : undefined}>
@@ -3087,7 +3391,7 @@ export default function App() {
               ))
             )}
           </div>
-          <h2>Лог</h2>
+          <h2>{ui(language, "log")}</h2>
           <ol className="event-log">
             {state.logs.map((log, index) => (
               <li key={`${log}-${index}`}>{log}</li>
@@ -3099,13 +3403,13 @@ export default function App() {
         {state.phase !== "menu" && (
           <div className="party-goals">
             <div className="party-goals-heading">
-              <h2>Цели партии</h2>
+              <h2>{ui(language, "partyGoals")}</h2>
               <span>{completedGoalCount} / {state.partyGoals.length}</span>
             </div>
             <div className="party-goal-list">
               {state.partyGoals.map((goal) => (
                 <div key={goal.id} className={partyGoalClassName(goal, localPlayerId)}>
-                  <span>{goal.title}</span>
+                  <span>{goalTitle(language, goal)}</span>
                   <strong>{goal.progress} / {goal.target}{goal.completed && goal.rewardClaimed ? ` · +${goal.reward}` : ` · +${PARTY_GOAL_REWARD}`}</strong>
                 </div>
               ))}
@@ -3118,24 +3422,24 @@ export default function App() {
             <div className="hand-heading">
               <div>
                 <h2>
-                  {canControlActivePlayer ? "Ваш ход" : "Ход соперника"} ·{" "}
-                  {displayPlayerNameFor(canControlActivePlayer ? handPlayer : activePlayer, localPlayerId)}
+                  {canControlActivePlayer ? ui(language, "yourTurn") : ui(language, "opponentTurn")} ·{" "}
+                  {displayPlayerNameFor(canControlActivePlayer ? handPlayer : activePlayer, localPlayerId, language)}
                 </h2>
                 <div className="action-steps">
-                  <span className={handPlayer.productActionUsed ? "done" : ""}>{handPlayer.productActionUsed ? "товар выбран" : "1. товар -> слот"}</span>
-                  <span className={handPlayer.influenceActionUsed ? "done" : ""}>{handPlayer.influenceActionUsed ? "влияние сыграно" : "2. влияние или пропуск"}</span>
-                  <span>3. готов</span>
+                  <span className={handPlayer.productActionUsed ? "done" : ""}>{handPlayer.productActionUsed ? ui(language, "productChosen") : ui(language, "productToSlot")}</span>
+                  <span className={handPlayer.influenceActionUsed ? "done" : ""}>{handPlayer.influenceActionUsed ? ui(language, "influencePlayed") : ui(language, "influenceOrSkip")}</span>
+                  <span>{ui(language, "readyStep")}</span>
                 </div>
               </div>
-              {localPlanningTurn && <div className="turn-timer" aria-label="Таймер хода">Ход: {formatTurnTime(turnSecondsLeft)}</div>}
+              {localPlanningTurn && <div className="turn-timer" aria-label={ui(language, "turnTimer")}>{ui(language, "turnTimeShort", { time: formatTurnTime(turnSecondsLeft) })}</div>}
               <button className="primary-action" onClick={readyPlayer} disabled={!canControlActivePlayer || Boolean(state.choiceDraft)}>
-                <Check size={18} /> Готов
+                <Check size={18} /> {ui(language, "ready")}
               </button>
             </div>
 
             {coachAdvice.length > 0 && (
               <div className="coach-panel">
-                <h3>Совет тренера</h3>
+                <h3>{ui(language, "coachAdvice")}</h3>
                 {coachAdvice.map((line) => (
                   <p key={line}>{line}</p>
                 ))}
@@ -3144,12 +3448,13 @@ export default function App() {
 
             <div className="hand-columns">
               <div>
-                <h3>Товары в руке</h3>
+                <h3>{ui(language, "handProducts")}</h3>
                 <div className="hand-row">
                   {handPlayer.productHand.map((product) => (
                     <ProductCard
                       key={product.instanceId}
                       product={product}
+                      language={language}
                       focusTags={focusTrendTags}
                       selected={state.selectedProductId === product.instanceId}
                       recommended={coachProductId === product.instanceId}
@@ -3160,12 +3465,13 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <h3>Влияние</h3>
+                <h3>{ui(language, "influence")}</h3>
                 <div className="hand-row influence-row">
                   {handPlayer.influenceHand.map((card) => (
                     <InfluenceCard
                       key={card.id}
                       card={card}
+                      language={language}
                       selected={state.selectedInfluenceId === card.id}
                       recommended={coachInfluenceId === card.id}
                       disabled={!canControlActivePlayer || handPlayer.influenceActionUsed}
@@ -3179,7 +3485,7 @@ export default function App() {
                       <div className="influence-impact">
                         {influenceImpact.map((line) => (
                           <span key={`${line.tag}-${line.value}`}>
-                            {line.tag} {formatSignedScore(line.value)}: ваши {line.ownCount} ({formatSignedScore(line.ownDelta)}), соперник {line.opponentCount} (
+                            {tagText(language, line.tag)} {formatSignedScore(line.value)}: {ui(language, "ownImpact")} {line.ownCount} ({formatSignedScore(line.ownDelta)}), {ui(language, "opponentImpact")} {line.opponentCount} (
                             {formatSignedScore(line.opponentDelta)})
                           </span>
                         ))}
@@ -3189,7 +3495,7 @@ export default function App() {
                       <select value={state.selectedTag} onChange={(event) => patchState((current) => ({ ...current, selectedTag: event.target.value as Tag }))}>
                         {TAGS.map((tag) => (
                           <option key={tag} value={tag}>
-                            {tag}
+                            {tagText(language, tag)}
                           </option>
                         ))}
                       </select>
@@ -3197,18 +3503,18 @@ export default function App() {
                     {selectedInfluence.effect.kind === "target_own_bonus" &&
                       selectedOwnTarget.map(({ product, slotIndex }) => (
                         <button key={slotIndex} disabled={!product} onClick={() => playInfluence({ ownerId: handPlayer.id, slotIndex })}>
-                          свой слот {slotIndex + 1}
+                          {ui(language, "ownSlot", { slot: slotIndex + 1 })}
                         </button>
                       ))}
                     {selectedInfluence.effect.kind === "target_opponent_penalty" &&
                       selectedOpponentTarget.map(({ product, slotIndex }) => (
                         <button key={slotIndex} disabled={!product} onClick={() => playInfluence({ ownerId: opponentOf(handPlayer.id), slotIndex })}>
-                          слот соперника {slotIndex + 1}
+                          {ui(language, "opponentSlot", { slot: slotIndex + 1 })}
                         </button>
                       ))}
                     {["tag_modifier", "anti_tag", "tie_preference", "draw_product", "draw_influence", "rearrange"].includes(selectedInfluence.effect.kind) && (
                       <button className="primary-action" disabled={!canPlayInfluence} onClick={() => playInfluence({ tag: state.selectedTag })}>
-                        <HandCoins size={16} /> Сыграть влияние
+                        <HandCoins size={16} /> {ui(language, "playInfluence")}
                       </button>
                     )}
                   </div>
@@ -3221,11 +3527,11 @@ export default function App() {
         {state.phase === "sale_resolution" && (
           <div className="resolution-panel">
             <div>
-              <h2>Итоги продаж</h2>
-              <span>Деньги и запасы уже обновлены. Проверьте формулы справа, затем продолжайте рынок.</span>
+              <h2>{ui(language, "saleResults")}</h2>
+              <span>{ui(language, "saleResolutionText")}</span>
             </div>
             <button className="primary-action" onClick={continueSalesResolution} disabled={!canAdvanceResolution}>
-              <SkipForward size={18} /> Продолжить
+              <SkipForward size={18} /> {ui(language, "continue")}
             </button>
           </div>
         )}
@@ -3233,17 +3539,17 @@ export default function App() {
         {state.phase === "upgrade" && (
           <div className="upgrade-shop">
             <div>
-              <h2>Магазин апгрейдов</h2>
-              <span>Выбирает {displayPlayerNameFor(state.players.find((player) => player.id === state.upgradeQueue[0]), localPlayerId)}. Можно купить один апгрейд или пропустить.</span>
+              <h2>{ui(language, "upgradeShop")}</h2>
+              <span>{ui(language, "upgradeShopText", { player: displayPlayerNameFor(state.players.find((player) => player.id === state.upgradeQueue[0]), localPlayerId, language) })}</span>
             </div>
             <div className="upgrade-row">
               {state.upgradeOffer.map((upgrade) => {
                 const buyer = state.players.find((player) => player.id === state.upgradeQueue[0])!;
-                return <UpgradeCard key={upgrade.id} upgrade={upgrade} canBuy={canControlActivePlayer && buyer.money >= upgrade.cost} onBuy={() => buyUpgrade(upgrade.id)} />;
+                return <UpgradeCard key={upgrade.id} upgrade={upgrade} language={language} canBuy={canControlActivePlayer && buyer.money >= upgrade.cost} onBuy={() => buyUpgrade(upgrade.id)} />;
               })}
             </div>
             <button onClick={skipUpgrade} disabled={!canControlActivePlayer}>
-              <X size={18} /> Пропустить
+              <X size={18} /> {ui(language, "skipUpgrade")}
             </button>
           </div>
         )}
@@ -3253,10 +3559,10 @@ export default function App() {
       {state.phase === "game_end" && (
         <div className="game-end-backdrop">
           <section className={`end-panel end-panel-${finalResult.tone}`} role="dialog" aria-labelledby="game-end-title">
-            <span className="end-kicker">{finalResult.tone === "victory" ? "Рынок улыбается" : finalResult.tone === "defeat" ? "Завтра будет новый день" : "Дружеский финал"}</span>
+            <span className="end-kicker">{finalResult.tone === "victory" ? ui(language, "marketSmiles") : finalResult.tone === "defeat" ? ui(language, "newDay") : ui(language, "friendlyFinal")}</span>
             <h2 id="game-end-title">{finalResult.title}</h2>
             <p>{finalResult.message}</p>
-            <div className="goal-badge">Цели партии: {completedGoalCount} / {state.partyGoals.length}</div>
+            <div className="goal-badge">{ui(language, "partyGoals")}: {completedGoalCount} / {state.partyGoals.length}</div>
             <div className="end-actions">
               <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : startGame}>
                 {state.campaignRun && campaignCanAdvance && nextCampaignLevel ? <SkipForward size={18} /> : <RefreshCw size={18} />} {primaryEndActionLabel}
@@ -3268,11 +3574,11 @@ export default function App() {
                     setMenuView("levels");
                   }}
                 >
-                  <MapIcon size={18} /> Карта уровней
+                  <MapIcon size={18} /> {ui(language, "levelMap")}
                 </button>
               )}
               <button onClick={requestExitToMenu}>
-                <X size={18} /> Выйти
+                <X size={18} /> {ui(language, "exit")}
               </button>
             </div>
           </section>
@@ -3281,14 +3587,14 @@ export default function App() {
 
       {waitingForLobbyPlayer && lobby && (
         <div className="modal-backdrop lobby-wait-backdrop">
-          <section className="lobby-wait-modal" role="dialog" aria-label="Ожидание второго игрока">
-            <h2>Ожидание второго игрока</h2>
-            <p>Передайте код лобби второму игроку.</p>
-            <div className="lobby-code" aria-label="Код лобби">
+          <section className="lobby-wait-modal" role="dialog" aria-label={ui(language, "lobbyWaitTitle")}>
+            <h2>{ui(language, "lobbyWaitTitle")}</h2>
+            <p>{ui(language, "lobbyWaitText")}</p>
+            <div className="lobby-code" aria-label={ui(language, "lobbyCode")}>
               {lobby.code}
             </div>
             <button onClick={exitToMenu}>
-              <LogOut size={18} /> Выйти
+              <LogOut size={18} /> {ui(language, "exit")}
             </button>
           </section>
         </div>
@@ -3297,13 +3603,14 @@ export default function App() {
       {state.choiceDraft && (
         <div className="modal-backdrop">
           <div className="choice-modal">
-            <h2>Оставьте одну карту</h2>
+            <h2>{ui(language, "keepOneCard")}</h2>
             <div className="choice-row">
               {state.choiceDraft.cards.map((card, index) =>
                 state.choiceDraft?.type === "product" ? (
                   <ProductCard
                     key={(card as ProductInstance).instanceId}
                     product={card as ProductInstance}
+                    language={language}
                     focusTags={focusTrendTags}
                     disabled={Boolean(lobby && lobby.playerId !== state.choiceDraft?.playerId)}
                     onClick={() => keepDraftCard(index)}
@@ -3312,6 +3619,7 @@ export default function App() {
                   <InfluenceCard
                     key={(card as InfluenceCardType).id}
                     card={card as InfluenceCardType}
+                    language={language}
                     selected={false}
                     disabled={Boolean(lobby && lobby.playerId !== state.choiceDraft?.playerId)}
                     onClick={() => keepDraftCard(index)}
@@ -3325,17 +3633,17 @@ export default function App() {
 
       {state.pause.active && state.phase !== "menu" && state.phase !== "game_end" && (
         <div className="modal-backdrop pause-backdrop">
-          <section className="pause-modal" role="dialog" aria-label="Пауза">
+          <section className="pause-modal" role="dialog" aria-label={ui(language, "pause")}>
             <div className="pause-heading">
-              <span>Партия на паузе</span>
-              <h2>Пауза</h2>
+              <span>{ui(language, "pauseTitle")}</span>
+              <h2>{ui(language, "pause")}</h2>
               <p>
-                Поставил: {state.pause.pausedBy ? displayPlayerName(state.pause.pausedBy, localPlayerId) : "игрок"}. Таймер, ИИ и игровые действия остановлены.
+                {ui(language, "pausedBy", { player: state.pause.pausedBy ? displayPlayerName(state.pause.pausedBy, localPlayerId, language) : ui(language, "player") })}
               </p>
             </div>
             <div className="pause-actions">
               <button className="primary-action" onClick={resumeGame}>
-                <Play size={18} /> Продолжить
+                <Play size={18} /> {ui(language, "continue")}
               </button>
               <button
                 onClick={() => {
@@ -3343,10 +3651,10 @@ export default function App() {
                   setShowSettings(true);
                 }}
               >
-                <Settings size={18} /> Настройки
+                <Settings size={18} /> {ui(language, "settings")}
               </button>
               <button onClick={requestExitToMenu}>
-                <LogOut size={18} /> Выйти в меню
+                <LogOut size={18} /> {ui(language, "exitToMenu")}
               </button>
             </div>
           </section>
@@ -3355,15 +3663,15 @@ export default function App() {
 
       {showExitConfirm && (
         <div className="modal-backdrop exit-confirm-backdrop">
-          <section className="confirm-modal" role="dialog" aria-label="Выйти в меню">
-            <h2>Выйти в меню</h2>
-            <p>Вы действительно хотите выйти? Текущая партия будет закрыта.</p>
+          <section className="confirm-modal" role="dialog" aria-label={ui(language, "exitToMenu")}>
+            <h2>{ui(language, "exitToMenu")}</h2>
+            <p>{ui(language, "exitConfirmText")}</p>
             <div className="confirm-actions">
               <button className="primary-action" onClick={cancelExitToMenu}>
-                Остаться
+                {ui(language, "stay")}
               </button>
               <button onClick={exitToMenu}>
-                <LogOut size={18} /> Выйти
+                <LogOut size={18} /> {ui(language, "exit")}
               </button>
             </div>
           </section>
@@ -3372,15 +3680,15 @@ export default function App() {
 
       {showAiDifficulty && (
         <div className="modal-backdrop">
-          <section className="ai-difficulty-modal" role="dialog" aria-label="Сложность ИИ">
-            <button className="modal-close" aria-label="Закрыть" onClick={() => setShowAiDifficulty(false)}>
+          <section className="ai-difficulty-modal" role="dialog" aria-label={ui(language, "aiDifficulty")}>
+            <button className="modal-close" aria-label={ui(language, "close")} onClick={() => setShowAiDifficulty(false)}>
               <X size={18} />
             </button>
-            <h2>Сложность ИИ</h2>
+            <h2>{ui(language, "aiDifficulty")}</h2>
             <div className="ai-difficulty-list">
               {AI_DIFFICULTIES.map((difficulty) => (
                 <button key={difficulty.label} className="primary-action" onClick={() => startAiGame("opponent", difficulty)}>
-                  <Bot size={18} /> {difficulty.label}
+                  <Bot size={18} /> {aiDifficultyLabel(language, difficulty)}
                 </button>
               ))}
             </div>
@@ -3390,18 +3698,38 @@ export default function App() {
 
       {showSettings && (
         <div className="modal-backdrop settings-backdrop">
-          <div className="settings-modal" role="dialog" aria-label="Настройки">
-            <button className="modal-close" aria-label="Закрыть настройки" onClick={() => setShowSettings(false)}>
+          <div className="settings-modal" role="dialog" aria-label={ui(language, "settings")}>
+            <button className="modal-close" aria-label={ui(language, "closeSettings")} onClick={() => setShowSettings(false)}>
               <X size={18} />
             </button>
-            <h2>Настройки</h2>
+            <h2>{ui(language, "settings")}</h2>
             <div className="settings-list">
+              <label className="setting-row">
+                <span className="setting-copy">
+                  <Languages size={18} />
+                  <span>
+                    <strong>{ui(language, "language")}</strong>
+                    <small>{language === "en" ? "Interface language" : "Язык интерфейса"}</small>
+                  </span>
+                </span>
+                <select
+                  aria-label={ui(language, "language")}
+                  value={language}
+                  onChange={(event) => updateAudioSettings({ language: normalizeLanguage(event.target.value) })}
+                >
+                  {LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="setting-row">
                 <span className="setting-copy">
                   <Music size={18} />
                   <span>
-                    <strong>Фоновая музыка</strong>
-                    <small>Треки из папки music играют по очереди.</small>
+                    <strong>{ui(language, "backgroundMusic")}</strong>
+                    <small>{ui(language, "backgroundMusicHelp")}</small>
                   </span>
                 </span>
                 <input
@@ -3420,10 +3748,10 @@ export default function App() {
               </label>
               <label className="range-row">
                 <span>
-                  <Volume2 size={16} /> Громкость музыки
+                  <Volume2 size={16} /> {ui(language, "musicVolume")}
                 </span>
                 <input
-                  aria-label="Громкость музыки"
+                  aria-label={ui(language, "musicVolume")}
                   type="range"
                   min="0"
                   max="1"
@@ -3437,8 +3765,8 @@ export default function App() {
                 <span className="setting-copy">
                   {audioSettings.effectsEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
                   <span>
-                    <strong>Звуковые эффекты</strong>
-                    <small>Щелчки карт, монеты и окончание раунда.</small>
+                    <strong>{ui(language, "soundEffects")}</strong>
+                    <small>{ui(language, "soundEffectsHelp")}</small>
                   </span>
                 </span>
                 <input
@@ -3449,10 +3777,10 @@ export default function App() {
               </label>
               <label className="range-row">
                 <span>
-                  <Volume2 size={16} /> Громкость эффектов
+                  <Volume2 size={16} /> {ui(language, "effectsVolume")}
                 </span>
                 <input
-                  aria-label="Громкость эффектов"
+                  aria-label={ui(language, "effectsVolume")}
                   type="range"
                   min="0"
                   max="1"
@@ -3464,10 +3792,10 @@ export default function App() {
               </label>
               <label className="range-row">
                 <span>
-                  <Timer size={16} /> Время хода: {turnTimeSettingValue} сек.
+                  <Timer size={16} /> {ui(language, "turnTimeSetting", { seconds: turnTimeSettingValue })}
                 </span>
                 <input
-                  aria-label="Время хода"
+                  aria-label={ui(language, "turnTime")}
                   type="range"
                   min={MIN_TURN_TIME_SECONDS}
                   max={MAX_TURN_TIME_SECONDS}
@@ -3476,16 +3804,16 @@ export default function App() {
                   disabled={!canEditTurnTime}
                   onChange={(event) => updateTurnTimeSetting(Number(event.target.value))}
                 />
-                {lobby && !canEditTurnTime && <small>В онлайн-столе время хода задаёт создатель лобби.</small>}
+                {lobby && !canEditTurnTime && <small>{ui(language, "onlineTurnTimeLocked")}</small>}
               </label>
             </div>
             <div className="track-status">
               <div>
-                <p>Сейчас играет: {currentTrackTitle}</p>
-                <span>Статус: {musicStatusText}</span>
+                <p>{ui(language, "nowPlaying", { track: currentTrackTitle })}</p>
+                <span>{ui(language, "status", { status: musicStatusText })}</span>
               </div>
               <button type="button" disabled={state.phase === "menu" || state.phase === "game_end"} onClick={() => playMusicTrack(currentTrackIndex + 1, audioSettings.musicEnabled)}>
-                <SkipForward size={16} /> Следующий трек
+                <SkipForward size={16} /> {ui(language, "nextTrack")}
               </button>
             </div>
           </div>
@@ -3494,18 +3822,13 @@ export default function App() {
 
       {showAbout && (
         <div className="modal-backdrop">
-          <div className="about-modal" role="dialog" aria-label="Об игре">
-            <button className="modal-close" aria-label="Закрыть" onClick={() => setShowAbout(false)}>
+          <div className="about-modal" role="dialog" aria-label={ui(language, "about")}>
+            <button className="modal-close" aria-label={ui(language, "close")} onClick={() => setShowAbout(false)}>
               <X size={18} />
             </button>
-            <h2>Об игре</h2>
-            <p>
-              Игра сделана как личное развлечение, чтобы я мог поиграть со своей девушкой, а не как серьёзный проект.
-            </p>
-            <p>
-              Весь арт, включая музыку, сгенерирован через ИИ. Если кто-то из художников хочет нарисовать арт или написать музыкальное сопровождение,
-              я всегда рад такому.
-            </p>
+            <h2>{ui(language, "about")}</h2>
+            <p>{ui(language, "aboutText1")}</p>
+            <p>{ui(language, "aboutText2")}</p>
             <div className="about-links">
               <a href="mailto:zloydeveloper.info@gmail.com">
                 <Mail size={18} /> zloydeveloper.info@gmail.com
@@ -3524,23 +3847,34 @@ export default function App() {
             <button className="modal-close" onClick={() => setShowRules(false)}>
               <X size={18} />
             </button>
-            <h2>Правила</h2>
-            <p>
-              Коротко: продавай товары клиентам, зарабатывай монеты и к концу 8 раунда обгони соперника.
-            </p>
-            <ol>
-              <li>В каждом раунде приходят клиенты. У каждого клиента есть два тега: главный и второй. Он ищет товар с похожими тегами.</li>
-              <li>Тренд не заменяет желание клиента. Клиент всё равно ищет свои теги, а тренд показывает, что сейчас сильнее или слабее на рынке.</li>
-              <li>Очки за желание клиента и тренд складываются. Например: клиент хочет напиток, а тренд усиливает дешёвое. Тогда товар с тегами «напиток» и «дешёвое» получает оба бонуса.</li>
-              <li>Лучший выбор — товар, где совпали и клиент, и тренд. Если такого товара нет, сравни сумму очков и избегай тегов со штрафом.</li>
-              <li>В свой ход сделай до двух вещей: выставь или замени 1 товар, потом сыграй 1 карту влияния или пропусти.</li>
-              <li>Главный тег клиента даёт +3 привлекательности. Второй тег даёт +2. Тренды, влияния и апгрейды могут добавить или убрать очки.</li>
-              <li>Если товар набрал меньше {PURCHASE_APPEAL_THRESHOLD}, клиент его не купит. Если товаров несколько, клиент берёт самый привлекательный.</li>
-              <li>Если привлекательность равна, клиент выбирает более дешёвый товар. Если снова равенство, выбирает игрока с меньшим числом монет.</li>
-              <li>Когда оба игрока готовы, игра считает продажи. За проданный товар ты получаешь его цену, иногда бонусы. Запас товара уменьшается.</li>
-              <li>Цели партии дают дополнительные монеты. После 2, 4 и 6 раунда можно купить апгрейды, которые помогают в следующих раундах.</li>
-              <li>После 8 раунда побеждает тот, у кого больше монет. Если монет поровну, побеждает тот, у кого больше продаж.</li>
-            </ol>
+            <h2>{ui(language, "rules")}</h2>
+            <p>{ui(language, "rulesIntro")}</p>
+            {language === "en" ? (
+              <ol>
+                <li>Customers arrive each round. Each has a primary and secondary tag and looks for matching products.</li>
+                <li>Trends do not replace customer wishes. They show which tags are stronger or weaker in the market right now.</li>
+                <li>Customer wishes and trends stack. A product matching both gets both bonuses.</li>
+                <li>On your turn, place or replace one product, then play one influence card or skip it.</li>
+                <li>The primary customer tag gives +3 appeal. The secondary tag gives +2. Trends, influence cards, and upgrades can change the score.</li>
+                <li>If a product scores below {PURCHASE_APPEAL_THRESHOLD}, the customer will not buy it. Otherwise, the customer buys the most appealing product.</li>
+                <li>Party goals give extra coins. After rounds 2, 4, and 6, players can buy upgrades.</li>
+                <li>After round 8, the player with more coins wins. If coins are tied, sales decide the winner.</li>
+              </ol>
+            ) : (
+              <ol>
+                <li>В каждом раунде приходят клиенты. У каждого клиента есть два тега: главный и второй. Он ищет товар с похожими тегами.</li>
+                <li>Тренд не заменяет желание клиента. Клиент всё равно ищет свои теги, а тренд показывает, что сейчас сильнее или слабее на рынке.</li>
+                <li>Очки за желание клиента и тренд складываются. Например: клиент хочет напиток, а тренд усиливает дешёвое. Тогда товар с тегами «напиток» и «дешёвое» получает оба бонуса.</li>
+                <li>Лучший выбор — товар, где совпали и клиент, и тренд. Если такого товара нет, сравни сумму очков и избегай тегов со штрафом.</li>
+                <li>В свой ход сделай до двух вещей: выставь или замени 1 товар, потом сыграй 1 карту влияния или пропусти.</li>
+                <li>Главный тег клиента даёт +3 привлекательности. Второй тег даёт +2. Тренды, влияния и апгрейды могут добавить или убрать очки.</li>
+                <li>Если товар набрал меньше {PURCHASE_APPEAL_THRESHOLD}, клиент его не купит. Если товаров несколько, клиент берёт самый привлекательный.</li>
+                <li>Если привлекательность равна, клиент выбирает более дешёвый товар. Если снова равенство, выбирает игрока с меньшим числом монет.</li>
+                <li>Когда оба игрока готовы, игра считает продажи. За проданный товар ты получаешь его цену, иногда бонусы. Запас товара уменьшается.</li>
+                <li>Цели партии дают дополнительные монеты. После 2, 4 и 6 раунда можно купить апгрейды, которые помогают в следующих раундах.</li>
+                <li>После 8 раунда побеждает тот, у кого больше монет. Если монет поровну, побеждает тот, у кого больше продаж.</li>
+              </ol>
+            )}
           </div>
         </div>
       )}

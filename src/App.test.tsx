@@ -98,7 +98,11 @@ const completedGoalForB: PartyGoal = {
   completedBy: "B"
 };
 
-function saveGameState(overrides: Record<string, unknown>, lobby: Record<string, unknown> | null = null) {
+function saveGameState(
+  overrides: Record<string, unknown>,
+  lobby: Record<string, unknown> | null = null,
+  audioSettingsOverrides: Record<string, unknown> = {}
+) {
   const state = {
     phase: "planning",
     round: 1,
@@ -144,7 +148,8 @@ function saveGameState(overrides: Record<string, unknown>, lobby: Record<string,
         effectsEnabled: true,
         musicVolume: 0.3,
         effectsVolume: 1,
-        turnTimeSeconds: 45
+        turnTimeSeconds: 45,
+        ...audioSettingsOverrides
       }
     })
   );
@@ -479,6 +484,27 @@ describe("App layout shell", () => {
     expect(screen.getByRole("button", { name: /Об игре/i })).toBeInTheDocument();
   });
 
+  it("shows the local network address returned by the lobby server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/network") {
+          return new Response(JSON.stringify({ urls: ["http://192.168.1.24:5175"] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+
+        return new Response("{}", { status: 404 });
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("link", { name: "http://192.168.1.24:5175" })).toHaveAttribute("href", "http://192.168.1.24:5175");
+    expect(screen.getByText(/адрес для игроков/i)).toBeInTheDocument();
+  });
+
   it("chooses AI opponent difficulty before starting a versus AI game", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -702,6 +728,65 @@ describe("App layout shell", () => {
     expect(screen.getByText(/сейчас играет: Main Menu/i)).toBeInTheDocument();
   });
 
+  it("switches the interface language in settings and persists the choice", async () => {
+    const user = userEvent.setup();
+    const firstRender = render(<App />);
+
+    await user.click(screen.getAllByRole("button", { name: /настройки/i })[0]);
+    await user.selectOptions(screen.getByRole("combobox", { name: /язык/i }), "en");
+
+    expect(screen.getByRole("heading", { name: /Settings/i })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /Language/i })).toHaveValue("en");
+
+    await user.click(screen.getByRole("button", { name: /Close settings/i }));
+    expect(screen.getByRole("heading", { name: /Choose mode/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Versus AI/i })).toBeInTheDocument();
+
+    firstRender.unmount();
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: /Choose mode/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Выберите режим/i })).not.toBeInTheDocument();
+  });
+
+  it("renders saved game cards, tags, and goals in English", () => {
+    const toy = productInstance(PRODUCT_CARDS.find((product) => product.id === "toy")!, "sale-a");
+    saveGameState(
+      {
+        players: [{ ...testPlayer("A"), shelf: [toy, null, null] }, testPlayer("B")],
+        activeTrends: [
+          TREND_CARDS.find((trend) => trend.id === "kids_day")!,
+          TREND_CARDS.find((trend) => trend.id === "coffee_morning")!,
+          TREND_CARDS.find((trend) => trend.id === "sweet_day")!
+        ],
+        currentCustomers: [CUSTOMER_CARDS.find((customer) => customer.id === "family")!],
+        partyGoals: [
+          {
+            id: "tag-sales-детское",
+            title: "Продайте 2 товара с тегом «детское»",
+            kind: "tag_sales",
+            target: 2,
+            progress: 1,
+            completed: false,
+            reward: 2,
+            rewardClaimed: false,
+            completedBy: null,
+            tag: "детское"
+          }
+        ]
+      },
+      null,
+      { language: "en" }
+    );
+
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: /Your stall/i })).toBeInTheDocument();
+    expect(screen.getByText("Toy")).toBeInTheDocument();
+    expect(screen.getAllByText("kids").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Sell 2 products tagged "kids"/i)).toBeInTheDocument();
+  });
+
   it("uses menu music before the game and fades into Stroll when play starts", async () => {
     vi.useFakeTimers();
     render(<App />);
@@ -808,6 +893,13 @@ describe("App layout shell", () => {
     let postedState: Record<string, unknown> | null = null;
     let postedTurnTime: unknown;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input) === "/api/network") {
+        return new Response(JSON.stringify({ urls: ["http://192.168.1.24:5175"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
       if (String(_input).includes("/leave")) {
         return new Response(
           JSON.stringify({
@@ -857,8 +949,7 @@ describe("App layout shell", () => {
     await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
     await user.click(screen.getByRole("button", { name: /Создать стол/i }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(postedTurnTime).toBe(30);
+    await waitFor(() => expect(postedTurnTime).toBe(30));
     expect(await screen.findByRole("dialog", { name: /Ожидание второго игрока/i })).toBeInTheDocument();
     expect(screen.getByText("ABCD2")).toBeInTheDocument();
 
