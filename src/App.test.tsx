@@ -673,6 +673,7 @@ describe("App layout shell", () => {
   it("sends the lobby host turn time when creating an online table", async () => {
     const user = userEvent.setup();
     let postedState: Record<string, unknown> | null = null;
+    let postedTurnTime: unknown;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method !== "POST") {
         return new Response(
@@ -690,6 +691,7 @@ describe("App layout shell", () => {
 
       const body = JSON.parse(String(init.body)) as { state: Record<string, unknown> };
       postedState = body.state;
+      postedTurnTime = body.state.turnTimeSeconds;
       return new Response(
         JSON.stringify({
           code: "ABCD2",
@@ -711,7 +713,7 @@ describe("App layout shell", () => {
     await user.click(screen.getByRole("button", { name: /Создать стол/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(postedState?.turnTimeSeconds).toBe(30);
+    expect(postedTurnTime).toBe(30);
   });
 
   it("ducks settings music to half volume and restores it smoothly", () => {
