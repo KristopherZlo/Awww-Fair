@@ -1046,7 +1046,7 @@ export default function App() {
     }
 
     const campaignWinner = winningPlayerId(state.players);
-    if (campaignWinner === "A") {
+    if (campaignWinner !== "B") {
       setCampaignProgress((current) => {
         const next = campaignProgressAfterWin(current, state.campaignRun!.level);
         saveCampaignProgress(next);
@@ -2519,7 +2519,7 @@ export default function App() {
                       <Play size={18} /> Новая игра
                     </button>
                     <button className="primary-action" onClick={() => setMenuView("levels")}>
-                      <MapIcon size={18} /> Уровни
+                      <MapIcon size={18} /> Ярмарка Аааха
                     </button>
                     <button className="primary-action" onClick={() => startAiGame("opponent")}>
                       <Bot size={18} /> Против ИИ

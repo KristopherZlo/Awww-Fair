@@ -445,7 +445,8 @@ describe("App layout shell", () => {
 
     expect(screen.getByText(/выберите режим/i)).toBeInTheDocument();
     expect(screen.getByText(/игра по сети/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /уровни/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ярмарка Аааха/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Уровни$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /против ии/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /обучение/i })).toBeInTheDocument();
   });
@@ -454,7 +455,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /уровни/i }));
+    await user.click(screen.getByRole("button", { name: /Ярмарка Аааха/i }));
 
     expect(screen.getByText(/Ярмарка Аааха/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Уровень 1$/i })).toBeEnabled();
@@ -495,6 +496,56 @@ describe("App layout shell", () => {
 
     await waitFor(() => {
       expect(window.localStorage.getItem("trend-market-campaign-v1")).toContain('"highestUnlockedLevel":2');
+    });
+  });
+
+  it("records a campaign draw as level progress", async () => {
+    saveGameState({
+      phase: "game_end",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      campaignRun: {
+        level: 1,
+        aiDifficulty: 1,
+        opponentName: "Биби",
+        opponentNameEn: "Bibi",
+        unlockRecorded: false
+      },
+      players: [
+        { ...testPlayer("A"), money: 8, sales: 2 },
+        { ...testPlayer("B"), name: "Биби (Bibi)", money: 8, sales: 2 }
+      ]
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("trend-market-campaign-v1")).toContain('"highestUnlockedLevel":2');
+    });
+  });
+
+  it("does not unlock the next campaign level after a loss", async () => {
+    saveGameState({
+      phase: "game_end",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      campaignRun: {
+        level: 1,
+        aiDifficulty: 1,
+        opponentName: "Биби",
+        opponentNameEn: "Bibi",
+        unlockRecorded: false
+      },
+      players: [
+        { ...testPlayer("A"), money: 2 },
+        { ...testPlayer("B"), name: "Биби (Bibi)", money: 8 }
+      ]
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("trend-market-campaign-v1")).toBeNull();
     });
   });
 
