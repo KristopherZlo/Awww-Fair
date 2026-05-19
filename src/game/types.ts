@@ -100,8 +100,7 @@ export type UpgradeEffect =
   | "supplier"
   | "bright_sign"
   | "mini_storage"
-  | "ad_table"
-  | "cozy_decor";
+  | "ad_table";
 
 export interface UpgradeCard {
   id: string;

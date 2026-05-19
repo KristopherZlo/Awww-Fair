@@ -138,8 +138,11 @@ function chooseWeakProductMove(current: AiPlanningInput, player: PlayerState): A
   }
 
   let worst: AiProductMove | null = null;
+  const emptySlots = player.shelf.flatMap((product, slotIndex) => (product ? [] : [slotIndex]));
+  const candidateSlots = emptySlots.length ? emptySlots : player.shelf.map((_, slotIndex) => slotIndex);
+
   for (const product of player.productHand) {
-    for (let slotIndex = 0; slotIndex < player.shelf.length; slotIndex += 1) {
+    for (const slotIndex of candidateSlots) {
       const existingProduct = player.shelf[slotIndex];
       const baseScore = productLearningValue(current, product);
       const replaceCost = existingProduct ? productLearningValue(current, existingProduct) * 0.75 : -1.5;
@@ -417,8 +420,7 @@ export function chooseAiUpgrade(player: PlayerState, upgrades: UpgradeCard[]): A
     mini_storage: 5,
     regular_customers: 5,
     bright_sign: 4,
-    beautiful_window: 4,
-    cozy_decor: 2
+    beautiful_window: 4
   };
 
   return (
@@ -437,8 +439,7 @@ export function chooseWeakAiUpgrade(player: PlayerState, upgrades: UpgradeCard[]
     mini_storage: 5,
     regular_customers: 5,
     bright_sign: 4,
-    beautiful_window: 4,
-    cozy_decor: 2
+    beautiful_window: 4
   };
 
   return (

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { INFLUENCE_CARDS, UPGRADE_CARDS } from "../data/cards";
 import { runAiSkillCheck } from "./aiSkillCheck";
 
 describe("AI skill check", () => {
@@ -14,5 +15,14 @@ describe("AI skill check", () => {
     expect(result.productSpread).toBeLessThanOrEqual(3);
     expect(result.goalsPerGame).toBeGreaterThanOrEqual(1.2);
     expect(result.sales).toBeGreaterThan(result.games * 8);
+  });
+
+  it("covers every playable upgrade and influence in AI-vs-AI balance runs", () => {
+    const result = runAiSkillCheck({ games: 600, seed: 440044 });
+
+    expect(result.upgradeRows.map((row) => row.id).sort()).toEqual(UPGRADE_CARDS.map((upgrade) => upgrade.id).sort());
+    expect(result.influenceRows.map((row) => row.id).sort()).toEqual(INFLUENCE_CARDS.map((influence) => influence.id).sort());
+    expect(result.upgradeRows.every((row) => row.picks > 0)).toBe(true);
+    expect(result.influenceRows.every((row) => row.plays > 0)).toBe(true);
   });
 });

@@ -84,19 +84,17 @@ export const INFLUENCE_CARDS: InfluenceCard[] = [
   { id: "rearrange", name: "Перестановка", type: "influence", description: "разрешает ещё одну замену товара до продажи", effect: { kind: "rearrange" } },
   { id: "bad_ads", name: "Антиреклама", type: "influence", description: "выбранный тег получает -1 для обоих игроков", effect: { kind: "anti_tag", value: -1 } },
   { id: "neighbor_queue", name: "Очередь к соседу", type: "influence", description: "один товар соперника получает -2 привлекательности", effect: { kind: "target_opponent_penalty", value: -2 } },
-  { id: "lucky_sign", name: "Удачная вывеска", type: "influence", description: "при равенстве клиент выбирает тебя", effect: { kind: "tie_preference" } },
   { id: "sample", name: "Пробник", type: "influence", description: "свой товар получает +1 и не теряет запас при продаже", effect: { kind: "target_own_bonus", value: 1, preserveStock: true } },
   { id: "urgent_supply", name: "Срочная закупка", type: "influence", description: "добери 2 карты товаров, оставь 1", effect: { kind: "draw_product", draw: 2, keep: 1 } },
   { id: "marketing_move", name: "Маркетинговый ход", type: "influence", description: "добери 2 карты влияния, оставь 1", effect: { kind: "draw_influence", draw: 2, keep: 1 } }
 ];
 
 export const UPGRADE_CARDS: UpgradeCard[] = [
-  { id: "extra_shelf", name: "Дополнительная полка", type: "upgrade", cost: 8, description: "+1 слот товара", effect: "extra_shelf" },
+  { id: "extra_shelf", name: "Дополнительная полка", type: "upgrade", cost: 9, description: "+1 слот товара", effect: "extra_shelf" },
   { id: "beautiful_window", name: "Красивая витрина", type: "upgrade", cost: 4, description: "первый товар слева получает +1", effect: "beautiful_window" },
-  { id: "regular_customers", name: "Постоянные клиенты", type: "upgrade", cost: 5, description: "первый клиент раунда даёт +1 монету", effect: "regular_customers" },
-  { id: "supplier", name: "Хороший поставщик", type: "upgrade", cost: 7, description: "новые товары получают +1 запас", effect: "supplier" },
-  { id: "bright_sign", name: "Яркая вывеска", type: "upgrade", cost: 5, description: "при равенстве клиент выбирает тебя", effect: "bright_sign" },
-  { id: "mini_storage", name: "Мини-склад", type: "upgrade", cost: 6, description: "+1 карта товара в руке", effect: "mini_storage" },
-  { id: "ad_table", name: "Рекламный столик", type: "upgrade", cost: 6, description: "раз за раунд дай своему товару +1", effect: "ad_table" },
-  { id: "cozy_decor", name: "Уютный декор", type: "upgrade", cost: 4, description: "сразу +2 монеты", effect: "cozy_decor" }
+  { id: "regular_customers", name: "Постоянные клиенты", type: "upgrade", cost: 4, description: "первый клиент раунда даёт +1 монету", effect: "regular_customers" },
+  { id: "supplier", name: "Хороший поставщик", type: "upgrade", cost: 8, description: "новые товары получают +1 запас", effect: "supplier" },
+  { id: "bright_sign", name: "Яркая вывеска", type: "upgrade", cost: 3, description: "при равенстве клиент выбирает тебя", effect: "bright_sign" },
+  { id: "mini_storage", name: "Мини-склад", type: "upgrade", cost: 5, description: "+1 карта товара в руке", effect: "mini_storage" },
+  { id: "ad_table", name: "Рекламный столик", type: "upgrade", cost: 6, description: "раз за раунд дай своему товару +1", effect: "ad_table" }
 ];

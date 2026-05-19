@@ -95,11 +95,11 @@ describe("AI planner", () => {
 
   it("chooses the highest value affordable upgrade", () => {
     const buyer = player("B", [null, null, null], []);
-    buyer.money = 8;
+    buyer.money = 9;
 
     const choice = chooseAiUpgrade(
       buyer,
-      ["cozy_decor", "extra_shelf", "bright_sign"].map((id) => UPGRADE_CARDS.find((candidate) => candidate.id === id)!)
+      ["regular_customers", "extra_shelf", "bright_sign"].map((id) => UPGRADE_CARDS.find((candidate) => candidate.id === id)!)
     );
 
     expect(choice?.upgradeId).toBe("extra_shelf");
@@ -148,6 +148,27 @@ describe("AI planner", () => {
     expect(weak.productMove?.productInstanceId).toBe("bread-1");
     expect(weak.influenceMove).toBeNull();
     expect(weak.scoreDelta).toBeLessThan(strong.scoreDelta);
+  });
+
+  it("fills empty shelf slots before making intentionally bad replacements in weak plans", () => {
+    const plan = planWeakAiPlanningTurn(
+      {
+        players: [
+          player("A", [null, null, null], []),
+          player("B", [product("toy", "toy-on-shelf"), null, null], [product("bread", "bread-1"), product("cookie", "cookie-1")])
+        ],
+        currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
+        activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+        playedInfluences: [],
+        roundBonuses: [],
+        productDeckLength: 3,
+        influenceDeckLength: 3
+      },
+      "B"
+    );
+
+    expect(plan.productMove?.slotIndex).not.toBe(0);
+    expect(plan.productMove?.slotIndex).toBeGreaterThan(0);
   });
 
   it("uses weak plans for early campaign levels and full plans for later levels", () => {

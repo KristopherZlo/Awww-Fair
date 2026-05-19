@@ -56,13 +56,23 @@ describe("Trend Market card balance", () => {
     expect(neighborQueue?.effect).toMatchObject({ kind: "target_opponent_penalty", value: -2 });
   });
 
+  it("removes negative-value and tie-only filler bonuses from playable card pools", () => {
+    const upgradeIds = UPGRADE_CARDS.map((upgrade) => upgrade.id);
+    const influenceIds = INFLUENCE_CARDS.map((influence) => influence.id);
+
+    expect(upgradeIds).not.toContain("cozy_decor");
+    expect(influenceIds).not.toContain("lucky_sign");
+  });
+
   it("uses tuned upgrade costs", () => {
     const costByEffect = Object.fromEntries(UPGRADE_CARDS.map((upgrade) => [upgrade.effect, upgrade.cost]));
 
-    expect(costByEffect.supplier).toBe(7);
-    expect(costByEffect.mini_storage).toBe(6);
+    expect(costByEffect.extra_shelf).toBe(9);
+    expect(costByEffect.supplier).toBe(8);
+    expect(costByEffect.mini_storage).toBe(5);
     expect(costByEffect.beautiful_window).toBe(4);
-    expect(costByEffect.regular_customers).toBe(5);
+    expect(costByEffect.regular_customers).toBe(4);
+    expect(costByEffect.bright_sign).toBe(3);
     expect(costByEffect.ad_table).toBe(6);
   });
 });

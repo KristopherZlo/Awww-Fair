@@ -26,7 +26,9 @@ console.log(
       noSaleRate: percent(result.noSaleRate),
       tipRateOfSales: percent(result.tipRateOfSales),
       goalsPerGame: Number(result.goalsPerGame.toFixed(2)),
-      productSpread: Number(result.productSpread.toFixed(2))
+      productSpread: Number(result.productSpread.toFixed(2)),
+      upgradesCovered: result.upgradeRows.filter((row) => row.picks > 0).length,
+      influencesCovered: result.influenceRows.filter((row) => row.plays > 0).length
     },
     null,
     2

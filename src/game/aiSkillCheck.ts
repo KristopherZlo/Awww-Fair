@@ -59,6 +59,8 @@ export interface AiSkillCheckResult {
   goalsPerGame: number;
   productSpread: number;
   productRows: Array<{ id: string; name: string; sales: number }>;
+  upgradeRows: Array<{ id: string; name: string; picks: number }>;
+  influenceRows: Array<{ id: string; name: string; plays: number }>;
 }
 
 interface Metrics {
@@ -72,6 +74,8 @@ interface Metrics {
   baselineWins: number;
   draws: number;
   productSales: Map<string, number>;
+  upgradePicks: Map<string, number>;
+  influencePlays: Map<string, number>;
 }
 
 function mulberry32(seed: number) {
@@ -311,7 +315,8 @@ function applyInfluenceMove(
   current: SimState,
   player: PlayerState,
   move: AiInfluenceMove,
-  playedInfluences: PlayedInfluence[]
+  playedInfluences: PlayedInfluence[],
+  metrics: Metrics
 ): { productDeck: ProductInstance[]; influenceDeck: InfluenceCard[] } {
   let productDeck = current.productDeck;
   let influenceDeck = current.influenceDeck;
@@ -323,6 +328,7 @@ function applyInfluenceMove(
 
   player.influenceHand.splice(cardIndex, 1);
   player.influenceActionUsed = true;
+  metrics.influencePlays.set(card.id, (metrics.influencePlays.get(card.id) ?? 0) + 1);
 
   if (card.effect.kind === "tag_modifier") {
     playedInfluences.push({ id: card.id, name: card.name, ownerId: player.id, modifiers: card.effect.modifiers });
@@ -366,7 +372,7 @@ function applyInfluenceMove(
   return { productDeck, influenceDeck };
 }
 
-function applyAiPlanningTurn(current: SimState, skillByPlayer: Record<PlayerId, SkillLevel>): SimState {
+function applyAiPlanningTurn(current: SimState, skillByPlayer: Record<PlayerId, SkillLevel>, metrics: Metrics): SimState {
   let productDeck = current.productDeck;
   let influenceDeck = current.influenceDeck;
   const players = clonePlayers(current.players);
@@ -388,7 +394,7 @@ function applyAiPlanningTurn(current: SimState, skillByPlayer: Record<PlayerId, 
     applyProductMove(player, plan.productMove.productInstanceId, plan.productMove.slotIndex);
   }
   if (plan.influenceMove) {
-    const decks = applyInfluenceMove(current, player, plan.influenceMove, playedInfluences);
+    const decks = applyInfluenceMove(current, player, plan.influenceMove, playedInfluences, metrics);
     productDeck = decks.productDeck;
     influenceDeck = decks.influenceDeck;
   }
@@ -493,7 +499,7 @@ function continueAfterSales(current: SimState): SimState {
   return nextRoundAfterBreak(base);
 }
 
-function applyUpgradeTurn(current: SimState, skillByPlayer: Record<PlayerId, SkillLevel>): SimState {
+function applyUpgradeTurn(current: SimState, skillByPlayer: Record<PlayerId, SkillLevel>, metrics: Metrics): SimState {
   const buyerId = current.upgradeQueue[0];
   const players = clonePlayers(current.players);
   const buyer = players.find((player) => player.id === buyerId)!;
@@ -510,9 +516,7 @@ function applyUpgradeTurn(current: SimState, skillByPlayer: Record<PlayerId, Ski
         buyer.shelfSlots += 1;
         buyer.shelf.push(null);
       }
-      if (upgrade.effect === "cozy_decor") {
-        buyer.money += 2;
-      }
+      metrics.upgradePicks.set(upgrade.id, (metrics.upgradePicks.get(upgrade.id) ?? 0) + 1);
       upgradeOffer = current.upgradeOffer.filter((candidate) => candidate.id !== upgrade.id);
     }
   }
@@ -566,12 +570,12 @@ function runGame(seed: number, strongPlayerId: PlayerId, metrics: Metrics) {
     let state = buildInitialState();
     while (state.phase !== "game_end") {
       if (state.phase === "planning") {
-        state = applyAiPlanningTurn(state, skillByPlayer);
+        state = applyAiPlanningTurn(state, skillByPlayer, metrics);
       } else if (state.phase === "sale_resolution") {
         recordSales(state, metrics);
         state = continueAfterSales(state);
       } else if (state.phase === "upgrade") {
-        state = applyUpgradeTurn(state, skillByPlayer);
+        state = applyUpgradeTurn(state, skillByPlayer, metrics);
       }
     }
     recordGame(state, metrics, strongPlayerId);
@@ -591,7 +595,9 @@ export function runAiSkillCheck({ games = 240, seed = 90210 }: AiSkillCheckOptio
     strongWins: 0,
     baselineWins: 0,
     draws: 0,
-    productSales: new Map()
+    productSales: new Map(),
+    upgradePicks: new Map(),
+    influencePlays: new Map()
   };
 
   for (let index = 0; index < games; index += 1) {
@@ -603,6 +609,16 @@ export function runAiSkillCheck({ games = 240, seed = 90210 }: AiSkillCheckOptio
     name: product.name,
     sales: metrics.productSales.get(product.id) ?? 0
   })).sort((left, right) => right.sales - left.sales);
+  const upgradeRows = UPGRADE_CARDS.map((upgrade) => ({
+    id: upgrade.id,
+    name: upgrade.name,
+    picks: metrics.upgradePicks.get(upgrade.id) ?? 0
+  })).sort((left, right) => right.picks - left.picks);
+  const influenceRows = INFLUENCE_CARDS.map((influence) => ({
+    id: influence.id,
+    name: influence.name,
+    plays: metrics.influencePlays.get(influence.id) ?? 0
+  })).sort((left, right) => right.plays - left.plays);
   const nonZeroSales = productRows.map((row) => row.sales).filter(Boolean);
   const productSpread = nonZeroSales.length ? Math.max(...nonZeroSales) / Math.min(...nonZeroSales) : 0;
 
@@ -619,6 +635,8 @@ export function runAiSkillCheck({ games = 240, seed = 90210 }: AiSkillCheckOptio
     tipRateOfSales: metrics.sales ? metrics.tips / metrics.sales : 0,
     goalsPerGame: metrics.games ? metrics.goalsCompleted / metrics.games : 0,
     productSpread,
-    productRows
+    productRows,
+    upgradeRows,
+    influenceRows
   };
 }
