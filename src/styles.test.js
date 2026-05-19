@@ -72,4 +72,20 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/::\-webkit-scrollbar\s*\{[\s\S]*width:\s*10px;[\s\S]*height:\s*10px;/);
     expect(css).toMatch(/::\-webkit-scrollbar-thumb\s*\{[\s\S]*background:\s*linear-gradient\(180deg,\s*#f7d99b,\s*#c89443\);/);
   });
+
+  it("keeps the main menu mode buttons vertical", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+
+    expect(css).toMatch(/\.menu-primary-grid\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+  });
+
+  it("centers cutscene subtitles and fades frame changes without a dark overlay", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+
+    expect(css).toMatch(/\.cutscene-frame\s*\{[\s\S]*animation:\s*cutscene-frame-in/);
+    expect(css).toMatch(/\.cutscene-subtitles\s*\{[\s\S]*justify-items:\s*center;/);
+    expect(css).toMatch(/\.cutscene-subtitles p\s*\{[\s\S]*text-align:\s*center;/);
+    expect(css).toMatch(/@keyframes cutscene-frame-in/);
+    expect(css).not.toMatch(/\.cutscene-overlay::after/);
+  });
 });

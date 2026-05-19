@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { CUSTOMER_CARDS, INFLUENCE_CARDS, PRODUCT_CARDS, TREND_CARDS, UPGRADE_CARDS } from "./data/cards";
 import type { PartyGoal } from "./game/goals";
@@ -168,6 +168,10 @@ describe("App layout shell", () => {
     });
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   async function playUntilGameEnd(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByRole("button", { name: /Новая игра/i }));
 
@@ -262,7 +266,7 @@ describe("App layout shell", () => {
     const secondRender = render(<App />);
 
     expect(secondRender.container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
-    expect(screen.getByText(/Ход: 01:00/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Новая игра/i })).not.toBeInTheDocument();
   });
 
@@ -327,7 +331,7 @@ describe("App layout shell", () => {
       fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
     });
 
-    expect(screen.getByText(/Ход: 01:00/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /Пауза/i }));
@@ -340,7 +344,7 @@ describe("App layout shell", () => {
       vi.advanceTimersByTime(3000);
     });
 
-    expect(screen.getByText(/Ход: 01:00/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /Продолжить/i }));
@@ -349,7 +353,7 @@ describe("App layout shell", () => {
       vi.advanceTimersByTime(1000);
     });
 
-    expect(screen.getByText(/Ход: 00:59/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:44/i)).toBeInTheDocument();
   });
 
   it("exits from pause to the main menu and clears the saved active game", async () => {
@@ -474,6 +478,26 @@ describe("App layout shell", () => {
     expect(screen.getAllByText(/Биби \(Bibi\)/i).length).toBeGreaterThan(0);
   });
 
+  it("plays the cutscene music during the campaign intro and returns to game music after skipping", async () => {
+    vi.useFakeTimers();
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Ярмарка Аааха/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Уровень 1$/i }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockAudioInstances[0].src).toContain("cutscene.mp3");
+
+    fireEvent.click(screen.getByRole("button", { name: /Пропустить/i }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockAudioInstances[0].src).toContain("stroll.mp3");
+  });
+
   it("records a campaign win and unlocks the next level", async () => {
     saveGameState({
       phase: "game_end",
@@ -560,6 +584,7 @@ describe("App layout shell", () => {
     expect(screen.getByRole("slider", { name: /громкость музыки/i })).toHaveValue("0.3");
     expect(screen.getByRole("checkbox", { name: /звуковые эффекты/i })).toBeChecked();
     expect(screen.getByRole("slider", { name: /громкость эффектов/i })).toHaveValue("1");
+    expect(screen.getByRole("slider", { name: /время хода/i })).toHaveValue("45");
     expect(screen.getByText(/сейчас играет: Main Menu/i)).toBeInTheDocument();
   });
 
@@ -573,7 +598,7 @@ describe("App layout shell", () => {
       fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
     });
     act(() => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(1000);
     });
 
     expect(mockAudioInstances[0].src).toContain("stroll.mp3");
@@ -586,7 +611,7 @@ describe("App layout shell", () => {
 
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(1000);
     });
     expect(mockAudioInstances[0].src).toContain("stroll.mp3");
 
@@ -594,7 +619,7 @@ describe("App layout shell", () => {
     fireEvent.click(screen.getByRole("button", { name: /Настройки/i }));
     fireEvent.click(screen.getByRole("button", { name: /Следующий трек/i }));
     act(() => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(1000);
     });
 
     expect(mockAudioInstances[0].src).toContain("loficomfy.mp3");
@@ -604,7 +629,7 @@ describe("App layout shell", () => {
       fireEvent.click(screen.getByRole("button", { name: /Продолжить/i }));
       fireEvent.click(screen.getByRole("button", { name: /Готов/i }));
       fireEvent.click(screen.getByRole("button", { name: /Готов/i }));
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(1000);
     });
 
     expect(mockAudioInstances[0].src).toContain("loficomfy.mp3");
@@ -624,13 +649,90 @@ describe("App layout shell", () => {
       fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
     });
 
-    expect(screen.getByText(/Ход: 01:00/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(1000);
     });
 
-    expect(screen.getByText(/Ход: 00:59/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:44/i)).toBeInTheDocument();
+  });
+
+  it("uses the configured turn time for new local games", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
+    fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
+    await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
+    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+
+    expect(screen.getByText(/Ход: 00:30/i)).toBeInTheDocument();
+  });
+
+  it("sends the lobby host turn time when creating an online table", async () => {
+    const user = userEvent.setup();
+    let postedState: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "POST") {
+        return new Response(
+          JSON.stringify({
+            code: "ABCD2",
+            playerId: "A",
+            token: "host-token",
+            version: 1,
+            state: postedState,
+            seats: { A: true, B: false }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const body = JSON.parse(String(init.body)) as { state: Record<string, unknown> };
+      postedState = body.state;
+      return new Response(
+        JSON.stringify({
+          code: "ABCD2",
+          playerId: "A",
+          token: "host-token",
+          version: 1,
+          state: body.state,
+          seats: { A: true, B: false }
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
+    fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
+    await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
+    await user.click(screen.getByRole("button", { name: /Создать стол/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(postedState?.turnTimeSeconds).toBe(30);
+  });
+
+  it("ducks settings music to half volume and restores it smoothly", () => {
+    vi.useFakeTimers();
+    render(<App />);
+
+    expect(mockAudioInstances[0].volume).toBeCloseTo(0.3);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockAudioInstances[0].volume).toBeCloseTo(0.15);
+
+    fireEvent.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockAudioInstances[0].volume).toBeCloseTo(0.3);
   });
 
   it("does not render the opponent-benefit warning copy", () => {

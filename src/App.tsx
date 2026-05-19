@@ -19,6 +19,7 @@ import {
   Settings,
   SkipForward,
   Sparkles,
+  Timer,
   Volume2,
   VolumeX,
   X
@@ -68,6 +69,7 @@ const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.png");
 const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.png");
 const MARKET_BG = assetUrl("market-bg.png");
 const MENU_TRACK = { title: "Main Menu", src: assetUrl("music/main-menu.mp3") } as const;
+const CUTSCENE_TRACK = { title: "Cutscene", src: assetUrl("music/cutscene.mp3") } as const;
 const MUSIC_TRACKS = [
   { title: "Lofi Comfy", src: assetUrl("music/loficomfy.mp3") },
   { title: "Lofi Doofy", src: assetUrl("music/lofidoofy.mp3") },
@@ -75,8 +77,11 @@ const MUSIC_TRACKS = [
   { title: "Stroll", src: assetUrl("music/stroll.mp3") }
 ] as const;
 const DEFAULT_TRACK_INDEX = MUSIC_TRACKS.findIndex((track) => track.title === "Stroll");
-const MUSIC_FADE_MS = 2000;
-const TURN_TIME_SECONDS = 60;
+const MUSIC_FADE_MS = 1000;
+const MUSIC_VOLUME_DUCK_MS = 1000;
+const DEFAULT_TURN_TIME_SECONDS = 45;
+const MIN_TURN_TIME_SECONDS = 15;
+const MAX_TURN_TIME_SECONDS = 120;
 const SESSION_STORAGE_KEY = "trend-market-session-v1";
 const SESSION_STORAGE_VERSION = 1;
 const CAMPAIGN_STORAGE_KEY = "trend-market-campaign-v1";
@@ -90,7 +95,8 @@ const DEFAULT_AUDIO_SETTINGS = {
   musicEnabled: true,
   effectsEnabled: true,
   musicVolume: 0.3,
-  effectsVolume: 1
+  effectsVolume: 1,
+  turnTimeSeconds: DEFAULT_TURN_TIME_SECONDS
 };
 
 const CUTSCENE_FRAMES = [
@@ -139,6 +145,7 @@ interface AudioSettings {
   effectsEnabled: boolean;
   musicVolume: number;
   effectsVolume: number;
+  turnTimeSeconds: number;
 }
 
 interface ChoiceDraft {
@@ -192,6 +199,7 @@ interface GameState {
   aiScore: number;
   aiIntent: string | null;
   campaignRun: CampaignRun | null;
+  turnTimeSeconds: number;
 }
 
 interface CutsceneState {
@@ -253,7 +261,11 @@ function createPlayer(id: PlayerId, productHand: ProductInstance[], influenceHan
   };
 }
 
-function buildInitialState(sound = true): GameState {
+function clampTurnTime(seconds: number) {
+  return Math.max(MIN_TURN_TIME_SECONDS, Math.min(MAX_TURN_TIME_SECONDS, Math.round(seconds)));
+}
+
+function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SECONDS): GameState {
   let productDeck = makeProductDeck();
   let influenceDeck = shuffleDeck([...INFLUENCE_CARDS]);
   let customerDeck = shuffleDeck([...CUSTOMER_CARDS]);
@@ -303,7 +315,8 @@ function buildInitialState(sound = true): GameState {
     aiMode: null,
     aiScore: 0,
     aiIntent: null,
-    campaignRun: null
+    campaignRun: null,
+    turnTimeSeconds: clampTurnTime(turnTimeSeconds)
   };
 }
 
@@ -777,7 +790,8 @@ function normalizeSavedGameState(state: GameState): GameState {
     pause: state.pause && typeof state.pause.active === "boolean" ? state.pause : { active: false, pausedBy: null },
     partyGoals: Array.isArray(state.partyGoals) && state.partyGoals.length ? state.partyGoals.map(normalizePartyGoal) : createPartyGoals(state.activeTrends, state.currentCustomers),
     aiIntent: typeof state.aiIntent === "string" ? state.aiIntent : null,
-    campaignRun: normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun)
+    campaignRun: normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun),
+    turnTimeSeconds: clampTurnTime(typeof (state as GameState & { turnTimeSeconds?: unknown }).turnTimeSeconds === "number" ? state.turnTimeSeconds : DEFAULT_TURN_TIME_SECONDS)
   };
 }
 
@@ -801,7 +815,8 @@ function normalizeSavedAudioSettings(value: unknown): AudioSettings {
     musicEnabled: typeof value.musicEnabled === "boolean" ? value.musicEnabled : DEFAULT_AUDIO_SETTINGS.musicEnabled,
     effectsEnabled: typeof value.effectsEnabled === "boolean" ? value.effectsEnabled : DEFAULT_AUDIO_SETTINGS.effectsEnabled,
     musicVolume: typeof value.musicVolume === "number" ? clampVolume(value.musicVolume) : DEFAULT_AUDIO_SETTINGS.musicVolume,
-    effectsVolume: typeof value.effectsVolume === "number" ? clampVolume(value.effectsVolume) : DEFAULT_AUDIO_SETTINGS.effectsVolume
+    effectsVolume: typeof value.effectsVolume === "number" ? clampVolume(value.effectsVolume) : DEFAULT_AUDIO_SETTINGS.effectsVolume,
+    turnTimeSeconds: typeof value.turnTimeSeconds === "number" ? clampTurnTime(value.turnTimeSeconds) : DEFAULT_AUDIO_SETTINGS.turnTimeSeconds
   };
 }
 
@@ -914,7 +929,7 @@ function saveSession(snapshot: SavedSession) {
 
 export default function App() {
   const [initialSession] = useState<SavedSession | null>(() => loadSavedSession());
-  const [state, setState] = useState<GameState>(() => initialSession?.state ?? buildInitialState(true));
+  const [state, setState] = useState<GameState>(() => initialSession?.state ?? buildInitialState(true, initialSession?.audioSettings.turnTimeSeconds ?? DEFAULT_TURN_TIME_SECONDS));
   const [menuView, setMenuView] = useState<MenuView>("main");
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress>(() => loadCampaignProgress());
   const [cutscene, setCutscene] = useState<CutsceneState | null>(null);
@@ -929,15 +944,16 @@ export default function App() {
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>("idle");
   const [rejectedSlot, setRejectedSlot] = useState<string | null>(null);
-  const [turnSecondsLeft, setTurnSecondsLeft] = useState(TURN_TIME_SECONDS);
+  const [turnSecondsLeft, setTurnSecondsLeft] = useState(() => state.turnTimeSeconds);
   const lobbyRef = useRef<LobbySession | null>(null);
   const applyingRemoteRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioSettingsRef = useRef<AudioSettings>(audioSettings);
   const currentTrackIndexRef = useRef(DEFAULT_TRACK_INDEX);
-  const musicModeRef = useRef<"menu" | "game">("menu");
+  const musicModeRef = useRef<"menu" | "game" | "cutscene">("menu");
   const musicFadeTimerRef = useRef<number | null>(null);
   const musicFadeIntervalRef = useRef<number | null>(null);
+  const previousShowSettingsRef = useRef(showSettings);
   const gameEndJinglePlayedRef = useRef(false);
   const autoReadyTurnRef = useRef<string | null>(null);
   const rejectTimerRef = useRef<number | null>(null);
@@ -997,12 +1013,22 @@ export default function App() {
       return;
     }
 
-    audio.volume = targetMusicVolume(audioSettings);
     if (!audioSettings.musicEnabled) {
       pauseMusic(audio);
       setMusicStatus("paused");
+      return;
     }
-  }, [audioSettings, state.pause.active, state.phase]);
+
+    const settingsVisibilityChanged = previousShowSettingsRef.current !== showSettings;
+    previousShowSettingsRef.current = showSettings;
+
+    if (settingsVisibilityChanged) {
+      fadeMusicVolumeTo(targetMusicVolume(audioSettings), MUSIC_VOLUME_DUCK_MS, audio);
+    } else {
+      clearMusicFade();
+      audio.volume = targetMusicVolume(audioSettings);
+    }
+  }, [audioSettings, state.pause.active, state.phase, showSettings]);
 
   useEffect(() => {
     currentTrackIndexRef.current = currentTrackIndex;
@@ -1010,6 +1036,10 @@ export default function App() {
 
   useEffect(() => {
     if (state.phase === "game_end") {
+      return;
+    }
+
+    if (cutscene) {
       return;
     }
 
@@ -1025,7 +1055,16 @@ export default function App() {
       setCurrentTrackIndex(DEFAULT_TRACK_INDEX);
       transitionMusicTo(MUSIC_TRACKS[DEFAULT_TRACK_INDEX], audioSettingsRef.current.musicEnabled);
     }
-  }, [state.phase]);
+  }, [state.phase, cutscene]);
+
+  useEffect(() => {
+    if (!cutscene) {
+      return;
+    }
+
+    musicModeRef.current = "cutscene";
+    transitionMusicTo(CUTSCENE_TRACK, audioSettingsRef.current.musicEnabled);
+  }, [Boolean(cutscene)]);
 
   useEffect(() => {
     if (state.phase !== "game_end") {
@@ -1065,9 +1104,9 @@ export default function App() {
   }, [state.phase, state.campaignRun, state.players]);
 
   useEffect(() => {
-    setTurnSecondsLeft(TURN_TIME_SECONDS);
+    setTurnSecondsLeft(state.turnTimeSeconds);
     autoReadyTurnRef.current = null;
-  }, [state.phase, state.activePlayer, state.round]);
+  }, [state.phase, state.activePlayer, state.round, state.turnTimeSeconds]);
 
   useEffect(() => {
     if (!isTimedLocalTurn) {
@@ -1131,9 +1170,35 @@ export default function App() {
     }
   }
 
+  function fadeMusicVolumeTo(targetVolume: number, fadeMs = MUSIC_FADE_MS, audio: HTMLAudioElement | null = audioRef.current) {
+    if (!audio) {
+      return;
+    }
+
+    const target = clampVolume(targetVolume);
+    const startVolume = audio.volume;
+    clearMusicFade();
+
+    if (fadeMs <= 0 || Math.abs(startVolume - target) < 0.005) {
+      audio.volume = target;
+      return;
+    }
+
+    const startedAt = Date.now();
+    musicFadeIntervalRef.current = window.setInterval(() => {
+      const progress = Math.min(1, (Date.now() - startedAt) / fadeMs);
+      audio.volume = startVolume + (target - startVolume) * progress;
+    }, 50);
+    musicFadeTimerRef.current = window.setTimeout(() => {
+      clearMusicFade();
+      audio.volume = target;
+    }, fadeMs);
+  }
+
   function targetMusicVolume(settings = audioSettingsRef.current) {
-    const duckGameMusic = state.pause.active && state.phase !== "menu" && state.phase !== "game_end";
-    return clampVolume(settings.musicVolume * (duckGameMusic ? 0.1 : 1));
+    const duckGameMusic = state.pause.active && !showSettings && state.phase !== "menu" && state.phase !== "game_end";
+    const settingsDuck = showSettings ? 0.5 : 1;
+    return clampVolume(settings.musicVolume * settingsDuck * (duckGameMusic ? 0.1 : 1));
   }
 
   function pauseMusic(audio: HTMLAudioElement | null = audioRef.current) {
@@ -1174,7 +1239,7 @@ export default function App() {
 
     audio.volume = targetMusicVolume(settings);
     if (!audio.src) {
-      audio.src = state.phase === "menu" ? MENU_TRACK.src : MUSIC_TRACKS[currentTrackIndexRef.current].src;
+      audio.src = cutscene ? CUTSCENE_TRACK.src : state.phase === "menu" ? MENU_TRACK.src : MUSIC_TRACKS[currentTrackIndexRef.current].src;
     }
     if (!audio.paused) {
       setMusicStatus("playing");
@@ -1214,7 +1279,7 @@ export default function App() {
       audio.src = track.src;
       audio.currentTime = 0;
     }
-    audio.loop = track.src === MENU_TRACK.src;
+    audio.loop = track.src === MENU_TRACK.src || track.src === CUTSCENE_TRACK.src;
     audio.volume = targetMusicVolume();
 
     if (shouldPlay) {
@@ -1233,7 +1298,7 @@ export default function App() {
     }
 
     if (audio.src.endsWith(track.src)) {
-      audio.loop = track.src === MENU_TRACK.src;
+      audio.loop = track.src === MENU_TRACK.src || track.src === CUTSCENE_TRACK.src;
       if (shouldPlay && !audio.paused) {
         requestMusicPlayback(true);
       } else {
@@ -1280,8 +1345,20 @@ export default function App() {
     };
     next.musicVolume = clampVolume(next.musicVolume);
     next.effectsVolume = clampVolume(next.effectsVolume);
+    next.turnTimeSeconds = clampTurnTime(next.turnTimeSeconds);
     audioSettingsRef.current = next;
     setAudioSettings(next);
+  }
+
+  function updateTurnTimeSetting(seconds: number) {
+    const nextSeconds = clampTurnTime(seconds);
+    updateAudioSettings({ turnTimeSeconds: nextSeconds });
+
+    if (lobbyRef.current && lobbyRef.current.playerId !== "A") {
+      return;
+    }
+
+    patchState((current) => (current.turnTimeSeconds === nextSeconds ? current : { ...current, turnTimeSeconds: nextSeconds }));
   }
 
   function playEffect(kind: SoundEffectId) {
@@ -1477,7 +1554,7 @@ export default function App() {
     setLobby(null);
     setLobbyError("");
     setSyncStatus("local");
-    patchState((current) => ({ ...buildInitialState(current.sound), phase: "planning" }), "customer-arrive");
+    patchState((current) => ({ ...buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds), phase: "planning" }), "customer-arrive");
   }
 
   function startCampaignLevel(level: CampaignLevel) {
@@ -1489,7 +1566,7 @@ export default function App() {
     setCutscene(null);
     setMenuView("main");
     patchState((current) => {
-      const next = buildInitialState(current.sound);
+      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
       const opponentName = `${level.opponentName} (${level.opponentNameEn})`;
       const players = next.players.map((player) => {
         if (player.id !== AI_PLAYER_ID) {
@@ -1602,7 +1679,7 @@ export default function App() {
     setJoinCode("");
     setSyncStatus("local");
     setState((current) => {
-      const next = buildInitialState(current.sound);
+      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
       if (session) {
         publishLobbyState(next, session, false);
       }
@@ -1620,7 +1697,7 @@ export default function App() {
     setLobbyError("");
     setSyncStatus("local");
     patchState((current) => {
-      const next = buildInitialState(current.sound);
+      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
       const intro =
         mode === "training"
           ? "Режим обучения: слабый ИИ играет за оппонента."
@@ -1638,7 +1715,7 @@ export default function App() {
 
   async function createLobby() {
     const next = {
-      ...buildInitialState(state.sound),
+      ...buildInitialState(state.sound, audioSettingsRef.current.turnTimeSeconds),
       phase: "planning" as Phase,
       logs: ["Стол создан. Оппонент входит по коду лобби.", ...state.logs].slice(0, 24)
     };
@@ -2495,6 +2572,8 @@ export default function App() {
   const currentCampaignLevel = state.campaignRun ? CAMPAIGN_LEVELS.find((level) => level.level === state.campaignRun?.level) ?? null : null;
   const cutsceneFrame = cutscene ? CUTSCENE_FRAMES[cutscene.frameIndex] : null;
   const focusTrendTags = useMemo(() => new Set(state.activeTrends[0]?.modifiers.map((modifier) => modifier.tag) ?? []), [state.activeTrends]);
+  const canEditTurnTime = !lobby || lobby.playerId === "A";
+  const turnTimeSettingValue = lobby ? state.turnTimeSeconds : audioSettings.turnTimeSeconds;
 
   return (
     <main
@@ -2508,7 +2587,7 @@ export default function App() {
             <div className="menu-box">
               <div className="menu-intro">
                 <h1>Trend Market</h1>
-                <p>Управляйте лавками, меняйте моду и продавайте милым покупателям-животным лучше соперника.</p>
+                <p>Разложите товары и постарайтесь заработать больше соперника.</p>
               </div>
 
               <div className="menu-sections">
@@ -2623,7 +2702,7 @@ export default function App() {
 
       {cutscene && cutsceneFrame && (
         <section className="cutscene-overlay" role="dialog" aria-label="Вступительная катсцена">
-          <img src={cutsceneFrame.image} alt="" />
+          <img key={cutsceneFrame.image} className="cutscene-frame" src={cutsceneFrame.image} alt="" />
           <div className="cutscene-controls">
             <div className="cutscene-progress">
               {cutscene.frameIndex + 1} / {CUTSCENE_FRAMES.length}
@@ -3192,6 +3271,22 @@ export default function App() {
                   disabled={!audioSettings.effectsEnabled}
                   onChange={(event) => updateAudioSettings({ effectsVolume: Number(event.target.value) })}
                 />
+              </label>
+              <label className="range-row">
+                <span>
+                  <Timer size={16} /> Время хода: {turnTimeSettingValue} сек.
+                </span>
+                <input
+                  aria-label="Время хода"
+                  type="range"
+                  min={MIN_TURN_TIME_SECONDS}
+                  max={MAX_TURN_TIME_SECONDS}
+                  step="5"
+                  value={turnTimeSettingValue}
+                  disabled={!canEditTurnTime}
+                  onChange={(event) => updateTurnTimeSetting(Number(event.target.value))}
+                />
+                {lobby && !canEditTurnTime && <small>В онлайн-столе время хода задаёт создатель лобби.</small>}
               </label>
             </div>
             <div className="track-status">
