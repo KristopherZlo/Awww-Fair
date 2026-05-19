@@ -177,11 +177,11 @@ export function createPartyGoalCombinations(pool: PartyGoal[], size = 3): PartyG
   return combinations;
 }
 
-export function createPartyGoals(activeTrends: TrendCard[], currentCustomers: CustomerCard[], random: RandomSource = Math.random): PartyGoal[] {
+export function createPartyGoals(activeTrends: TrendCard[], currentCustomers: CustomerCard[], random: RandomSource = Math.random, size = 3): PartyGoal[] {
   const pool = createPartyGoalPool(activeTrends, currentCustomers);
-  const combinations = createPartyGoalCombinations(pool, 3);
+  const combinations = createPartyGoalCombinations(pool, size);
   const safeIndex = Math.min(combinations.length - 1, Math.max(0, Math.floor(random() * combinations.length)));
-  const selected = combinations[safeIndex] ?? pool.slice(0, 3);
+  const selected = combinations[safeIndex] ?? pool.slice(0, size);
   return selected.map((goal) => createGoal(goal));
 }
 
