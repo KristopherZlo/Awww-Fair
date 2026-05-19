@@ -107,7 +107,7 @@ const CUTSCENE_FRAMES = [
   },
   {
     image: assetUrl("cutscene/aaakh-02.png"),
-    text: "Каждый год лучшие продавцы собираются на Великой Ярмарке Аааха."
+    text: "Каждый год лучшие продавцы собираются на Великой ярмарке мира Ааах."
   },
   {
     image: assetUrl("cutscene/aaakh-03.png"),
@@ -2627,7 +2627,7 @@ export default function App() {
                       <Play size={18} /> Новая игра
                     </button>
                     <button className="primary-action" onClick={() => setMenuView("levels")}>
-                      <MapIcon size={18} /> Ярмарка Аааха
+                      <MapIcon size={18} /> Ярмарка мира Ааах
                     </button>
                     <button className="primary-action" onClick={() => startAiGame("opponent")}>
                       <Bot size={18} /> Против ИИ
@@ -2699,7 +2699,7 @@ export default function App() {
                   <ChevronLeft size={18} /> Назад
                 </button>
                 <div>
-                  <h1>Ярмарка Аааха</h1>
+                  <h1>Ярмарка мира Ааах</h1>
                   <p>Пройдите 24 лавки, открывая новых соперников и приближаясь к красивой новой шляпе.</p>
                 </div>
               </div>

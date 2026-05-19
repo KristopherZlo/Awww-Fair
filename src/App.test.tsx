@@ -455,7 +455,7 @@ describe("App layout shell", () => {
 
     expect(screen.getByText(/выберите режим/i)).toBeInTheDocument();
     expect(screen.getByText(/игра по сети/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Ярмарка Аааха/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ярмарка мира Ааах/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Уровни$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /против ии/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /обучение/i })).toBeInTheDocument();
@@ -465,9 +465,9 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Ярмарка Аааха/i }));
+    await user.click(screen.getByRole("button", { name: /Ярмарка мира Ааах/i }));
 
-    expect(screen.getByText(/Ярмарка Аааха/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ярмарка мира Ааах/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Уровень 1$/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Уровень 2$/i })).toBeDisabled();
 
@@ -488,7 +488,7 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Ярмарка Аааха/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Ярмарка мира Ааах/i }));
     fireEvent.click(screen.getByRole("button", { name: /^Уровень 1$/i }));
     act(() => {
       vi.advanceTimersByTime(1000);

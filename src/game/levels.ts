@@ -23,7 +23,7 @@ export const CAMPAIGN_LEVELS: CampaignLevel[] = [
   { level: 6, title: "Ягодный час", district: "Садовый проход", opponentName: "Нори", opponentNameEn: "Nori", opponentSpecies: "ежонок", aiDifficulty: 6, story: "Финал первого ярмарочного дня уже рядом." },
   { level: 7, title: "Сырный поворот", district: "Фермерский круг", opponentName: "Коко", opponentNameEn: "Koko", opponentSpecies: "козлёнок", aiDifficulty: 7, story: "Новые покупатели ищут самые свежие товары." },
   { level: 8, title: "Быстрый обед", district: "Обеденный мостик", opponentName: "Руми", opponentNameEn: "Rumi", opponentSpecies: "енотик", aiDifficulty: 8, story: "Покупатели спешат, и каждая витрина на счету." },
-  { level: 9, title: "Подарочный бум", district: "Праздничный двор", opponentName: "Фифи", opponentNameEn: "Fifi", opponentSpecies: "лисенок", aiDifficulty: 9, story: "В Ааахе начинают говорить о нашей лавке." },
+  { level: 9, title: "Подарочный бум", district: "Праздничный двор", opponentName: "Фифи", opponentNameEn: "Fifi", opponentSpecies: "лисенок", aiDifficulty: 9, story: "В мире Ааах начинают говорить о нашей лавке." },
   { level: 10, title: "Медовая витрина", district: "Пчелиный угол", opponentName: "Боня", opponentNameEn: "Bonya", opponentSpecies: "медвежонок", aiDifficulty: 10, story: "Копилка для новой шляпы звенит всё чаще." },
   { level: 11, title: "Туристический поток", district: "Переулок сувениров", opponentName: "Сана", opponentNameEn: "Sana", opponentSpecies: "панда", aiDifficulty: 11, story: "Гости ярмарки ищут что-то особенное." },
   { level: 12, title: "Вечерняя упаковка", district: "Огни фонариков", opponentName: "Яша", opponentNameEn: "Yasha", opponentSpecies: "хомячок", aiDifficulty: 12, story: "Соперники начинают играть аккуратнее." },
@@ -37,7 +37,7 @@ export const CAMPAIGN_LEVELS: CampaignLevel[] = [
   { level: 20, title: "Громкий финал", district: "Главная сцена", opponentName: "Олли", opponentNameEn: "Ollie", opponentSpecies: "выдрёнок", aiDifficulty: 20, story: "Финал ярмарки уже рядом." },
   { level: 21, title: "Шляпный намёк", district: "Улица модистов", opponentName: "Виви", opponentNameEn: "Vivi", opponentSpecies: "кролик", aiDifficulty: 21, story: "В витрине магазина шляп уже видно нашу мечту." },
   { level: 22, title: "Последние монеты", district: "Кассовый дворик", opponentName: "Роро", opponentNameEn: "Roro", opponentSpecies: "морская свинка", aiDifficulty: 22, story: "Каждый клиент может решить судьбу покупки." },
-  { level: 23, title: "Главный соперник", district: "Большой шатёр", opponentName: "Кира", opponentNameEn: "Kira", opponentSpecies: "лиса", aiDifficulty: 23, story: "Лучшие продавцы Аааха собрались у главного шатра." },
+  { level: 23, title: "Главный соперник", district: "Большой шатёр", opponentName: "Кира", opponentNameEn: "Kira", opponentSpecies: "лиса", aiDifficulty: 23, story: "Лучшие продавцы мира Ааах собрались у главного шатра." },
   { level: 24, title: "Новая шляпа", district: "Шляпная лавка", opponentName: "Ари", opponentNameEn: "Ari", opponentSpecies: "кошечка", aiDifficulty: 24, story: "Последняя победа отделяет нас от красивой новой шляпы." }
 ];
 
