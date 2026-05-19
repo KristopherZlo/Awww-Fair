@@ -88,17 +88,6 @@ function trendScoreForProduct(product: ProductInstance, trends: TrendCard[]) {
   }, 0);
 }
 
-function addCustomerPersonalityAppeal(lines: AppealLine[], customer: CustomerCard, product: ProductInstance) {
-  const personality = customer.personality;
-  if (!personality) {
-    return;
-  }
-
-  if (personality.kind === "bargain_hunter" && (product.tags.includes("дешёвое") || product.price <= 2)) {
-    pushLine(lines, `характер: ${personality.label.toLocaleLowerCase("ru-RU")}`, 1);
-  }
-}
-
 export function calculateAppeal({
   product,
   ownerId,
@@ -118,8 +107,6 @@ export function calculateAppeal({
   if (product.tags.includes(customer.secondaryTag)) {
     pushLine(breakdown, `второе желание: ${customer.secondaryTag}`, 2);
   }
-
-  addCustomerPersonalityAppeal(breakdown, customer, product);
 
   for (const [trendIndex, trend] of trends.entries()) {
     for (const modifier of trend.modifiers) {
@@ -252,10 +239,6 @@ export function resolveCustomerPurchase({
   }
 
   let eligible = candidates.filter((candidate) => candidate.appeal.total >= PURCHASE_APPEAL_THRESHOLD);
-  const personality = customer.personality;
-  if (personality?.kind === "trend_chaser") {
-    eligible = eligible.filter((candidate) => (candidate.trendScore ?? 0) >= personality.minTrendScore);
-  }
   if (eligible.length === 0) {
     return { customer, candidates, eligible, winner: null };
   }
@@ -289,13 +272,6 @@ export function resolveCustomerPurchase({
     return left.slotIndex - right.slotIndex;
   });
   let winnerCandidate = sortedEligible[0];
-
-  if (personality?.kind === "second_best" && sortedEligible[1]) {
-    const appealGap = winnerCandidate.appeal.total - sortedEligible[1].appeal.total;
-    if (appealGap <= personality.maxAppealGap) {
-      winnerCandidate = sortedEligible[1];
-    }
-  }
 
   const owner = playerById(players, winnerCandidate.ownerId);
   const tip = winnerCandidate.appeal.total >= TIP_APPEAL_THRESHOLD ? 1 : 0;

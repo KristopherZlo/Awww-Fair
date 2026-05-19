@@ -26,17 +26,8 @@ describe("Trend Market card balance", () => {
     expect(stockById.honey).toBe(3);
   });
 
-  it("makes trend-chaser customers require stricter trend support", () => {
-    const minScores = CUSTOMER_CARDS.filter((customer) => customer.personality?.kind === "trend_chaser").map((customer) => {
-      if (customer.personality?.kind !== "trend_chaser") {
-        throw new Error("expected trend chaser");
-      }
-      return customer.personality.minTrendScore;
-    });
-
-    expect(minScores).not.toContain(1);
-    expect(Math.min(...minScores)).toBe(2);
-    expect(Math.max(...minScores)).toBe(3);
+  it("does not put purchase-changing personalities on customer cards", () => {
+    expect(CUSTOMER_CARDS.every((customer) => customer.personality === undefined)).toBe(true);
   });
 
   it("keeps tag influence cards at +1 while targeted influence remains stronger", () => {
