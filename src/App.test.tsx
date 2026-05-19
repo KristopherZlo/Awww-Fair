@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { randomAiTurnDelayMs } from "./App";
 import { CUSTOMER_CARDS, INFLUENCE_CARDS, PRODUCT_CARDS, TREND_CARDS, UPGRADE_CARDS } from "./data/cards";
 import type { PartyGoal } from "./game/goals";
 import type { PlayerId, PlayerState, ProductCard, ProductInstance } from "./game/types";
@@ -98,7 +98,7 @@ const completedGoalForB: PartyGoal = {
   completedBy: "B"
 };
 
-function saveGameState(overrides: Record<string, unknown>) {
+function saveGameState(overrides: Record<string, unknown>, lobby: Record<string, unknown> | null = null) {
   const state = {
     phase: "planning",
     round: 1,
@@ -138,12 +138,13 @@ function saveGameState(overrides: Record<string, unknown>) {
     JSON.stringify({
       version: 1,
       state,
-      lobby: null,
+      lobby,
       audioSettings: {
         musicEnabled: true,
         effectsEnabled: true,
         musicVolume: 0.3,
-        effectsVolume: 1
+        effectsVolume: 1,
+        turnTimeSeconds: 45
       }
     })
   );
@@ -169,11 +170,12 @@ describe("App layout shell", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   async function playUntilGameEnd(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     for (let step = 0; step < 80; step += 1) {
       if (screen.queryByText(/Вы победили|Вы проиграли|Ничья/i)) {
@@ -241,6 +243,7 @@ describe("App layout shell", () => {
     expect(screen.queryByText(/Игрок A|Игрок B/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Против ИИ/i }));
+    await user.click(screen.getByRole("button", { name: /Зазывала/i }));
 
     expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
     expect(screen.queryByText(/ИИ игрок B/i)).not.toBeInTheDocument();
@@ -250,7 +253,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getAllByRole("button")[0]);
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     expect(container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
   });
@@ -259,7 +262,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const firstRender = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     await waitFor(() => {
       const savedSession = window.localStorage.getItem("trend-market-session-v1");
@@ -273,14 +276,14 @@ describe("App layout shell", () => {
 
     expect(secondRender.container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
     expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Новая игра/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /2 игрока/i })).not.toBeInTheDocument();
   });
 
   it("shows a read-only sales forecast during planning", async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole("button")[0]);
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     expect(screen.getByText(/прогноз продаж/i)).toBeInTheDocument();
     expect(screen.getByText(/если считать сейчас/i)).toBeInTheDocument();
@@ -291,7 +294,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     expect(screen.getByText(/Цели партии/i)).toBeInTheDocument();
     expect(container.querySelectorAll(".party-goal")).toHaveLength(3);
@@ -334,7 +337,7 @@ describe("App layout shell", () => {
     render(<App />);
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
+      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
     });
 
     expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
@@ -366,13 +369,21 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
     await waitFor(() => expect(window.localStorage.getItem("trend-market-session-v1")).toContain('"phase":"planning"'));
 
     await user.click(screen.getByRole("button", { name: /Пауза/i }));
     await user.click(screen.getByRole("button", { name: /Выйти в меню/i }));
 
-    expect(screen.getByRole("button", { name: /Новая игра/i })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /Выйти в меню/i })).toBeInTheDocument();
+    expect(screen.getByText(/Вы действительно хотите выйти/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Остаться$/i }));
+    expect(screen.getByRole("dialog", { name: /Пауза/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Выйти в меню/i }));
+    await user.click(screen.getByRole("button", { name: /^Выйти$/i }));
+
+    expect(screen.getByRole("button", { name: /2 игрока/i })).toBeInTheDocument();
     await waitFor(() => expect(window.localStorage.getItem("trend-market-session-v1")).toBeNull());
   });
 
@@ -380,7 +391,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     const topBar = container.querySelector(".top-bar");
     expect(topBar).not.toBeNull();
@@ -404,7 +415,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getAllByRole("button")[0]);
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
     await user.click(screen.getByRole("button", { name: /готов/i }));
     await user.click(screen.getByRole("button", { name: /готов/i }));
 
@@ -431,7 +442,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getAllByRole("button")[0]);
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     expect(screen.getByText(/Главный тренд/i)).toBeInTheDocument();
     expect(container.querySelector(".trend-card.focus-trend")).not.toBeNull();
@@ -451,14 +462,65 @@ describe("App layout shell", () => {
   });
 
   it("presents menu actions in clear play and online sections", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const menuButtons = within(container.querySelector(".menu-primary-grid") as HTMLElement).getAllByRole("button");
 
     expect(screen.getByText(/выберите режим/i)).toBeInTheDocument();
     expect(screen.getByText(/игра по сети/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Ярмарка мира Ааах/i })).toBeInTheDocument();
+    expect(menuButtons.map((button) => button.textContent?.trim())).toEqual(["Ярмарка мира Ааах", "2 игрока", "Против ИИ", "Обучение с ИИ"]);
     expect(screen.queryByRole("button", { name: /^Уровни$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /против ии/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /обучение/i })).toBeInTheDocument();
+    expect(container.querySelector(".menu-network-divider")).not.toBeNull();
+    expect(container.querySelector(".menu-secondary-actions")).toBeNull();
+    expect(container.querySelector(".menu-footer-actions")).not.toBeNull();
+    expect(container.querySelector(".menu-support-actions")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Об игре/i })).toBeInTheDocument();
+  });
+
+  it("chooses AI opponent difficulty before starting a versus AI game", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Против ИИ/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /Сложность ИИ/i });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getAllByRole("button").filter((button) => button.classList.contains("primary-action")).map((button) => button.textContent?.trim())).toEqual([
+      "Картошка",
+      "Купи слона",
+      "Зазывала",
+      "Волк с Уолл-стрит",
+      "Бизнес-Енот"
+    ]);
+
+    await user.click(within(dialog).getByRole("button", { name: /Зазывала/i }));
+
+    expect(screen.queryByRole("dialog", { name: /Сложность ИИ/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
+    expect(screen.getByText(/Сложность: Зазывала/i)).toBeInTheDocument();
+  });
+
+  it("opens the about dialog and renders external support links", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Об игре/i }));
+
+    expect(screen.getByRole("dialog", { name: /Об игре/i })).toBeInTheDocument();
+    expect(screen.getByText(/личное развлечение/i)).toBeInTheDocument();
+    expect(screen.getByText(/zloydeveloper\.info@gmail\.com/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /KristopherZlo\/Awww-Fair/i })).toHaveAttribute("href", "https://github.com/KristopherZlo/Awww-Fair");
+
+    await user.click(screen.getByRole("button", { name: /Закрыть/i }));
+
+    const coffee = screen.getByRole("link", { name: /Buy Me a Coffee/i });
+    const paypal = screen.getByRole("link", { name: /PayPal/i });
+    expect(coffee).toHaveAttribute("href", "https://buymeacoffee.com/zl0yxp");
+    expect(paypal).toHaveAttribute("href", "https://www.paypal.com/donate/?hosted_button_id=CY7A2U64JWY4W");
+    expect(coffee).toHaveAttribute("target", "_blank");
+    expect(paypal).toHaveAttribute("target", "_blank");
   });
 
   it("opens the level map and starts level one through a skippable full-screen cutscene", async () => {
@@ -579,6 +641,52 @@ describe("App layout shell", () => {
     });
   });
 
+  it("offers the next campaign level after a win and repeats the level after a loss", () => {
+    saveGameState({
+      phase: "game_end",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      campaignRun: {
+        level: 1,
+        aiDifficulty: 1,
+        opponentName: "Биби",
+        opponentNameEn: "Bibi",
+        unlockRecorded: true
+      },
+      players: [
+        { ...testPlayer("A"), money: 8 },
+        { ...testPlayer("B"), name: "Биби (Bibi)", money: 2 }
+      ]
+    });
+
+    const winScreen = render(<App />);
+    expect(screen.getByRole("button", { name: /Следующий уровень/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Сыграть ещё/i })).not.toBeInTheDocument();
+
+    winScreen.unmount();
+    window.localStorage.clear();
+    saveGameState({
+      phase: "game_end",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      campaignRun: {
+        level: 1,
+        aiDifficulty: 1,
+        opponentName: "Биби",
+        opponentNameEn: "Bibi",
+        unlockRecorded: true
+      },
+      players: [
+        { ...testPlayer("A"), money: 2 },
+        { ...testPlayer("B"), name: "Биби (Bibi)", money: 8 }
+      ]
+    });
+
+    render(<App />);
+    expect(screen.getByRole("button", { name: /Повторить уровень/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Следующий уровень/i })).not.toBeInTheDocument();
+  });
+
   it("opens audio settings with separate music and effects controls", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -601,7 +709,7 @@ describe("App layout shell", () => {
     expect(mockAudioInstances[0].src).toContain("main-menu.mp3");
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
+      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
     });
     act(() => {
       vi.advanceTimersByTime(1000);
@@ -635,7 +743,7 @@ describe("App layout shell", () => {
     render(<App />);
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
+      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
       vi.advanceTimersByTime(1000);
     });
     expect(mockAudioInstances[0].src).toContain("stroll.mp3");
@@ -671,7 +779,7 @@ describe("App layout shell", () => {
     render(<App />);
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Новая игра/i }));
+      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
     });
 
     expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
@@ -690,7 +798,7 @@ describe("App layout shell", () => {
     await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
     fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
     await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
 
     expect(screen.getByText(/Ход: 00:30/i)).toBeInTheDocument();
   });
@@ -700,6 +808,18 @@ describe("App layout shell", () => {
     let postedState: Record<string, unknown> | null = null;
     let postedTurnTime: unknown;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes("/leave")) {
+        return new Response(
+          JSON.stringify({
+            code: "ABCD2",
+            version: 2,
+            state: postedState,
+            seats: { A: false, B: false }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
       if (init?.method !== "POST") {
         return new Response(
           JSON.stringify({
@@ -739,6 +859,98 @@ describe("App layout shell", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(postedTurnTime).toBe(30);
+    expect(await screen.findByRole("dialog", { name: /Ожидание второго игрока/i })).toBeInTheDocument();
+    expect(screen.getByText("ABCD2")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^Выйти$/i }));
+
+    expect(screen.getByRole("button", { name: /2 игрока/i })).toBeInTheDocument();
+  });
+
+  it("shows the lobby code waiting dialog again when a synced lobby returns to the menu", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    saveGameState(
+      { phase: "menu" },
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 3,
+        seats: { A: true, B: true }
+      }
+    );
+
+    render(<App />);
+
+    expect(screen.getByRole("dialog", { name: /Ожидание второго игрока/i })).toBeInTheDocument();
+    expect(screen.getByText("ABCD2")).toBeInTheDocument();
+  });
+
+  it("plays one money sound when the current hotseat player earns from a sale", async () => {
+    const user = userEvent.setup();
+    const toy = productInstance(PRODUCT_CARDS.find((product) => product.id === "toy")!, "sale-a");
+    const coffee = productInstance(PRODUCT_CARDS.find((product) => product.id === "coffee")!, "sale-b");
+    const playerA = { ...testPlayer("A"), planned: true, shelf: [toy, null, null] };
+    const playerB = { ...testPlayer("B"), shelf: [coffee, null, null] };
+    saveGameState({
+      activePlayer: "B",
+      players: [playerA, playerB],
+      currentCustomers: [
+        CUSTOMER_CARDS.find((customer) => customer.id === "family")!,
+        CUSTOMER_CARDS.find((customer) => customer.id === "office_worker")!
+      ],
+      activeTrends: [
+        TREND_CARDS.find((trend) => trend.id === "kids_day")!,
+        TREND_CARDS.find((trend) => trend.id === "coffee_morning")!,
+        TREND_CARDS.find((trend) => trend.id === "sweet_day")!
+      ]
+    });
+
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /Готов/i }));
+
+    expect(document.querySelector(".app-shell.phase-sale_resolution")).not.toBeNull();
+    expect(mockAudioInstances.filter((audio) => /money\.wav/.test(audio.src))).toHaveLength(1);
+  });
+
+  it("does not play the sale money sound when only the hotseat opponent earns", async () => {
+    const user = userEvent.setup();
+    const toy = productInstance(PRODUCT_CARDS.find((product) => product.id === "toy")!, "sale-a");
+    const playerA = { ...testPlayer("A"), planned: true, shelf: [toy, null, null] };
+    const playerB = { ...testPlayer("B"), shelf: [null, null, null] };
+    saveGameState({
+      activePlayer: "B",
+      players: [playerA, playerB],
+      currentCustomers: [CUSTOMER_CARDS.find((customer) => customer.id === "family")!],
+      activeTrends: [
+        TREND_CARDS.find((trend) => trend.id === "kids_day")!,
+        TREND_CARDS.find((trend) => trend.id === "coffee_morning")!,
+        TREND_CARDS.find((trend) => trend.id === "sweet_day")!
+      ]
+    });
+
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /Готов/i }));
+
+    expect(document.querySelector(".app-shell.phase-sale_resolution")).not.toBeNull();
+    expect(mockAudioInstances.filter((audio) => /money\.wav/.test(audio.src))).toHaveLength(0);
+  });
+
+  it("calculates a random zero-to-five second delay for AI turns", () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    try {
+      expect(randomAiTurnDelayMs()).toBe(2500);
+
+      randomSpy.mockReturnValue(0);
+      expect(randomAiTurnDelayMs()).toBe(0);
+
+      randomSpy.mockReturnValue(0.999999);
+      expect(randomAiTurnDelayMs()).toBeLessThanOrEqual(5000);
+      expect(randomAiTurnDelayMs()).toBeGreaterThanOrEqual(0);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("ducks settings music to half volume and restores it smoothly", () => {
@@ -772,7 +984,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Новая игра/i }));
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
     await user.click(screen.getByRole("button", { name: /Готов/i }));
     await user.click(screen.getByRole("button", { name: /Готов/i }));
 
@@ -784,7 +996,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getAllByRole("button")[0]);
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
     const unavailableSlot = screen.getAllByRole("button", { name: /слот товара/i })[0];
 
     expect(unavailableSlot).toHaveAttribute("aria-disabled", "true");
@@ -795,6 +1007,7 @@ describe("App layout shell", () => {
   });
 
   it("starts an AI training game and lets the AI score its planning turn", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const user = userEvent.setup();
     render(<App />);
 
@@ -804,10 +1017,13 @@ describe("App layout shell", () => {
     await waitFor(
       () => {
         expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
-        expect(screen.getByText(/оценка хода/i)).toBeInTheDocument();
+        const aiScore = document.querySelector(".ai-score") as HTMLElement | null;
+        expect(aiScore).not.toBeNull();
+        expect(within(aiScore as HTMLElement).getByText(/оценка хода/i)).toBeInTheDocument();
       },
       { timeout: 2500 }
     );
+    randomSpy.mockRestore();
   });
 
   it("places the AI score beside sync status and keeps pause as the rightmost top-bar control", async () => {
@@ -825,10 +1041,12 @@ describe("App layout shell", () => {
   });
 
   it("starts a normal AI opponent game without training coach advice", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /против ии/i }));
+    await user.click(screen.getByRole("button", { name: /Зазывала/i }));
 
     expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
     expect(screen.queryByText(/совет тренера/i)).not.toBeInTheDocument();
@@ -841,9 +1059,11 @@ describe("App layout shell", () => {
       },
       { timeout: 2500 }
     );
+    randomSpy.mockRestore();
   });
 
   it("lets the AI activate ad table before passing planning back", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const aiPlayer = testPlayer("B");
     aiPlayer.shelf = [productInstance(PRODUCT_CARDS.find((product) => product.id === "cake")!, "cake-table"), null, null];
     aiPlayer.productHand = [];
@@ -869,6 +1089,7 @@ describe("App layout shell", () => {
       },
       { timeout: 2500 }
     );
+    randomSpy.mockRestore();
   });
 
   it("renders a dedicated game-end screen with exit and replay actions plus a result jingle", async () => {

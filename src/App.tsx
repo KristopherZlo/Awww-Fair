@@ -4,10 +4,15 @@ import {
   ChevronLeft,
   Check,
   Coins,
+  Coffee,
+  ExternalLink,
   Flag,
+  Github,
   HandCoins,
+  Info,
   Lock,
   LogOut,
+  Mail,
   Map as MapIcon,
   Music,
   PackagePlus,
@@ -139,7 +144,16 @@ type MusicStatus = "idle" | "playing" | "paused" | "blocked";
 type AiMode = "opponent" | "training";
 type MenuView = "main" | "levels";
 const AI_PLAYER_ID: PlayerId = "B";
-const AI_TURN_DELAY_MS = 450;
+const AI_TURN_DELAY_MAX_MS = 5_000;
+const AI_DIFFICULTIES = [
+  { label: "Картошка", value: 3 },
+  { label: "Купи слона", value: 8 },
+  { label: "Зазывала", value: 14 },
+  { label: "Волк с Уолл-стрит", value: 20 },
+  { label: "Бизнес-Енот", value: 24 }
+] as const;
+
+type AiDifficultyOption = (typeof AI_DIFFICULTIES)[number];
 
 interface AudioSettings {
   musicEnabled: boolean;
@@ -197,6 +211,7 @@ interface GameState {
   sound: boolean;
   aiPlayerId: PlayerId | null;
   aiMode: AiMode | null;
+  aiDifficulty: number | null;
   aiScore: number;
   aiIntent: string | null;
   campaignRun: CampaignRun | null;
@@ -314,6 +329,7 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
     sound,
     aiPlayerId: null,
     aiMode: null,
+    aiDifficulty: null,
     aiScore: 0,
     aiIntent: null,
     campaignRun: null,
@@ -327,6 +343,18 @@ function opponentOf(playerId: PlayerId): PlayerId {
 
 function viewerIdFor(lobby: LobbySession | null, aiPlayerId: PlayerId | null): PlayerId {
   return lobby?.playerId ?? (aiPlayerId ? opponentOf(aiPlayerId) : "A");
+}
+
+function moneySoundPlayerIdFor(state: GameState, lobby: LobbySession | null): PlayerId {
+  if (lobby) {
+    return lobby.playerId;
+  }
+
+  if (state.aiPlayerId) {
+    return opponentOf(state.aiPlayerId);
+  }
+
+  return state.activePlayer;
 }
 
 function displayPlayerName(playerId: PlayerId, viewerId: PlayerId) {
@@ -355,6 +383,10 @@ function formatTurnTime(seconds: number) {
     .padStart(2, "0");
   const rest = (safeSeconds % 60).toString().padStart(2, "0");
   return `${minutes}:${rest}`;
+}
+
+export function randomAiTurnDelayMs() {
+  return Math.floor(Math.random() * (AI_TURN_DELAY_MAX_MS + 1));
 }
 
 function gameOutcome(players: PlayerState[], viewerId: PlayerId) {
@@ -791,6 +823,7 @@ function normalizeSavedGameState(state: GameState): GameState {
     pause: state.pause && typeof state.pause.active === "boolean" ? state.pause : { active: false, pausedBy: null },
     partyGoals: Array.isArray(state.partyGoals) && state.partyGoals.length ? state.partyGoals.map(normalizePartyGoal) : createPartyGoals(state.activeTrends, state.currentCustomers),
     aiIntent: typeof state.aiIntent === "string" ? state.aiIntent : null,
+    aiDifficulty: typeof (state as GameState & { aiDifficulty?: unknown }).aiDifficulty === "number" ? Math.max(1, Math.min(24, Math.round(state.aiDifficulty ?? 1))) : null,
     campaignRun: normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun),
     turnTimeSeconds: clampTurnTime(typeof (state as GameState & { turnTimeSeconds?: unknown }).turnTimeSeconds === "number" ? state.turnTimeSeconds : DEFAULT_TURN_TIME_SECONDS)
   };
@@ -936,6 +969,9 @@ export default function App() {
   const [cutscene, setCutscene] = useState<CutsceneState | null>(null);
   const [showRules, setShowRules] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [showAiDifficulty, setShowAiDifficulty] = useState(false);
   const [lobby, setLobby] = useState<LobbySession | null>(() => initialSession?.lobby ?? null);
   const [joinCode, setJoinCode] = useState(() => initialSession?.lobby?.code ?? "");
   const [lobbyError, setLobbyError] = useState("");
@@ -966,8 +1002,9 @@ export default function App() {
   const localPlayer = state.players.find((player) => player.id === localPlayerId) ?? activePlayer;
   const opponentPlayer = state.players.find((player) => player.id === opponentOf(localPlayer.id)) ?? state.players[1];
   const handPlayer = lobby || state.aiPlayerId ? localPlayer : activePlayer;
-  const localPlanningTurn = state.phase === "planning" && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer) && !state.choiceDraft;
-  const canControlActivePlayer = !state.pause.active && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
+  const waitingForLobbyPlayer = Boolean(lobby && state.phase !== "game_end" && (state.phase === "menu" || !lobby.seats.A || !lobby.seats.B));
+  const localPlanningTurn = state.phase === "planning" && !waitingForLobbyPlayer && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer) && !state.choiceDraft;
+  const canControlActivePlayer = !waitingForLobbyPlayer && !state.pause.active && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
   const selectedInfluence = handPlayer.influenceHand.find((card) => card.id === state.selectedInfluenceId) ?? null;
   const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId), [state.players, localPlayerId]);
   const isTimedLocalTurn = localPlanningTurn && !state.pause.active;
@@ -1142,6 +1179,19 @@ export default function App() {
       }
       clearMusicFade();
     };
+  }, []);
+
+  useEffect(() => {
+    const handlePageHide = () => {
+      const session = lobbyRef.current;
+      if (session) {
+        sendLobbyLeave(session);
+        clearSavedSession();
+      }
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
   }, []);
 
   useEffect(() => {
@@ -1491,6 +1541,28 @@ export default function App() {
       });
   }
 
+  function sendLobbyLeave(session: LobbySession) {
+    const body = JSON.stringify({
+      token: session.token,
+      playerId: session.playerId
+    });
+    const url = `${LOBBY_API}/${session.code}/leave`;
+
+    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function" && typeof Blob !== "undefined") {
+      const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+      if (sent) {
+        return;
+      }
+    }
+
+    void fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true
+    }).catch(() => undefined);
+  }
+
   useEffect(() => {
     if (!lobby) {
       return;
@@ -1551,14 +1623,14 @@ export default function App() {
       if (next !== current) {
         publishLobbyState(next);
       }
-      const viewerId = viewerIdFor(lobbyRef.current, current.aiPlayerId);
-      const previousMoney = current.players.find((player) => player.id === viewerId)?.money ?? 0;
-      const nextMoney = next.players.find((player) => player.id === viewerId)?.money ?? previousMoney;
+      const effect = typeof tone === "function" ? tone(current, next) : tone;
+      const moneySoundPlayerId = moneySoundPlayerIdFor(current, lobbyRef.current);
+      const previousMoney = current.players.find((player) => player.id === moneySoundPlayerId)?.money ?? 0;
+      const nextMoney = next.players.find((player) => player.id === moneySoundPlayerId)?.money ?? previousMoney;
       if (nextMoney > previousMoney) {
         playSoundAsset(SOUND_ASSETS.money, 1.4);
       }
-      const effect = typeof tone === "function" ? tone(current, next) : tone;
-      if (effect) {
+      if (effect && effect !== "coin-sale") {
         playEffect(effect);
       }
       return next;
@@ -1572,7 +1644,7 @@ export default function App() {
 
     const timer = window.setTimeout(() => {
       runAiStep();
-    }, AI_TURN_DELAY_MS);
+    }, randomAiTurnDelayMs());
 
     return () => window.clearTimeout(timer);
   }, [state.pause.active, lobby, state.activePlayer, state.aiPlayerId, state.phase, state.round, state.players, state.upgradeQueue, state.upgradeOffer, state.choiceDraft]);
@@ -1698,45 +1770,59 @@ export default function App() {
 
   function exitToMenu() {
     const session = lobbyRef.current;
+    if (session) {
+      sendLobbyLeave(session);
+    }
     skipNextSessionSaveRef.current = true;
     clearSavedSession();
     setShowSettings(false);
     setShowRules(false);
+    setShowAbout(false);
+    setShowExitConfirm(false);
     setCutscene(null);
     setMenuView("main");
     setLobbyError("");
     setJoinCode("");
     setSyncStatus("local");
-    setState((current) => {
-      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
-      if (session) {
-        publishLobbyState(next, session, false);
-      }
-      return next;
-    });
+    setState((current) => buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds));
     lobbyRef.current = null;
     setLobby(null);
     playEffect("ui-click");
   }
 
-  function startAiGame(mode: AiMode) {
+  function requestExitToMenu() {
+    playEffect("ui-click");
+    setShowExitConfirm(true);
+  }
+
+  function cancelExitToMenu() {
+    playEffect("ui-click");
+    setShowExitConfirm(false);
+  }
+
+  function startAiGame(mode: AiMode, difficulty?: AiDifficultyOption) {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
     setLobbyError("");
     setSyncStatus("local");
+    setShowAiDifficulty(false);
     patchState((current) => {
       const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
       const intro =
         mode === "training"
           ? "Режим обучения: слабый ИИ играет за оппонента."
-          : "Игра против ИИ: ИИ играет за оппонента.";
+          : `Игра против ИИ: сложность ${difficulty?.label ?? "Зазывала"}.`;
+      const aiDifficulty = mode === "opponent" ? difficulty?.value ?? 14 : null;
+      const aiIntent = mode === "opponent" ? `Сложность: ${difficulty?.label ?? "Зазывала"}` : null;
       return {
         ...next,
         phase: "planning",
         aiPlayerId: AI_PLAYER_ID,
         aiMode: mode,
+        aiDifficulty,
         aiScore: 0,
+        aiIntent,
         logs: [intro, ...next.logs].slice(0, 24)
       };
     }, "customer-arrive");
@@ -2240,9 +2326,6 @@ export default function App() {
         buyer.shelfSlots += 1;
         buyer.shelf.push(null);
       }
-      if (upgrade.effect === "cozy_decor") {
-        buyer.money += 2;
-      }
 
       const queue = current.upgradeQueue.slice(1);
       const next = {
@@ -2404,8 +2487,9 @@ export default function App() {
       influenceDeckLength: current.influenceDeck.length
     };
     const isTrainingMode = current.aiMode === "training";
-    const plan = current.campaignRun
-      ? planAiPlanningTurnForDifficulty(input, aiPlayerId, current.campaignRun.aiDifficulty)
+    const aiDifficulty = current.campaignRun?.aiDifficulty ?? current.aiDifficulty;
+    const plan = aiDifficulty
+      ? planAiPlanningTurnForDifficulty(input, aiPlayerId, aiDifficulty)
       : isTrainingMode
         ? planWeakAiPlanningTurn(input, aiPlayerId)
         : planAiPlanningTurn(input, aiPlayerId);
@@ -2471,7 +2555,8 @@ export default function App() {
     const players = clonePlayersForAi(current.players);
     const buyer = players.find((player) => player.id === aiPlayerId)!;
     const isTrainingMode = current.aiMode === "training";
-    const useWeakUpgradePlan = isTrainingMode || Boolean(current.campaignRun && current.campaignRun.aiDifficulty <= 10);
+    const aiDifficulty = current.campaignRun?.aiDifficulty ?? current.aiDifficulty;
+    const useWeakUpgradePlan = isTrainingMode || Boolean(aiDifficulty && aiDifficulty <= 10);
     const choice = useWeakUpgradePlan ? chooseWeakAiUpgrade(buyer, current.upgradeOffer) : chooseAiUpgrade(buyer, current.upgradeOffer);
     const queue = current.upgradeQueue.slice(1);
     let upgradeOffer = current.upgradeOffer;
@@ -2487,9 +2572,6 @@ export default function App() {
         if (upgrade.effect === "extra_shelf") {
           buyer.shelfSlots += 1;
           buyer.shelf.push(null);
-        }
-        if (upgrade.effect === "cozy_decor") {
-          buyer.money += 2;
         }
 
         upgradeOffer = current.upgradeOffer.filter((candidate) => candidate.id !== upgrade.id);
@@ -2599,6 +2681,11 @@ export default function App() {
   const aiPlayer = state.aiPlayerId ? state.players.find((player) => player.id === state.aiPlayerId) ?? null : null;
   const completedGoalCount = state.partyGoals.filter((goal) => goal.completed).length;
   const currentCampaignLevel = state.campaignRun ? CAMPAIGN_LEVELS.find((level) => level.level === state.campaignRun?.level) ?? null : null;
+  const campaignCanAdvance = Boolean(state.campaignRun && finalResult.tone !== "defeat");
+  const nextCampaignLevel =
+    campaignCanAdvance && state.campaignRun ? CAMPAIGN_LEVELS.find((level) => level.level === state.campaignRun!.level + 1) ?? null : null;
+  const primaryCampaignEndLevel = state.campaignRun ? (campaignCanAdvance ? nextCampaignLevel ?? currentCampaignLevel : currentCampaignLevel) : null;
+  const primaryEndActionLabel = state.campaignRun ? (campaignCanAdvance && nextCampaignLevel ? "Следующий уровень" : "Повторить уровень") : "Сыграть ещё";
   const cutsceneFrame = cutscene ? CUTSCENE_FRAMES[cutscene.frameIndex] : null;
   const focusTrendTags = useMemo(() => new Set(state.activeTrends[0]?.modifiers.map((modifier) => modifier.tag) ?? []), [state.activeTrends]);
   const canEditTurnTime = !lobby || lobby.playerId === "A";
@@ -2623,13 +2710,19 @@ export default function App() {
                 <section className="menu-section" aria-labelledby="play-mode-title">
                   <h2 id="play-mode-title">Выберите режим</h2>
                   <div className="menu-primary-grid">
-                    <button className="primary-action" onClick={startGame}>
-                      <Play size={18} /> Новая игра
-                    </button>
                     <button className="primary-action" onClick={() => setMenuView("levels")}>
                       <MapIcon size={18} /> Ярмарка мира Ааах
                     </button>
-                    <button className="primary-action" onClick={() => startAiGame("opponent")}>
+                    <button className="primary-action" onClick={startGame}>
+                      <Play size={18} /> 2 игрока
+                    </button>
+                    <button
+                      className="primary-action"
+                      onClick={() => {
+                        playEffect("ui-click");
+                        setShowAiDifficulty(true);
+                      }}
+                    >
                       <Bot size={18} /> Против ИИ
                     </button>
                     <button className="primary-action" onClick={() => startAiGame("training")}>
@@ -2662,9 +2755,10 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+                  <div className="menu-network-divider" aria-hidden="true" />
                 </section>
 
-                <div className="menu-secondary-actions">
+                <div className="menu-footer-actions">
                   <button
                     onClick={() => {
                       playEffect("ui-click");
@@ -2681,6 +2775,23 @@ export default function App() {
                   >
                     <Settings size={18} /> Настройки
                   </button>
+                  <button
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowAbout(true);
+                    }}
+                  >
+                    <Info size={18} /> Об игре
+                  </button>
+                </div>
+
+                <div className="menu-support-actions" aria-label="Поддержать проект">
+                  <a href="https://buymeacoffee.com/zl0yxp" target="_blank" rel="noreferrer">
+                    <Coffee size={18} /> Buy Me a Coffee
+                  </a>
+                  <a href="https://www.paypal.com/donate/?hosted_button_id=CY7A2U64JWY4W" target="_blank" rel="noreferrer">
+                    <HandCoins size={18} /> PayPal
+                  </a>
                 </div>
               </div>
 
@@ -3147,8 +3258,8 @@ export default function App() {
             <p>{finalResult.message}</p>
             <div className="goal-badge">Цели партии: {completedGoalCount} / {state.partyGoals.length}</div>
             <div className="end-actions">
-              <button className="primary-action" onClick={currentCampaignLevel ? () => startCampaignLevel(currentCampaignLevel) : startGame}>
-                <RefreshCw size={18} /> Сыграть ещё
+              <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : startGame}>
+                {state.campaignRun && campaignCanAdvance && nextCampaignLevel ? <SkipForward size={18} /> : <RefreshCw size={18} />} {primaryEndActionLabel}
               </button>
               {state.campaignRun && (
                 <button
@@ -3160,10 +3271,25 @@ export default function App() {
                   <MapIcon size={18} /> Карта уровней
                 </button>
               )}
-              <button onClick={exitToMenu}>
+              <button onClick={requestExitToMenu}>
                 <X size={18} /> Выйти
               </button>
             </div>
+          </section>
+        </div>
+      )}
+
+      {waitingForLobbyPlayer && lobby && (
+        <div className="modal-backdrop lobby-wait-backdrop">
+          <section className="lobby-wait-modal" role="dialog" aria-label="Ожидание второго игрока">
+            <h2>Ожидание второго игрока</h2>
+            <p>Передайте код лобби второму игроку.</p>
+            <div className="lobby-code" aria-label="Код лобби">
+              {lobby.code}
+            </div>
+            <button onClick={exitToMenu}>
+              <LogOut size={18} /> Выйти
+            </button>
           </section>
         </div>
       )}
@@ -3219,9 +3345,44 @@ export default function App() {
               >
                 <Settings size={18} /> Настройки
               </button>
-              <button onClick={exitToMenu}>
+              <button onClick={requestExitToMenu}>
                 <LogOut size={18} /> Выйти в меню
               </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {showExitConfirm && (
+        <div className="modal-backdrop exit-confirm-backdrop">
+          <section className="confirm-modal" role="dialog" aria-label="Выйти в меню">
+            <h2>Выйти в меню</h2>
+            <p>Вы действительно хотите выйти? Текущая партия будет закрыта.</p>
+            <div className="confirm-actions">
+              <button className="primary-action" onClick={cancelExitToMenu}>
+                Остаться
+              </button>
+              <button onClick={exitToMenu}>
+                <LogOut size={18} /> Выйти
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {showAiDifficulty && (
+        <div className="modal-backdrop">
+          <section className="ai-difficulty-modal" role="dialog" aria-label="Сложность ИИ">
+            <button className="modal-close" aria-label="Закрыть" onClick={() => setShowAiDifficulty(false)}>
+              <X size={18} />
+            </button>
+            <h2>Сложность ИИ</h2>
+            <div className="ai-difficulty-list">
+              {AI_DIFFICULTIES.map((difficulty) => (
+                <button key={difficulty.label} className="primary-action" onClick={() => startAiGame("opponent", difficulty)}>
+                  <Bot size={18} /> {difficulty.label}
+                </button>
+              ))}
             </div>
           </section>
         </div>
@@ -3326,6 +3487,32 @@ export default function App() {
               <button type="button" disabled={state.phase === "menu" || state.phase === "game_end"} onClick={() => playMusicTrack(currentTrackIndex + 1, audioSettings.musicEnabled)}>
                 <SkipForward size={16} /> Следующий трек
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAbout && (
+        <div className="modal-backdrop">
+          <div className="about-modal" role="dialog" aria-label="Об игре">
+            <button className="modal-close" aria-label="Закрыть" onClick={() => setShowAbout(false)}>
+              <X size={18} />
+            </button>
+            <h2>Об игре</h2>
+            <p>
+              Игра сделана как личное развлечение, чтобы я мог поиграть со своей девушкой, а не как серьёзный проект.
+            </p>
+            <p>
+              Весь арт, включая музыку, сгенерирован через ИИ. Если кто-то из художников хочет нарисовать арт или написать музыкальное сопровождение,
+              я всегда рад такому.
+            </p>
+            <div className="about-links">
+              <a href="mailto:zloydeveloper.info@gmail.com">
+                <Mail size={18} /> zloydeveloper.info@gmail.com
+              </a>
+              <a href="https://github.com/KristopherZlo/Awww-Fair" target="_blank" rel="noreferrer">
+                <Github size={18} /> KristopherZlo/Awww-Fair <ExternalLink size={14} />
+              </a>
             </div>
           </div>
         </div>

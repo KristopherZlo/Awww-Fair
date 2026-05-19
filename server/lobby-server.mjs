@@ -8,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
 const port = Number(process.env.PORT ?? 5176);
+const seatTimeoutMs = Number(process.env.LOBBY_SEAT_TIMEOUT_MS ?? 7000);
 const rooms = new Map();
 
 const json = (response, status, body) => {
@@ -31,6 +32,33 @@ const roomView = (room, seat) => ({
     B: Boolean(room.seats.B)
   }
 });
+
+const touchSeat = (room, seat) => {
+  if (seat && room.seats[seat]) {
+    room.seats[seat].lastSeenAt = Date.now();
+  }
+};
+
+const expireInactiveSeats = (room) => {
+  if (!Number.isFinite(seatTimeoutMs) || seatTimeoutMs <= 0) {
+    return;
+  }
+
+  const now = Date.now();
+  let changed = false;
+  for (const seat of ["A", "B"]) {
+    const info = room.seats[seat];
+    if (info && now - (info.lastSeenAt ?? info.joinedAt ?? room.updatedAt) > seatTimeoutMs) {
+      room.seats[seat] = null;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    room.version += 1;
+    room.updatedAt = now;
+  }
+};
 
 const token = () => crypto.randomBytes(12).toString("hex");
 
@@ -133,7 +161,7 @@ const server = createServer(async (request, response) => {
         version: 1,
         state: body.state,
         seats: {
-          A: { token: token(), joinedAt: Date.now() },
+          A: { token: token(), joinedAt: Date.now(), lastSeenAt: Date.now() },
           B: null
         },
         updatedAt: Date.now()
@@ -149,16 +177,18 @@ const server = createServer(async (request, response) => {
       json(response, 404, { error: "Lobby not found." });
       return;
     }
+    expireInactiveSeats(room);
 
     if (request.method === "POST" && parts[3] === "join") {
-      if (room.seats.B) {
+      const openSeat = !room.seats.A ? "A" : !room.seats.B ? "B" : null;
+      if (!openSeat) {
         json(response, 409, { error: "Lobby already has two players." });
         return;
       }
-      room.seats.B = { token: token(), joinedAt: Date.now() };
+      room.seats[openSeat] = { token: token(), joinedAt: Date.now(), lastSeenAt: Date.now() };
       room.version += 1;
       room.updatedAt = Date.now();
-      json(response, 200, roomView(room, "B"));
+      json(response, 200, roomView(room, openSeat));
       return;
     }
 
@@ -168,7 +198,22 @@ const server = createServer(async (request, response) => {
         json(response, 401, { error: "Invalid lobby token." });
         return;
       }
+      touchSeat(room, seat);
       json(response, 200, roomView(room, seat));
+      return;
+    }
+
+    if (request.method === "POST" && parts[3] === "leave") {
+      const body = await readBody(request);
+      const seat = findSeat(room, body.token);
+      if (!seat || seat !== body.playerId) {
+        json(response, 401, { error: "Invalid lobby token." });
+        return;
+      }
+      room.seats[seat] = null;
+      room.version += 1;
+      room.updatedAt = Date.now();
+      json(response, 200, roomView(room, null));
       return;
     }
 
@@ -183,6 +228,7 @@ const server = createServer(async (request, response) => {
         json(response, 400, { error: "Game state is required." });
         return;
       }
+      touchSeat(room, seat);
       room.state = body.state;
       room.version += 1;
       room.updatedAt = Date.now();

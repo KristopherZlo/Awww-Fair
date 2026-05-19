@@ -77,6 +77,17 @@ describe("app layout CSS", () => {
     const css = readFileSync("src/styles.css", "utf8");
 
     expect(css).toMatch(/\.menu-primary-grid\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/\.menu-online-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/\.join-lobby\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/\.menu-network-divider\s*\{[\s\S]*height:\s*1px;/);
+    expect(css).toMatch(/\.menu-footer-actions\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/\.menu-support-actions\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+  });
+
+  it("keeps the game-end actions on one row on desktop widths", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+
+    expect(css).toMatch(/\.end-panel\s*\{[\s\S]*width:\s*min\(680px,\s*100%\);/);
   });
 
   it("centers cutscene subtitles and fades frame changes without a dark overlay", () => {

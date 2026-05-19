@@ -1075,12 +1075,16 @@ button.card {
 .primary-action,
 .menu-actions button,
 .menu-primary-grid button,
-.menu-secondary-actions button,
+.menu-footer-actions button,
+.menu-support-actions a,
 .settings-toggle,
 .upgrade-shop > button,
 .influence-controls button,
 .join-lobby button,
 .track-status button,
+.lobby-wait-modal button,
+.confirm-actions button,
+.about-links a,
 .modal-close {
   display: inline-flex;
   align-items: center;
@@ -1214,7 +1218,7 @@ button.card {
   display: grid;
   justify-items: center;
   gap: 12px;
-  width: min(520px, 100%);
+  width: min(680px, 100%);
   padding: 26px 24px;
   border: 1px solid rgba(248, 234, 210, 0.24);
   border-radius: 8px;
@@ -1293,7 +1297,11 @@ button.card {
 .choice-modal,
 .rules-modal,
 .settings-modal,
-.pause-modal {
+.pause-modal,
+.confirm-modal,
+.about-modal,
+.lobby-wait-modal,
+.ai-difficulty-modal {
   width: min(620px, 100%);
   padding: 18px;
   border: 1px solid rgba(248, 234, 210, 0.18);
@@ -1306,8 +1314,16 @@ button.card {
   z-index: 24;
 }
 
+.lobby-wait-backdrop {
+  z-index: 23;
+}
+
 .settings-backdrop {
   z-index: 26;
+}
+
+.exit-confirm-backdrop {
+  z-index: 28;
 }
 
 .pause-modal {
@@ -1359,6 +1375,52 @@ button.card {
   color: #20140c;
 }
 
+.confirm-modal,
+.about-modal,
+.lobby-wait-modal,
+.ai-difficulty-modal {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(500px, 100%);
+}
+
+.confirm-modal p,
+.lobby-wait-modal p,
+.about-modal p {
+  color: #d8c29f;
+}
+
+.lobby-wait-modal {
+  justify-items: center;
+  text-align: center;
+}
+
+.lobby-code {
+  width: min(280px, 100%);
+  padding: 13px 16px;
+  border: 1px solid rgba(248, 234, 210, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.1);
+  color: #ffe1a6;
+  font-size: 1.45rem;
+  font-weight: 950;
+  letter-spacing: 0.14em;
+}
+
+.confirm-actions,
+.about-links,
+.ai-difficulty-list {
+  display: grid;
+  gap: 8px;
+}
+
+.confirm-actions button,
+.about-links a {
+  min-height: 40px;
+  text-decoration: none;
+}
+
 .menu-box {
   display: grid;
   gap: 16px;
@@ -1390,22 +1452,48 @@ button.card {
 
 .menu-online-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 1fr;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
+}
+
+.menu-network-divider {
+  height: 1px;
+  background: rgba(248, 234, 210, 0.14);
 }
 
 .menu-actions,
-.join-lobby,
-.menu-secondary-actions {
+.join-lobby {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.menu-secondary-actions {
-  justify-content: flex-end;
+.join-lobby {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.menu-footer-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.menu-footer-actions {
   padding-top: 4px;
+}
+
+.menu-support-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.menu-support-actions a {
+  min-height: 38px;
+  text-decoration: none;
 }
 
 .menu-box h2 {
@@ -1597,7 +1685,7 @@ button.card {
 }
 
 .join-lobby input {
-  width: 136px;
+  width: 100%;
   text-transform: uppercase;
 }
 
@@ -1843,12 +1931,12 @@ button.card {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .menu-secondary-actions,
+  .menu-footer-actions,
   .join-lobby {
     justify-content: stretch;
   }
 
-  .menu-secondary-actions button,
+  .menu-footer-actions button,
   .join-lobby button,
   .join-lobby input {
     width: 100%;
