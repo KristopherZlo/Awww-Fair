@@ -699,6 +699,7 @@ describe("App layout shell", () => {
   });
 
   it("chooses AI opponent difficulty before starting a versus AI game", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
     const user = userEvent.setup();
     render(<App />);
 

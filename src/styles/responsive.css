@@ -1,0 +1,226 @@
+@keyframes deal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shelf-reject {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  22% {
+    transform: translateX(-4px);
+  }
+  48% {
+    transform: translateX(4px);
+  }
+  72% {
+    transform: translateX(-2px);
+  }
+}
+
+@keyframes cutscene-frame-in {
+  from {
+    opacity: 0.08;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes turn-cue-backdrop {
+  0% {
+    opacity: 0;
+  }
+  18%,
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes turn-cue-card {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  18%,
+  72% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+@media (max-width: 980px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-shell,
+  .app-shell.phase-upgrade,
+  .app-shell.phase-game_end {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto minmax(320px, auto) auto auto;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .top-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .top-actions,
+  .score-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .top-actions,
+  .score-row,
+  .top-pause {
+    justify-self: stretch;
+  }
+
+  .top-actions > *,
+  .score-row > *,
+  .top-pause {
+    height: auto;
+    width: 100%;
+  }
+
+  .sync-pill,
+  .ai-score,
+  .score,
+  .settings-toggle {
+    height: auto;
+  }
+
+  .trend-strip,
+  .customer-strip,
+  .table-grid,
+  .event-panel,
+  .hand-panel {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .event-panel {
+    max-height: 280px;
+  }
+
+  .hand-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .party-goal-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 760px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .hand-panel {
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+  }
+
+  .hand-columns {
+    overflow: visible;
+  }
+}
+
+@media (max-width: 680px) {
+  .trend-strip,
+  .customer-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .menu-primary-grid,
+  .menu-online-row {
+    grid-template-columns: 1fr;
+  }
+
+  .level-map-heading,
+  .cutscene-subtitles {
+    grid-template-columns: 1fr;
+  }
+
+  .cutscene-subtitles {
+    padding: 18px;
+  }
+
+  .cutscene-subtitles button {
+    position: static;
+    justify-self: center;
+  }
+
+  .level-road {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .menu-footer-actions,
+  .join-lobby {
+    justify-content: stretch;
+  }
+
+  .menu-footer-actions button,
+  .join-lobby button,
+  .join-lobby input {
+    width: 100%;
+  }
+
+  .shelf-grid {
+    grid-template-columns: repeat(2, minmax(120px, 1fr)) !important;
+  }
+
+  .score-row {
+    justify-content: stretch;
+  }
+
+  .score {
+    flex: 1;
+  }
+
+  .setting-row,
+  .track-status {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    animation: none;
+  }
+
+  .shelf-slot.slot-rejecting {
+    animation: none;
+  }
+
+  .turn-cue-backdrop,
+  .turn-cue {
+    animation: none;
+  }
+}
