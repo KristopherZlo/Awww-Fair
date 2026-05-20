@@ -17,8 +17,10 @@
     "preview:5175": "vite preview --host 127.0.0.1 --port 5175",
     "resize:customers": "node scripts/build-customer-atlases.mjs",
     "balance:skill": "vite-node scripts/ai-skill-check.ts",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --exclude src/game/aiSkillCheck.test.ts",
+    "test:watch": "vitest --exclude src/game/aiSkillCheck.test.ts",
+    "test:balance": "vitest run src/game/aiSkillCheck.test.ts --testTimeout 180000",
+    "test:all": "vitest run --testTimeout 180000"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
