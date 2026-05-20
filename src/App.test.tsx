@@ -3,7 +3,9 @@ import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { randomAiTurnDelayMs } from "./App";
+import { clearImagePreloadCacheForTest } from "./assetPreloader";
 import { CUSTOMER_CARDS, INFLUENCE_CARDS, PRODUCT_CARDS, TREND_CARDS, UPGRADE_CARDS } from "./data/cards";
+import { customerPersonalityDescription } from "./i18n";
 import type { PartyGoal } from "./game/goals";
 import type { PlayerId, PlayerState, ProductCard, ProductInstance } from "./game/types";
 
@@ -52,6 +54,31 @@ class MockAudio {
 }
 
 let mockAudioInstances: MockAudio[] = [];
+let mockImageSources: string[] = [];
+
+class MockImage {
+  decoding = "";
+  private currentSrc = "";
+
+  get src() {
+    return this.currentSrc;
+  }
+
+  set src(value: string) {
+    this.currentSrc = value;
+    mockImageSources.push(value);
+  }
+}
+
+function expectImagePreloaded(assetName: string) {
+  expect(mockImageSources.some((source) => source.includes(assetName))).toBe(true);
+}
+
+function buttonFromSelector(container: HTMLElement, selector: string) {
+  const button = container.querySelector(selector);
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  return button as HTMLButtonElement;
+}
 
 function productInstance(card: ProductCard, suffix: string): ProductInstance {
   return {
@@ -160,9 +187,23 @@ describe("App layout shell", () => {
     vi.useRealTimers();
     window.localStorage.clear();
     mockAudioInstances = [];
+    mockImageSources = [];
+    clearImagePreloadCacheForTest();
     Object.defineProperty(window, "Audio", {
       configurable: true,
       value: MockAudio as unknown as typeof Audio
+    });
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      value: MockImage as unknown as typeof Image
+    });
+    Object.defineProperty(window, "AudioContext", {
+      configurable: true,
+      value: undefined
+    });
+    Object.defineProperty(window, "webkitAudioContext", {
+      configurable: true,
+      value: undefined
     });
     Object.defineProperty(window.HTMLMediaElement.prototype, "play", {
       configurable: true,
@@ -223,22 +264,29 @@ describe("App layout shell", () => {
     expect(screen.getAllByRole("heading", { name: "Awww Fair: Hat Hustle", level: 1 }).length).toBeGreaterThan(0);
   });
 
-  it("explains the rules in short child-friendly steps", async () => {
+  it("explains the rules like a clear board-game manual", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /Правила/i }));
 
-    expect(screen.getByText(/Коротко: продавай товары клиентам/i)).toBeInTheDocument();
-    expect(screen.getByText(/В свой ход сделай до двух вещей/i)).toBeInTheDocument();
-    expect(screen.getByText(/Главный тег клиента даёт \+3/i)).toBeInTheDocument();
-    expect(screen.getByText(/Тренд не заменяет желание клиента/i)).toBeInTheDocument();
-    expect(screen.getByText(/желание клиента и тренд складываются/i)).toBeInTheDocument();
-    expect(screen.getByText(/лучший выбор — товар, где совпали и клиент, и тренд/i)).toBeInTheDocument();
-    expect(screen.getByText(/Если товар набрал меньше 5/i)).toBeInTheDocument();
-    expect(screen.getByText(/После 8 раунда побеждает тот, у кого больше монет/i)).toBeInTheDocument();
-    expect(screen.getByText(/Характеры клиентов влияют на покупку/i)).toBeInTheDocument();
-    expect(screen.getByText(/Любит скидки.*Дешёвые товары получают \+1/i)).toBeInTheDocument();
+    const rules = screen.getByText(/Цель игры:/i).closest(".rules-modal");
+    expect(rules).not.toBeNull();
+
+    expect(screen.getByText(/Цель игры: после 8 раундов иметь больше монет/i)).toBeInTheDocument();
+    expect(screen.getByText(/Раунд: в 1-2 раундах приходит 1 клиент/i)).toBeInTheDocument();
+    expect(screen.getByText(/В свой ход выставь или замени 1 товар/i)).toBeInTheDocument();
+    expect(screen.getByText(/Подсчёт привлекательности: главный тег клиента даёт \+3/i)).toBeInTheDocument();
+    expect(screen.getByText(/Тренды не заменяют желания клиента/i)).toBeInTheDocument();
+    expect(screen.getByText(/Главный тренд сильнее обычного/i)).toBeInTheDocument();
+    expect(screen.getByText(/Клиент покупает только товар, который набрал минимум 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/Если несколько товаров подходят/i)).toBeInTheDocument();
+    expect(screen.getByText(/Характеры клиентов:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Почти равный выбор.*товар со вторым результатом/i)).toBeInTheDocument();
+    expect(screen.getByText(/При продаже ты получаешь цену товара/i)).toBeInTheDocument();
+    expect(screen.getByText(/Цели партии дают \+2 монеты/i)).toBeInTheDocument();
+    expect(screen.getByText(/В режиме истории часть механик может быть временно отключена/i)).toBeInTheDocument();
+    expect(within(rules as HTMLElement).queryByText(/2-й вариант|второй вариант/i)).not.toBeInTheDocument();
   });
 
   it("labels local player as you and the other seat as opponent", async () => {
@@ -265,6 +313,24 @@ describe("App layout shell", () => {
     expect(container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
   });
 
+  it("labels local hotseat turns by player id", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+
+    expect(screen.getByRole("heading", { name: /Ход игрока [AB]/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Ваш ход!/i })).not.toBeInTheDocument();
+  });
+
+  it("labels the local controlled turn as yours outside hotseat mode", () => {
+    saveGameState({ activePlayer: "A", aiPlayerId: "B" });
+
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: /^Ваш ход!$/i })).toBeInTheDocument();
+  });
+
   it("restores an active local game after a page reload", async () => {
     const user = userEvent.setup();
     const firstRender = render(<App />);
@@ -282,7 +348,7 @@ describe("App layout shell", () => {
     const secondRender = render(<App />);
 
     expect(secondRender.container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
-    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Таймер хода/i)).toHaveTextContent(/Ход: 00:45/i);
     expect(screen.queryByRole("button", { name: /2 игрока/i })).not.toBeInTheDocument();
   });
 
@@ -347,7 +413,7 @@ describe("App layout shell", () => {
       fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
     });
 
-    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Таймер хода/i)).toHaveTextContent(/Ход: 00:45/i);
 
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /Пауза/i }));
@@ -369,7 +435,7 @@ describe("App layout shell", () => {
       vi.advanceTimersByTime(1000);
     });
 
-    expect(screen.getByText(/Ход: 00:44/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Таймер хода/i)).toHaveTextContent(/Ход: 00:44/i);
   });
 
   it("exits from pause to the main menu and clears the saved active game", async () => {
@@ -418,22 +484,6 @@ describe("App layout shell", () => {
     expect(screen.getByRole("slider", { name: /Громкость музыки/i })).toBeInTheDocument();
   });
 
-  it("pauses on sale resolution after both players are ready and then continues", async () => {
-    const user = userEvent.setup();
-    const { container } = render(<App />);
-
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
-    await user.click(screen.getByRole("button", { name: /готов/i }));
-    await user.click(screen.getByRole("button", { name: /готов/i }));
-
-    expect(container.querySelector(".app-shell")?.classList.contains("phase-sale_resolution")).toBe(true);
-    expect(screen.getAllByText(/итоги продаж/i).length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole("button", { name: /продолжить/i }));
-
-    expect(container.querySelector(".app-shell")?.classList.contains("phase-sale_resolution")).toBe(false);
-  });
-
   it("keeps the event panel in the app grid instead of inside the table", () => {
     const { container } = render(<App />);
     const shell = container.querySelector(".app-shell");
@@ -443,6 +493,86 @@ describe("App layout shell", () => {
     expect(eventPanel?.parentElement).toBe(shell);
     expect(table?.querySelector(".event-panel")).toBeNull();
     expect(table?.querySelectorAll(":scope > .shop-panel")).toHaveLength(2);
+  });
+
+  it("can collapse and reopen the event log", async () => {
+    const user = userEvent.setup();
+    saveGameState({ logs: ["Сыграно влияние: Реклама напитков (Вы)."] });
+    const { container } = render(<App />);
+
+    expect(container.querySelector(".event-log")).not.toBeNull();
+    expect(screen.getByText(/Сыграно влияние/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Свернуть лог/i }));
+
+    expect(container.querySelector(".event-panel")?.classList.contains("log-collapsed")).toBe(true);
+    expect(screen.queryByText(/Сыграно влияние/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Показать лог/i }));
+
+    expect(screen.getByText(/Сыграно влияние/i)).toBeInTheDocument();
+  });
+
+  it("keeps the planning sales forecast compact by default", () => {
+    saveGameState({
+      currentCustomers: [CUSTOMER_CARDS.find((customer) => customer.id === "family")!],
+      players: [
+        { ...testPlayer("A"), shelf: [productInstance(PRODUCT_CARDS.find((product) => product.id === "toy")!, "forecast"), null, null] },
+        testPlayer("B")
+      ],
+      activeTrends: []
+    }, null, { language: "en" });
+    const { container } = render(<App />);
+    const forecastPanel = container.querySelector(".event-panel.forecast-mode");
+    const firstToggle = forecastPanel?.querySelector(".sale-result-toggle");
+
+    expect(forecastPanel).not.toBeNull();
+    expect(firstToggle).not.toBeNull();
+    expect(firstToggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps multiple forecast formulas expanded independently", () => {
+    saveGameState({
+      currentCustomers: [
+        CUSTOMER_CARDS.find((customer) => customer.id === "family")!,
+        CUSTOMER_CARDS.find((customer) => customer.id === "office_worker")!
+      ],
+      players: [
+        {
+          ...testPlayer("A"),
+          shelf: [
+            productInstance(PRODUCT_CARDS.find((product) => product.id === "toy")!, "forecast-toy"),
+            productInstance(PRODUCT_CARDS.find((product) => product.id === "coffee")!, "forecast-coffee"),
+            null
+          ]
+        },
+        testPlayer("B")
+      ],
+      activeTrends: []
+    }, null, { language: "en" });
+    const { container } = render(<App />);
+    const toggles = Array.from(container.querySelectorAll<HTMLButtonElement>(".event-panel.forecast-mode .sale-result-toggle"));
+
+    expect(toggles.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(toggles[0]);
+    fireEvent.click(toggles[1]);
+
+    expect(toggles[0]).toHaveAttribute("aria-expanded", "true");
+    expect(toggles[1]).toHaveAttribute("aria-expanded", "true");
+    expect(container.querySelectorAll(".event-panel.forecast-mode .sale-result-card.expanded")).toHaveLength(2);
+  });
+
+  it("keeps the previous round formulas available after auto-continuing sales", async () => {
+    const user = userEvent.setup();
+    saveGameState({}, null, { language: "en" });
+    const { container } = render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /ready/i }));
+    await user.click(screen.getByRole("button", { name: /ready/i }));
+
+    expect(container.querySelector(".app-shell")?.classList.contains("phase-sale_resolution")).toBe(false);
+    expect(screen.queryByRole("button", { name: /continue/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /previous sales/i })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("renders card copy areas that can constrain labels inside cards", async () => {
@@ -459,24 +589,48 @@ describe("App layout shell", () => {
     expect(container.querySelector(".influence-card .influence-copy")).not.toBeNull();
   });
 
-  it("shows a focused tooltip for customer personality effects", () => {
+  it("hides customer personality effects in the standard game by default", () => {
     const student = CUSTOMER_CARDS.find((customer) => customer.id === "student")!;
     saveGameState({
       currentCustomers: [student],
       customerDeck: [],
       activeTrends: []
-    });
+    }, null, { language: "en" });
 
-    render(<App />);
+    const { container } = render(<App />);
 
-    const badge = screen.getByText("Любит скидки");
-    expect(badge).toHaveClass("personality-badge");
-    expect(badge).toHaveAttribute("aria-describedby");
+    expect(container.querySelectorAll(".personality-badge")).toHaveLength(0);
+  });
 
-    const tooltip = document.getElementById(badge.getAttribute("aria-describedby") ?? "");
-    expect(tooltip).not.toBeNull();
-    expect(tooltip).toHaveAttribute("role", "tooltip");
-    expect(tooltip).toHaveTextContent("Дешёвые товары получают +1 привлекательности.");
+  it("explains customer personality rules with direct mechanical copy for the DLC", () => {
+    const student = CUSTOMER_CARDS.find((customer) => customer.id === "student")!;
+    const blogger = CUSTOMER_CARDS.find((customer) => customer.id === "blogger")!;
+    const child = CUSTOMER_CARDS.find((customer) => customer.id === "child")!;
+
+    expect(customerPersonalityDescription("en", student)).toBe("+1 appeal for products tagged budget or priced 2 coins or less.");
+    expect(customerPersonalityDescription("en", blogger)).toBe("Only buys products with positive trend bonuses totaling 3 or more. Wishes and influence do not count.");
+    expect(customerPersonalityDescription("en", child)).toBe("May choose the second-highest scoring product when it is behind the best by 1 or less.");
+  });
+
+  it("does not show personality requirements in the standard sales calculation", async () => {
+    const user = userEvent.setup();
+    const officeWorker = CUSTOMER_CARDS.find((customer) => customer.id === "office_worker")!;
+    const coffee = productInstance(PRODUCT_CARDS.find((product) => product.id === "coffee")!, "office");
+    saveGameState({
+      currentCustomers: [officeWorker],
+      activeTrends: [],
+      playedInfluences: [{ id: "drink_ads", name: "Drink Ads", ownerId: "A", modifiers: [{ tag: "РЅР°РїРёС‚РѕРє", value: 1 }] }],
+      players: [{ ...testPlayer("A"), shelf: [coffee, null, null] }, testPlayer("B")]
+    }, null, { language: "en" });
+
+    const { container } = render(<App />);
+    const toggle = container.querySelector<HTMLButtonElement>(".sale-result-toggle");
+    expect(toggle).not.toBeNull();
+
+    await user.click(toggle as HTMLButtonElement);
+
+    expect(screen.queryByText(/trend bonus 0 \/ 2/i)).not.toBeInTheDocument();
+    expect(container.querySelector(".formula-requirement")).toBeNull();
   });
 
   it("uses responsive customer atlas assets instead of the oversized source atlas", () => {
@@ -484,8 +638,25 @@ describe("App layout shell", () => {
     const sprite = container.querySelector<HTMLElement>(".customer-sprite");
     const atlas = sprite?.style.getPropertyValue("--sprite-atlas");
 
-    expect(atlas).toContain("customer-atlas-128.png");
-    expect(atlas).toContain("customer-atlas-256.png");
+    expect(atlas).toContain("customer-atlas-128.webp");
+    expect(atlas).toContain("customer-atlas-256.webp");
+  });
+
+  it("uses the compressed WebP product atlas for product sprites", () => {
+    saveGameState({});
+    const { container } = render(<App />);
+    const sprite = container.querySelector<HTMLElement>(".product-sprite");
+    const atlas = sprite?.style.getPropertyValue("--sprite-atlas");
+
+    expect(atlas).toContain("product-atlas.webp");
+  });
+
+  it("preloads customer and product card atlases when the app opens", () => {
+    render(<App />);
+
+    expectImagePreloaded("customer-atlas-128.webp");
+    expectImagePreloaded("customer-atlas-256.webp");
+    expectImagePreloaded("product-atlas.webp");
   });
 
   it("presents menu actions in clear play and online sections", () => {
@@ -594,6 +765,31 @@ describe("App layout shell", () => {
     expect(screen.getAllByText(/Биби \(Bibi\)/i).length).toBeGreaterThan(0);
   });
 
+  it("preloads the first cutscene card when the locked story map opens", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(buttonFromSelector(container, ".menu-primary-grid .primary-action"));
+
+    expect(buttonFromSelector(container, ".level-node:nth-child(1)")).toBeEnabled();
+    expect(buttonFromSelector(container, ".level-node:nth-child(2)")).toBeDisabled();
+    expectImagePreloaded("cutscene/aaakh-01.webp");
+  });
+
+  it("preloads the next cutscene card while the current one is shown", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(buttonFromSelector(container, ".menu-primary-grid .primary-action"));
+    await user.click(buttonFromSelector(container, ".level-node:nth-child(1)"));
+
+    expectImagePreloaded("cutscene/aaakh-02.webp");
+
+    await user.click(buttonFromSelector(container, ".cutscene-subtitles .primary-action"));
+
+    expectImagePreloaded("cutscene/aaakh-03.webp");
+  });
+
   it("starts the first campaign level without trends, goals, or influence cards", async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
@@ -604,6 +800,7 @@ describe("App layout shell", () => {
 
     expect(container.querySelectorAll(".trend-strip .trend-card")).toHaveLength(0);
     expect(container.querySelectorAll(".party-goal")).toHaveLength(0);
+    expect(container.querySelectorAll(".personality-badge")).toHaveLength(0);
     expect(screen.queryByRole("heading", { name: /^Влияние$/i })).not.toBeInTheDocument();
   });
 
@@ -919,7 +1116,44 @@ describe("App layout shell", () => {
 
     const cue = container.querySelector(".turn-cue-backdrop");
     expect(cue).not.toBeNull();
-    expect(cue).toHaveTextContent("Вы");
+    expect(cue).toHaveTextContent(/Ход игрока [AB]/i);
+
+    act(() => {
+      vi.advanceTimersByTime(1400);
+    });
+
+    expect(container.querySelector(".turn-cue-backdrop")).toBeNull();
+  });
+
+  it("clears the turn cue when its animation ends", async () => {
+    vi.useFakeTimers();
+    const { container } = render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
+
+    const cue = container.querySelector(".turn-cue-backdrop");
+    expect(cue).not.toBeNull();
+
+    fireEvent.animationEnd(cue as Element);
+
+    expect(container.querySelector(".turn-cue-backdrop")).toBeNull();
+  });
+
+  it("clears the turn cue even when the turn-start sound fails", async () => {
+    vi.useFakeTimers();
+    saveGameState({ activePlayer: "A", aiPlayerId: "B" });
+    Object.defineProperty(window, "AudioContext", {
+      configurable: true,
+      value: class {
+        constructor() {
+          throw new Error("AudioContext unavailable");
+        }
+      }
+    });
+
+    const { container } = render(<App />);
+
+    expect(container.querySelector(".turn-cue-backdrop")).not.toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(1400);
@@ -1098,7 +1332,8 @@ describe("App layout shell", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /Готов/i }));
 
-    expect(document.querySelector(".app-shell.phase-sale_resolution")).not.toBeNull();
+    expect(document.querySelector(".app-shell.phase-sale_resolution")).toBeNull();
+    expect(screen.getByRole("button", { name: /Итоги прошлого раунда/i })).toBeInTheDocument();
     expect(mockAudioInstances.filter((audio) => /money\.wav/.test(audio.src))).toHaveLength(1);
   });
 
@@ -1121,7 +1356,8 @@ describe("App layout shell", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /Готов/i }));
 
-    expect(document.querySelector(".app-shell.phase-sale_resolution")).not.toBeNull();
+    expect(document.querySelector(".app-shell.phase-sale_resolution")).toBeNull();
+    expect(screen.getByRole("button", { name: /Итоги прошлого раунда/i })).toBeInTheDocument();
     expect(mockAudioInstances.filter((audio) => /money\.wav/.test(audio.src))).toHaveLength(0);
   });
 
@@ -1212,13 +1448,15 @@ describe("App layout shell", () => {
     expect(screen.queryByText(/Внимание: эффект выгоднее сопернику/i)).not.toBeInTheDocument();
   });
 
-  it("shows short sales insight feedback after resolving sales", async () => {
+  it("shows short sales insight feedback in the previous round review", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /2 игрока/i }));
     await user.click(screen.getByRole("button", { name: /Готов/i }));
     await user.click(screen.getByRole("button", { name: /Готов/i }));
+
+    await user.click(screen.getByRole("button", { name: /Итоги прошлого раунда/i }));
 
     expect(screen.getByText(/Коротко о продажах/i)).toBeInTheDocument();
     expect(screen.getAllByText(/выбрал|ничего не купил|выбрала/i).length).toBeGreaterThan(0);
@@ -1345,5 +1583,210 @@ describe("App layout shell", () => {
     expect(screen.getByText(/совет тренера/i)).toBeInTheDocument();
     expect(screen.getAllByText(/лучше/i).length).toBeGreaterThan(0);
     await waitFor(() => expect(container.querySelector(".coach-recommended")).not.toBeNull(), { timeout: 2500 });
+  });
+
+  it("exposes hidden correct-move markers for local planning recommendations without coach UI", () => {
+    const localPlayer = testPlayer("A");
+    localPlayer.productHand = [
+      productInstance(PRODUCT_CARDS.find((product) => product.id === "bread")!, "bread-helper"),
+      productInstance(PRODUCT_CARDS.find((product) => product.id === "cake")!, "cake-helper")
+    ];
+    localPlayer.influenceHand = [INFLUENCE_CARDS.find((card) => card.id === "sweet_smell")!];
+
+    saveGameState({
+      activePlayer: "A",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      players: [localPlayer, testPlayer("B")],
+      currentCustomers: [CUSTOMER_CARDS.find((customer) => customer.id === "child")!],
+      activeTrends: [TREND_CARDS.find((trend) => trend.id === "sweet_day")!]
+    });
+
+    const { container } = render(<App />);
+
+    expect(container.querySelector(".coach-panel")).toBeNull();
+    expect(container.querySelector(".coach-recommended")).toBeNull();
+
+    const correctProduct = container.querySelector('[data-correct-product-id="cake-cake-helper"][data-correct-move="true"]');
+    expect(correctProduct).not.toBeNull();
+    expect(container.querySelector('[data-correct-influence-id="sweet_smell"][data-correct-move="true"]')).not.toBeNull();
+
+    fireEvent.click(correctProduct as Element);
+
+    expect(container.querySelector('[data-correct-owner-id="A"][data-correct-slot-index="0"][data-correct-move="true"]')).not.toBeNull();
+  });
+
+  it("exposes hidden correct-move markers for upgrade and choice-modal recommendations", () => {
+    const buyer = testPlayer("A");
+    buyer.money = 9;
+
+    saveGameState({
+      phase: "upgrade",
+      activePlayer: "A",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      players: [buyer, testPlayer("B")],
+      upgradeOffer: ["regular_customers", "extra_shelf", "bright_sign"].map((id) => UPGRADE_CARDS.find((upgrade) => upgrade.id === id)!),
+      upgradeQueue: ["A", "B"]
+    });
+
+    const upgradeRender = render(<App />);
+
+    expect(upgradeRender.container.querySelector('[data-correct-upgrade-id="extra_shelf"][data-correct-move="true"]')).not.toBeNull();
+
+    upgradeRender.unmount();
+    window.localStorage.clear();
+
+    const localPlayer = testPlayer("A");
+    localPlayer.productHand = [];
+    saveGameState({
+      activePlayer: "A",
+      aiPlayerId: "B",
+      aiMode: "opponent",
+      players: [localPlayer, testPlayer("B")],
+      currentCustomers: [CUSTOMER_CARDS.find((customer) => customer.id === "child")!],
+      activeTrends: [TREND_CARDS.find((trend) => trend.id === "kids_day")!],
+      choiceDraft: {
+        playerId: "A",
+        type: "product",
+        cards: [
+          productInstance(PRODUCT_CARDS.find((product) => product.id === "bread")!, "bread-choice"),
+          productInstance(PRODUCT_CARDS.find((product) => product.id === "toy")!, "toy-choice")
+        ]
+      }
+    });
+
+    const choiceRender = render(<App />);
+
+    expect(choiceRender.container.querySelector('.choice-modal [data-correct-product-id="toy-toy-choice"][data-correct-move="true"]')).not.toBeNull();
+  });
+
+  it("adds a product card for mini storage at the start of the next round", async () => {
+    const user = userEvent.setup();
+    const buyer = {
+      ...testPlayer("A"),
+      money: 5,
+      productHand: [
+        productInstance(PRODUCT_CARDS[0], "hand-1"),
+        productInstance(PRODUCT_CARDS[1], "hand-2"),
+        productInstance(PRODUCT_CARDS[2], "hand-3"),
+        productInstance(PRODUCT_CARDS[3], "hand-4")
+      ]
+    };
+
+    saveGameState({
+      phase: "upgrade",
+      round: 2,
+      firstPlayer: "B",
+      activePlayer: "A",
+      players: [buyer, testPlayer("B")],
+      productDeck: [productInstance(PRODUCT_CARDS[4], "mini-storage-draw")],
+      upgradeOffer: [UPGRADE_CARDS.find((upgrade) => upgrade.id === "mini_storage")!],
+      upgradeQueue: ["A"]
+    }, null, { language: "en" });
+    const { container } = render(<App />);
+
+    await user.click(container.querySelector<HTMLButtonElement>('[data-correct-upgrade-id="mini_storage"]')!);
+
+    expect(container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
+    expect(container.querySelectorAll(".hand-panel .product-card")).toHaveLength(5);
+  });
+
+  it("auto-skips an upgrade choice after twenty seconds", () => {
+    vi.useFakeTimers();
+    const buyer = testPlayer("A");
+    buyer.money = 9;
+    saveGameState({
+      phase: "upgrade",
+      activePlayer: "A",
+      players: [buyer, testPlayer("B")],
+      upgradeOffer: ["regular_customers", "extra_shelf"].map((id) => UPGRADE_CARDS.find((upgrade) => upgrade.id === id)!),
+      upgradeQueue: ["A", "B"]
+    }, null, { language: "en" });
+    const { container } = render(<App />);
+
+    expect(container.querySelector(".turn-timer")).toHaveTextContent("00:20");
+
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+
+    expect(screen.getByText(/B chooses/i)).toBeInTheDocument();
+  });
+
+  it("shows a silent countdown during the online opponent planning turn", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    saveGameState(
+      {
+        activePlayer: "B",
+        turnTimeSeconds: 15
+      },
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 3,
+        seats: { A: true, B: true }
+      },
+      { language: "en" }
+    );
+    const { container } = render(<App />);
+
+    expect(container.querySelector(".turn-timer")).toHaveTextContent("Opponent turn: 00:15");
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(container.querySelector(".turn-timer")).toHaveTextContent("Opponent turn: 00:14");
+    expect(container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
+  });
+
+  it("restarts an online lobby game without dropping to a local table", async () => {
+    let postedState: Record<string, unknown> | null = null;
+    saveGameState(
+      {
+        phase: "game_end",
+        players: [
+          { ...testPlayer("A"), money: 8 },
+          { ...testPlayer("B"), money: 2 }
+        ]
+      },
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 3,
+        seats: { A: true, B: true }
+      },
+      { language: "en" }
+    );
+    const saved = JSON.parse(window.localStorage.getItem("trend-market-session-v1") ?? "{}") as { state: Record<string, unknown> };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/network") {
+          return new Response(JSON.stringify({ urls: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (init?.method === "PUT") {
+          postedState = JSON.parse(String(init.body)).state;
+          return new Response(
+            JSON.stringify({ code: "ABCD2", playerId: "A", token: "host-token", version: 4, state: postedState, seats: { A: true, B: true } }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response(
+          JSON.stringify({ code: "ABCD2", playerId: "A", token: "host-token", version: 3, state: saved.state, seats: { A: true, B: true } }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      })
+    );
+    const { container } = render(<App />);
+
+    fireEvent.click(container.querySelector<HTMLButtonElement>(".end-actions .primary-action")!);
+
+    await waitFor(() => expect(postedState?.phase).toBe("planning"));
+    expect(screen.getByText(/lobby code ABCD2/i)).toBeInTheDocument();
   });
 });

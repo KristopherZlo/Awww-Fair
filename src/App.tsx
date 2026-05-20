@@ -31,6 +31,8 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { appAssetUrl } from "./assetUrl";
+import { preloadImage, preloadImages } from "./assetPreloader";
 import {
   CUSTOMER_CARDS,
   INFLUENCE_CARDS,
@@ -51,9 +53,31 @@ import {
   trendModifierValue
 } from "./game/engine";
 import { createPartyGoals, normalizePartyGoal, PARTY_GOAL_REWARD, updatePartyGoalsAfterSales, type PartyGoal } from "./game/goals";
-import { chooseAiUpgrade, chooseWeakAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn, type AiInfluenceMove, type AiPlanningPlan } from "./game/ai";
+import { drawCompatibleTrends } from "./game/trends";
+import {
+  chooseAiInfluenceChoice,
+  chooseAiProductChoice,
+  chooseAiUpgrade,
+  chooseWeakAiUpgrade,
+  planAiPlanningTurn,
+  planAiPlanningTurnForDifficulty,
+  planWeakAiPlanningTurn,
+  type AiInfluenceMove,
+  type AiPlanningPlan
+} from "./game/ai";
 import { clampVolume, playSoundEffect, primeSoundEffects, type SoundEffectId } from "./audio/soundEffects";
-import { CAMPAIGN_LEVELS, campaignProgressAfterWin, createDefaultCampaignProgress, isLevelUnlocked, type CampaignLevel, type CampaignProgress } from "./game/levels";
+import {
+  CAMPAIGN_LEVELS,
+  campaignCustomerForRules,
+  campaignProgressAfterWin,
+  campaignRulesForLevel,
+  createDefaultCampaignProgress,
+  isLevelUnlocked,
+  type CampaignCustomerPersonalityMode,
+  type CampaignLevel,
+  type CampaignLevelRules,
+  type CampaignProgress
+} from "./game/levels";
 import {
   LANGUAGE_OPTIONS,
   type Language,
@@ -87,17 +111,20 @@ import type {
   PlayerState,
   ProductAdjustment,
   ProductInstance,
+  PurchaseCandidateRequirement,
+  PurchasePersonalityChoice,
   PurchaseResult,
   Tag,
   TrendCard as TrendCardType,
   UpgradeCard as UpgradeCardType
 } from "./game/types";
 
-const assetUrl = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
-const PRODUCT_ATLAS = assetUrl("product-atlas.png");
-const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.png");
-const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.png");
-const MARKET_BG = assetUrl("market-bg.png");
+const assetUrl = appAssetUrl;
+const PRODUCT_ATLAS = assetUrl("product-atlas.webp");
+const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.webp");
+const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.webp");
+const MARKET_BG = assetUrl("market-bg.webp");
+const CARD_PRELOAD_IMAGES = [CUSTOMER_ATLAS, CUSTOMER_ATLAS_2X, PRODUCT_ATLAS] as const;
 const GAME_TITLE = "Awww Fair: Hat Hustle";
 const MENU_TRACK = { title: "Main Menu", src: assetUrl("music/main-menu.mp3") } as const;
 const CUTSCENE_TRACK = { title: "Cutscene", src: assetUrl("music/cutscene.mp3") } as const;
@@ -122,6 +149,9 @@ const SOUND_ASSETS = {
   victory: assetUrl("sounds/victory.wav")
 } as const;
 const TURN_CUE_MS = 1200;
+const CUSTOMER_PERSONALITIES_ENABLED = import.meta.env.VITE_ENABLE_CUSTOMER_PERSONALITIES === "true";
+const UPGRADE_CHOICE_SECONDS = 20;
+const CAMPAIGN_RULE_OPTIONS = { customerPersonalitiesEnabled: CUSTOMER_PERSONALITIES_ENABLED } as const;
 
 const DEFAULT_AUDIO_SETTINGS = {
   musicEnabled: true,
@@ -136,45 +166,55 @@ interface InitialStateOptions {
   influenceHandSize: number;
   trendCount: number;
   partyGoalCount: number;
+  customerPersonalityMode: CampaignCustomerPersonalityMode;
 }
 
 const DEFAULT_INITIAL_STATE_OPTIONS: InitialStateOptions = {
   influenceHandSize: 2,
   trendCount: 3,
-  partyGoalCount: 3
+  partyGoalCount: 3,
+  customerPersonalityMode: "off"
+};
+
+const STANDARD_CUSTOMER_RULES: CampaignLevelRules = {
+  trendCount: DEFAULT_INITIAL_STATE_OPTIONS.trendCount,
+  partyGoalCount: DEFAULT_INITIAL_STATE_OPTIONS.partyGoalCount,
+  influenceHandSize: DEFAULT_INITIAL_STATE_OPTIONS.influenceHandSize,
+  purchaseAppealThreshold: PURCHASE_APPEAL_THRESHOLD,
+  customerPersonalityMode: DEFAULT_INITIAL_STATE_OPTIONS.customerPersonalityMode
 };
 
 const CUTSCENE_FRAMES = [
   {
-    image: assetUrl("cutscene/aaakh-01.png"),
+    image: assetUrl("cutscene/aaakh-01.webp"),
     text: "В мире Ааах начинается большая ярмарка."
   },
   {
-    image: assetUrl("cutscene/aaakh-02.png"),
+    image: assetUrl("cutscene/aaakh-02.webp"),
     text: "Каждый год лучшие продавцы собираются на Великой ярмарке мира Ааах."
   },
   {
-    image: assetUrl("cutscene/aaakh-03.png"),
+    image: assetUrl("cutscene/aaakh-03.webp"),
     text: "Но в этот раз у нас есть цель - заработать на новую шляпу."
   },
   {
-    image: assetUrl("cutscene/aaakh-04.png"),
+    image: assetUrl("cutscene/aaakh-04.webp"),
     text: "Чтобы купить её, нужно стать лучшими продавцами ярмарки."
   },
   {
-    image: assetUrl("cutscene/aaakh-05.png"),
+    image: assetUrl("cutscene/aaakh-05.webp"),
     text: "Наша лавка готова. Всё только начинается."
   },
   {
-    image: assetUrl("cutscene/aaakh-06.png"),
+    image: assetUrl("cutscene/aaakh-06.webp"),
     text: "Но победа не достанется просто так."
   },
   {
-    image: assetUrl("cutscene/aaakh-07.png"),
+    image: assetUrl("cutscene/aaakh-07.webp"),
     text: "Первый клиент уже идёт!"
   },
   {
-    image: assetUrl("cutscene/aaakh-08.png"),
+    image: assetUrl("cutscene/aaakh-08.webp"),
     text: "Пора открыть лавку и начать путь к новой шляпе."
   }
 ] as const;
@@ -222,6 +262,12 @@ interface CampaignRun {
   unlockRecorded: boolean;
 }
 
+interface SaleReview {
+  round: number;
+  results: PurchaseResult[];
+  insights: string[];
+}
+
 interface GameState {
   phase: Phase;
   round: number;
@@ -239,6 +285,7 @@ interface GameState {
   roundBonuses: ProductAdjustment[];
   saleResults: PurchaseResult[];
   saleInsights: string[];
+  lastSaleReview: SaleReview | null;
   logs: string[];
   selectedProductId: string | null;
   selectedInfluenceId: string | null;
@@ -328,14 +375,24 @@ function clampTurnTime(seconds: number) {
 function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SECONDS, options: InitialStateOptions = DEFAULT_INITIAL_STATE_OPTIONS): GameState {
   let productDeck = makeProductDeck();
   let influenceDeck = shuffleDeck([...INFLUENCE_CARDS]);
-  let customerDeck = shuffleDeck([...CUSTOMER_CARDS]);
+  let customerDeck = shuffleDeck(
+    CUSTOMER_CARDS.map((customer) =>
+      campaignCustomerForRules(customer, {
+        trendCount: options.trendCount,
+        partyGoalCount: options.partyGoalCount,
+        influenceHandSize: options.influenceHandSize,
+        purchaseAppealThreshold: PURCHASE_APPEAL_THRESHOLD,
+        customerPersonalityMode: options.customerPersonalityMode
+      })
+    )
+  );
   let trendDeck = shuffleDeck([...TREND_CARDS]);
 
   const [aProducts, afterAProducts] = draw(productDeck, 4);
   const [bProducts, afterBProducts] = draw(afterAProducts, 4);
   const [aInfluence, afterAInfluence] = draw(influenceDeck, options.influenceHandSize);
   const [bInfluence, afterBInfluence] = draw(afterAInfluence, options.influenceHandSize);
-  const [trends, afterTrends] = draw(trendDeck, options.trendCount);
+  const [trends, afterTrends] = drawCompatibleTrends(trendDeck, options.trendCount);
   const [customers, afterCustomers] = draw(customerDeck, 1);
   const firstPlayer = Math.random() > 0.5 ? "A" : "B";
 
@@ -361,6 +418,7 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
     roundBonuses: [],
     saleResults: [],
     saleInsights: [],
+    lastSaleReview: null,
     logs: [`Добро пожаловать в ${GAME_TITLE}.`],
     selectedProductId: null,
     selectedInfluenceId: null,
@@ -382,15 +440,21 @@ function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SEC
 }
 
 function campaignInitialStateOptions(level: number): InitialStateOptions {
+  const rules = campaignRulesForLevel(level, CAMPAIGN_RULE_OPTIONS);
   return {
-    trendCount: level >= 7 ? 3 : level >= 5 ? 2 : level >= 3 ? 1 : 0,
-    partyGoalCount: level >= 8 ? 3 : level >= 6 ? 2 : level >= 4 ? 1 : 0,
-    influenceHandSize: level >= 9 ? 2 : level >= 7 ? 1 : 0
+    trendCount: rules.trendCount,
+    partyGoalCount: rules.partyGoalCount,
+    influenceHandSize: rules.influenceHandSize,
+    customerPersonalityMode: rules.customerPersonalityMode
   };
 }
 
 function influenceHandSizeForState(state: GameState) {
   return state.campaignRun ? campaignInitialStateOptions(state.campaignRun.level).influenceHandSize : DEFAULT_INITIAL_STATE_OPTIONS.influenceHandSize;
+}
+
+function purchaseAppealThresholdForState(state: Pick<GameState, "campaignRun">) {
+  return state.campaignRun ? campaignRulesForLevel(state.campaignRun.level, CAMPAIGN_RULE_OPTIONS).purchaseAppealThreshold : PURCHASE_APPEAL_THRESHOLD;
 }
 
 function opponentOf(playerId: PlayerId): PlayerId {
@@ -455,6 +519,18 @@ function formatTurnTime(seconds: number) {
     .padStart(2, "0");
   const rest = (safeSeconds % 60).toString().padStart(2, "0");
   return `${minutes}:${rest}`;
+}
+
+function shouldExposeLocalHintMarkers() {
+  return import.meta.env.DEV || (typeof document !== "undefined" && document.documentElement.dataset.localHintMarkers === "true");
+}
+
+function localHintValue<T extends string | number>(value: T) {
+  return shouldExposeLocalHintMarkers() ? value : undefined;
+}
+
+function localHintMove(value: boolean) {
+  return shouldExposeLocalHintMarkers() && value ? "true" : undefined;
 }
 
 export function randomAiTurnDelayMs() {
@@ -545,13 +621,33 @@ function isWinningCandidate(result: PurchaseResult, candidate: PurchaseResult["c
   );
 }
 
+function formatCandidateRequirement(requirement: PurchaseCandidateRequirement, language: Language) {
+  if (language === "en") {
+    return `personality: trend bonus ${requirement.actual} / ${requirement.required} - ${requirement.passed ? "matches" : "does not match"}`;
+  }
+
+  return `характер: трендовый бонус ${requirement.actual} / ${requirement.required} - ${requirement.passed ? "подходит" : "не подходит"}`;
+}
+
+function formatPersonalityChoice(choice: PurchasePersonalityChoice, language: Language) {
+  if (language === "en") {
+    return choice.applied
+      ? `personality: bought the second-highest product, gap ${choice.appealGap} / ${choice.maxAppealGap}`
+      : `personality: kept the highest product, gap ${choice.appealGap} / ${choice.maxAppealGap}`;
+  }
+
+  return choice.applied
+    ? `характер: куплен товар со вторым результатом, разница ${choice.appealGap} / ${choice.maxAppealGap}`
+    : `характер: куплен лучший товар, разница ${choice.appealGap} / ${choice.maxAppealGap}`;
+}
+
 function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, language: Language) {
   if (language === "en") {
     if (!result.winner) {
       if (result.customer.personality?.kind === "trend_chaser") {
         return `${customerName(language, result.customer)} bought nothing: no product matched the needed trend.`;
       }
-      return `${customerName(language, result.customer)} bought nothing: no product reached ${PURCHASE_APPEAL_THRESHOLD} appeal.`;
+      return `${customerName(language, result.customer)} bought nothing: no product reached ${result.appealThreshold} appeal.`;
     }
 
     return `${customerName(language, result.customer)} chose ${productName(language, result.winner.product)}: ${displayPlayerName(
@@ -565,7 +661,7 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
     if (result.customer.personality?.kind === "trend_chaser") {
       return `${result.customer.name} ничего не купил: ни один товар не попал в нужный тренд.`;
     }
-    return `${result.customer.name} ничего не купил: ни один товар не набрал ${PURCHASE_APPEAL_THRESHOLD} привлекательности.`;
+    return `${result.customer.name} ничего не купил: ни один товар не набрал ${result.appealThreshold} привлекательности.`;
   }
 
   const winnerName = displayPlayerName(result.winner.ownerId, viewerId, language);
@@ -756,6 +852,7 @@ function ProductCard({
   compact = false,
   selected = false,
   recommended = false,
+  correctMove = false,
   disabled = false,
   ariaDisabled = false,
   onClick,
@@ -767,6 +864,7 @@ function ProductCard({
   compact?: boolean;
   selected?: boolean;
   recommended?: boolean;
+  correctMove?: boolean;
   disabled?: boolean;
   ariaDisabled?: boolean;
   onClick?: () => void;
@@ -780,6 +878,9 @@ function ProductCard({
       className={`card product-card ${compact ? "compact" : ""} ${selected ? "selected" : ""} ${recommended ? "coach-recommended" : ""}`}
       disabled={disabled}
       aria-disabled={ariaDisabled || disabled || undefined}
+      data-correct-product-id={localHintValue(product.instanceId)}
+      data-correct-card-id={localHintValue(product.cardId)}
+      data-correct-move={localHintMove(correctMove)}
       onClick={onClick}
       title={title}
     >
@@ -809,7 +910,7 @@ function CustomerCard({ customer, focusTags, language }: { customer: CustomerCar
   return (
     <div
       className="card customer-card"
-      title={
+      aria-label={
         language === "en"
           ? `${label}: primary ${tagText(language, customer.primaryTag)}, secondary ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Personality: ${personalityDescription}` : ""}`
           : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Характер: ${personalityDescription}` : ""}`
@@ -856,6 +957,7 @@ function InfluenceCard({
   card,
   selected,
   recommended = false,
+  correctMove = false,
   disabled,
   onClick,
   language
@@ -863,6 +965,7 @@ function InfluenceCard({
   card: InfluenceCardType;
   selected: boolean;
   recommended?: boolean;
+  correctMove?: boolean;
   disabled: boolean;
   onClick: () => void;
   language: Language;
@@ -870,7 +973,14 @@ function InfluenceCard({
   const label = influenceName(language, card);
   const description = influenceDescription(language, card);
   return (
-    <button className={`card influence-card ${selected ? "selected" : ""} ${recommended ? "coach-recommended" : ""}`} disabled={disabled} onClick={onClick} title={description}>
+    <button
+      className={`card influence-card ${selected ? "selected" : ""} ${recommended ? "coach-recommended" : ""}`}
+      disabled={disabled}
+      data-correct-influence-id={localHintValue(card.id)}
+      data-correct-move={localHintMove(correctMove)}
+      onClick={onClick}
+      title={description}
+    >
       <ScrollText size={20} />
       <span className="influence-copy card-copy">
         <strong>{label}</strong>
@@ -883,18 +993,27 @@ function InfluenceCard({
 function UpgradeCard({
   upgrade,
   canBuy,
+  correctMove = false,
   onBuy,
   language
 }: {
   upgrade: UpgradeCardType;
   canBuy: boolean;
+  correctMove?: boolean;
   onBuy: () => void;
   language: Language;
 }) {
   const label = upgradeName(language, upgrade);
   const description = upgradeDescription(language, upgrade);
   return (
-    <button className="card upgrade-card" disabled={!canBuy} onClick={onBuy} title={description}>
+    <button
+      className="card upgrade-card"
+      disabled={!canBuy}
+      data-correct-upgrade-id={localHintValue(upgrade.id)}
+      data-correct-move={localHintMove(correctMove)}
+      onClick={onBuy}
+      title={description}
+    >
       <PackagePlus size={22} />
       <strong>{label}</strong>
       <span>{description}</span>
@@ -953,14 +1072,48 @@ function isRestorableGameState(value: unknown): value is GameState {
 }
 
 function normalizeSavedGameState(state: GameState): GameState {
+  const campaignRun = normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun);
+  const activeCustomerRules = campaignRun ? campaignRulesForLevel(campaignRun.level, CAMPAIGN_RULE_OPTIONS) : STANDARD_CUSTOMER_RULES;
+  const normalizeCustomer = (customer: CustomerCardType) => campaignCustomerForRules(customer, activeCustomerRules);
+  const normalizeSaleReview = (review: unknown): SaleReview | null => {
+    if (!isRecord(review) || typeof review.round !== "number" || !Array.isArray(review.results)) {
+      return null;
+    }
+    return {
+      round: review.round,
+      results: review.results.map((result) => ({
+        ...result,
+        customer: normalizeCustomer(result.customer),
+        appealThreshold: typeof result.appealThreshold === "number" ? result.appealThreshold : activeCustomerRules.purchaseAppealThreshold
+      })),
+      insights: Array.isArray(review.insights) ? review.insights.filter((line): line is string => typeof line === "string") : []
+    };
+  };
+
   return {
     ...state,
+    currentCustomers:
+      Array.isArray(state.currentCustomers)
+        ? state.currentCustomers.map(normalizeCustomer)
+        : state.currentCustomers,
+    customerDeck:
+      Array.isArray(state.customerDeck)
+        ? state.customerDeck.map(normalizeCustomer)
+        : state.customerDeck,
+    saleResults: Array.isArray(state.saleResults)
+      ? state.saleResults.map((result) => ({
+          ...result,
+          customer: normalizeCustomer(result.customer),
+          appealThreshold: typeof result.appealThreshold === "number" ? result.appealThreshold : activeCustomerRules.purchaseAppealThreshold
+        }))
+      : [],
     saleInsights: Array.isArray(state.saleInsights) ? state.saleInsights : [],
+    lastSaleReview: normalizeSaleReview((state as GameState & { lastSaleReview?: unknown }).lastSaleReview),
     pause: state.pause && typeof state.pause.active === "boolean" ? state.pause : { active: false, pausedBy: null },
     partyGoals: Array.isArray(state.partyGoals) ? state.partyGoals.map(normalizePartyGoal) : createPartyGoals(state.activeTrends, state.currentCustomers),
     aiIntent: typeof state.aiIntent === "string" ? state.aiIntent : null,
     aiDifficulty: typeof (state as GameState & { aiDifficulty?: unknown }).aiDifficulty === "number" ? Math.max(1, Math.min(24, Math.round(state.aiDifficulty ?? 1))) : null,
-    campaignRun: normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun),
+    campaignRun,
     turnTimeSeconds: clampTurnTime(typeof (state as GameState & { turnTimeSeconds?: unknown }).turnTimeSeconds === "number" ? state.turnTimeSeconds : DEFAULT_TURN_TIME_SECONDS)
   };
 }
@@ -1119,8 +1272,13 @@ export default function App() {
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>("idle");
   const [rejectedSlot, setRejectedSlot] = useState<string | null>(null);
+  const [logCollapsed, setLogCollapsed] = useState(false);
   const [turnSecondsLeft, setTurnSecondsLeft] = useState(() => state.turnTimeSeconds);
-  const [turnCue, setTurnCue] = useState<{ key: string; label: string } | null>(null);
+  const [armedTurnTimerKey, setArmedTurnTimerKey] = useState(() => `${state.round}-${state.activePlayer}-${state.phase}-${state.upgradeQueue[0] ?? ""}`);
+  const [expandedSaleResultKeys, setExpandedSaleResultKeys] = useState<Set<string>>(() => new Set());
+  const [lastSaleReviewOpen, setLastSaleReviewOpen] = useState(false);
+  const [turnCue, setTurnCue] = useState<{ key: string; label: string; expiresAt: number } | null>(null);
+  const [localHintMarkersEnabled, setLocalHintMarkersEnabled] = useState(() => shouldExposeLocalHintMarkers());
   const lobbyRef = useRef<LobbySession | null>(null);
   const applyingRemoteRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1132,11 +1290,46 @@ export default function App() {
   const previousShowSettingsRef = useRef(showSettings);
   const gameEndJinglePlayedRef = useRef(false);
   const autoReadyTurnRef = useRef<string | null>(null);
+  const autoSkipUpgradeRef = useRef<string | null>(null);
   const rejectTimerRef = useRef<number | null>(null);
   const turnCueTimerRef = useRef<number | null>(null);
   const lastTurnCueKeyRef = useRef<string | null>(null);
   const skipNextSessionSaveRef = useRef(false);
   const language = audioSettings.language;
+  const salePanelId = useId();
+
+  useEffect(() => {
+    preloadImages(CARD_PRELOAD_IMAGES);
+  }, []);
+
+  useEffect(() => {
+    if (state.phase === "menu" && menuView === "levels" && campaignProgress.highestUnlockedLevel === 1) {
+      preloadImage(CUTSCENE_FRAMES[0]?.image);
+    }
+  }, [campaignProgress.highestUnlockedLevel, menuView, state.phase]);
+
+  useEffect(() => {
+    if (!cutscene) {
+      return;
+    }
+
+    preloadImage(CUTSCENE_FRAMES[cutscene.frameIndex + 1]?.image);
+  }, [cutscene?.frameIndex]);
+
+  useEffect(() => {
+    const syncLocalHintMarkers = () => setLocalHintMarkersEnabled(shouldExposeLocalHintMarkers());
+
+    syncLocalHintMarkers();
+    window.addEventListener("local-hint-markers-change", syncLocalHintMarkers);
+
+    const observer = new MutationObserver(syncLocalHintMarkers);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-local-hint-markers"] });
+
+    return () => {
+      window.removeEventListener("local-hint-markers-change", syncLocalHintMarkers);
+      observer.disconnect();
+    };
+  }, []);
 
   const activePlayer = state.players.find((player) => player.id === state.activePlayer) ?? state.players[0];
   const isAiTurn = Boolean(state.aiPlayerId && state.activePlayer === state.aiPlayerId);
@@ -1145,12 +1338,24 @@ export default function App() {
   const opponentPlayer = state.players.find((player) => player.id === opponentOf(localPlayer.id)) ?? state.players[1];
   const handPlayer = lobby || state.aiPlayerId ? localPlayer : activePlayer;
   const waitingForLobbyPlayer = Boolean(lobby && state.phase !== "game_end" && (!lobby.seats.A || !lobby.seats.B));
-  const localPlanningTurn = state.phase === "planning" && !waitingForLobbyPlayer && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer) && !state.choiceDraft;
+  const planningTurnActive = state.phase === "planning" && !waitingForLobbyPlayer && !state.pause.active && !state.choiceDraft;
+  const localPlanningTurn = planningTurnActive && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
   const canControlActivePlayer = !waitingForLobbyPlayer && !state.pause.active && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
+  const opponentPlanningTurn = planningTurnActive && !localPlanningTurn;
+  const upgradeTurnActive = state.phase === "upgrade" && !waitingForLobbyPlayer && !state.pause.active && state.upgradeQueue.length > 0;
+  const localUpgradeTurn = upgradeTurnActive && canControlActivePlayer;
+  const showTurnTimer = planningTurnActive || upgradeTurnActive;
   const canResolveChoiceDraft = Boolean(state.choiceDraft && (!lobby || lobby.playerId === state.choiceDraft.playerId));
   const selectedInfluence = handPlayer.influenceHand.find((card) => card.id === state.selectedInfluenceId) ?? null;
   const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId, language), [state.players, localPlayerId, language]);
   const isTimedLocalTurn = localPlanningTurn && !state.pause.active;
+  const isHotseatGame = !lobby && !state.aiPlayerId;
+  const activeTurnLabel = isHotseatGame
+    ? ui(language, "hotseatTurn", { player: state.activePlayer })
+    : canControlActivePlayer
+      ? ui(language, "yourTurn")
+      : `${ui(language, "opponentTurn")} · ${displayPlayerNameFor(activePlayer, localPlayerId, language)}`;
+  const turnCueLabel = isHotseatGame ? ui(language, "hotseatTurn", { player: state.activePlayer }) : ui(language, "yourTurn");
   const musicStatusText =
     language === "en"
       ? musicStatus === "playing"
@@ -1332,22 +1537,26 @@ export default function App() {
   }, [state.phase, state.campaignRun, state.players]);
 
   useEffect(() => {
-    setTurnSecondsLeft(state.turnTimeSeconds);
+    setArmedTurnTimerKey(`${state.round}-${state.activePlayer}-${state.phase}-${state.upgradeQueue[0] ?? ""}`);
+    setTurnSecondsLeft(state.phase === "upgrade" ? UPGRADE_CHOICE_SECONDS : state.turnTimeSeconds);
     autoReadyTurnRef.current = null;
-  }, [state.phase, state.activePlayer, state.round, state.turnTimeSeconds]);
+    autoSkipUpgradeRef.current = null;
+  }, [state.phase, state.activePlayer, state.upgradeQueue[0], state.round, state.turnTimeSeconds]);
 
   useEffect(() => {
-    if (!isTimedLocalTurn) {
+    if (!showTurnTimer) {
       return;
     }
 
     const timer = window.setInterval(() => {
       setTurnSecondsLeft((seconds) => Math.max(0, seconds - 1));
-      playEffect("timer-tick");
+      if (isTimedLocalTurn) {
+        playEffect("timer-tick");
+      }
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [isTimedLocalTurn, state.phase, state.activePlayer, state.round]);
+  }, [showTurnTimer, isTimedLocalTurn, state.phase, state.activePlayer, state.upgradeQueue[0], state.round]);
 
   useEffect(() => {
     const shouldCue =
@@ -1363,27 +1572,60 @@ export default function App() {
     }
 
     lastTurnCueKeyRef.current = cueKey;
+    setTurnCue({ key: cueKey, label: turnCueLabel, expiresAt: Date.now() + TURN_CUE_MS });
+    playEffect("turn-start");
+  }, [state.phase, state.activePlayer, state.round, state.pause.active, waitingForLobbyPlayer, isAiTurn, lobby?.code, lobby?.playerId, turnCueLabel]);
+
+  useEffect(() => {
+    if (!turnCue) {
+      return;
+    }
+
     if (turnCueTimerRef.current !== null) {
       window.clearTimeout(turnCueTimerRef.current);
     }
 
-    setTurnCue({ key: cueKey, label: ui(language, "you") });
-    playEffect("turn-start");
+    const remainingMs = Math.max(0, turnCue.expiresAt - Date.now());
     turnCueTimerRef.current = window.setTimeout(() => {
-      setTurnCue((current) => (current?.key === cueKey ? null : current));
+      setTurnCue((current) => (current?.key === turnCue.key ? null : current));
       turnCueTimerRef.current = null;
-    }, TURN_CUE_MS);
-  }, [state.phase, state.activePlayer, state.round, state.pause.active, waitingForLobbyPlayer, isAiTurn, lobby?.code, lobby?.playerId, language]);
+    }, remainingMs);
+
+    return () => {
+      if (turnCueTimerRef.current !== null) {
+        window.clearTimeout(turnCueTimerRef.current);
+        turnCueTimerRef.current = null;
+      }
+    };
+  }, [turnCue?.key, turnCue?.expiresAt]);
 
   useEffect(() => {
-    const turnKey = `${state.round}-${state.activePlayer}-${state.phase}`;
-    if (!isTimedLocalTurn || turnSecondsLeft > 0 || autoReadyTurnRef.current === turnKey) {
+    const turnKey = `${state.round}-${state.activePlayer}-${state.phase}-${state.upgradeQueue[0] ?? ""}`;
+    if (armedTurnTimerKey !== turnKey || !isTimedLocalTurn || turnSecondsLeft > 0 || autoReadyTurnRef.current === turnKey) {
       return;
     }
 
     autoReadyTurnRef.current = turnKey;
     readyPlayer();
-  }, [isTimedLocalTurn, turnSecondsLeft, state.round, state.activePlayer, state.phase]);
+  }, [armedTurnTimerKey, isTimedLocalTurn, turnSecondsLeft, state.round, state.activePlayer, state.phase, state.upgradeQueue]);
+
+  useEffect(() => {
+    const turnKey = `${state.round}-${state.activePlayer}-${state.phase}-${state.upgradeQueue[0] ?? ""}`;
+    if (armedTurnTimerKey !== turnKey || !localUpgradeTurn || turnSecondsLeft > 0 || autoSkipUpgradeRef.current === turnKey) {
+      return;
+    }
+
+    autoSkipUpgradeRef.current = turnKey;
+    skipUpgrade();
+  }, [armedTurnTimerKey, localUpgradeTurn, turnSecondsLeft, state.round, state.activePlayer, state.phase, state.upgradeQueue]);
+
+  useEffect(() => {
+    if (state.phase !== "sale_resolution" || state.pause.active || (lobby && lobby.playerId !== state.activePlayer)) {
+      return;
+    }
+
+    continueSalesResolution();
+  }, [state.phase, state.pause.active, state.activePlayer, lobby?.playerId]);
 
   useEffect(() => {
     return () => {
@@ -1658,7 +1900,11 @@ export default function App() {
 
   function playEffect(kind: SoundEffectId) {
     const audio = audioSettingsRef.current;
-    playSoundEffect(audio.effectsEnabled, kind, audio.effectsVolume);
+    try {
+      playSoundEffect(audio.effectsEnabled, kind, audio.effectsVolume);
+    } catch {
+      // Audio is cosmetic; gameplay and state transitions must continue.
+    }
   }
 
   function playSoundAsset(src: string, boost = 1, fallback?: SoundEffectId) {
@@ -1727,6 +1973,10 @@ export default function App() {
     });
   }
 
+  function resolvedSalesReview(current: GameState, next: GameState) {
+    return next.lastSaleReview && next.lastSaleReview !== current.lastSaleReview && next.lastSaleReview.round === current.round ? next.lastSaleReview : null;
+  }
+
   function soundEffectForStateTransition(current: GameState, next: GameState): SoundEffectId | undefined {
     if (next === current) {
       return undefined;
@@ -1734,8 +1984,10 @@ export default function App() {
     if (next.phase === "game_end" && current.phase !== "game_end") {
       return "game-win";
     }
-    if (next.saleResults.length > current.saleResults.length) {
-      return next.saleResults.some((result) => result.winner) ? "coin-sale" : "round-end";
+    const saleReview = resolvedSalesReview(current, next);
+    if (saleReview || next.saleResults.length > current.saleResults.length) {
+      const results = saleReview?.results ?? next.saleResults;
+      return results.some((result) => result.winner) ? "coin-sale" : "round-end";
     }
     if (next.playedInfluences.length > current.playedInfluences.length) {
       return "influence-play";
@@ -1941,6 +2193,26 @@ export default function App() {
         ...next,
         phase: "planning",
         logs: audioSettingsRef.current.language === "en" ? [`Welcome to ${GAME_TITLE}.`] : next.logs
+      };
+    }, "customer-arrive");
+  }
+
+  function restartGame() {
+    if (!lobbyRef.current) {
+      startGame();
+      return;
+    }
+
+    musicModeRef.current = "menu";
+    setLobbyError("");
+    setSyncStatus("syncing");
+    patchState((current) => {
+      const next = buildInitialState(current.sound, current.turnTimeSeconds);
+      const language = audioSettingsRef.current.language;
+      return {
+        ...next,
+        phase: "planning",
+        logs: language === "en" ? [`New online game started in lobby ${lobbyRef.current?.code}.`] : next.logs
       };
     }, "customer-arrive");
   }
@@ -2211,6 +2483,15 @@ export default function App() {
     const nextFirstPlayer = opponentOf(current.firstPlayer);
     const customerCount = nextRound <= 2 ? 1 : 2;
     const [customers, customerDeck] = draw(current.customerDeck, customerCount);
+    let productDeck = current.productDeck;
+    let influenceDeck = current.influenceDeck;
+    const influenceHandSize = influenceHandSizeForState(current);
+    const players = current.players.map(resetPlayerForPlanning).map((player) => {
+      let updated = player;
+      [updated, productDeck] = drawProductsToLimit(updated, productDeck);
+      [updated, influenceDeck] = drawInfluencesToLimit(updated, influenceDeck, influenceHandSize);
+      return updated;
+    });
 
     return {
       ...current,
@@ -2218,7 +2499,9 @@ export default function App() {
       round: nextRound,
       firstPlayer: nextFirstPlayer,
       activePlayer: nextFirstPlayer,
-      players: current.players.map(resetPlayerForPlanning),
+      players,
+      productDeck,
+      influenceDeck,
       customerDeck,
       currentCustomers: customers,
       playedInfluences: [],
@@ -2240,6 +2523,7 @@ export default function App() {
     const saleResults: PurchaseResult[] = [];
     const viewerId = viewerIdFor(lobbyRef.current, current.aiPlayerId);
     const language = audioSettingsRef.current.language;
+    const purchaseAppealThreshold = purchaseAppealThresholdForState(current);
 
     current.currentCustomers.forEach((customer, customerIndex) => {
       const result = resolveCustomerPurchase({
@@ -2250,7 +2534,8 @@ export default function App() {
         roundBonuses: current.roundBonuses,
         firstPlayer: current.firstPlayer,
         customerIndex,
-        round: current.round
+        round: current.round,
+        rules: { appealThreshold: purchaseAppealThreshold }
       });
 
       saleResults.push(result);
@@ -2258,8 +2543,8 @@ export default function App() {
       if (!result.winner) {
         logs.push(
           language === "en"
-            ? `${customerName(language, customer)} bought nothing: appeal was below ${PURCHASE_APPEAL_THRESHOLD}.`
-            : `${customer.name} ничего не купил: совпадение ниже ${PURCHASE_APPEAL_THRESHOLD}.`
+            ? `${customerName(language, customer)} bought nothing: appeal was below ${purchaseAppealThreshold}.`
+            : `${customer.name} ничего не купил: совпадение ниже ${purchaseAppealThreshold}.`
         );
         return;
       }
@@ -2316,6 +2601,7 @@ export default function App() {
       players: rewardedPlayers,
       saleResults,
       saleInsights,
+      lastSaleReview: { round: current.round, results: saleResults, insights: saleInsights },
       partyGoals: goalProgress.goals,
       selectedProductId: null,
       selectedInfluenceId: null,
@@ -2346,7 +2632,7 @@ export default function App() {
 
     const shouldShiftTrends = current.activeTrends.length > 0;
     const shiftedTrends = shouldShiftTrends ? current.activeTrends.slice(1) : [];
-    const [newTrend, trendDeck]: [TrendCardType[], TrendCardType[]] = shouldShiftTrends ? draw(current.trendDeck, 1) : [[], current.trendDeck];
+    const [newTrend, trendDeck]: [TrendCardType[], TrendCardType[]] = shouldShiftTrends ? drawCompatibleTrends(current.trendDeck, 1, shiftedTrends) : [[], current.trendDeck];
     const activeTrends = [...shiftedTrends, ...(newTrend.length ? newTrend : [])];
     const trendLogs = shouldShiftTrends
       ? [
@@ -2683,13 +2969,15 @@ export default function App() {
         };
       }
 
-      return resolveRoundSales({ ...current, players });
+      return continueAfterSales(resolveRoundSales({ ...current, players }));
     }, (current, next) => {
       if (next.phase === "game_end") {
         return "game-win";
       }
-      if (next.saleResults.length > current.saleResults.length) {
-        return next.saleResults.some((result) => result.winner) ? "coin-sale" : "round-end";
+      const saleReview = resolvedSalesReview(current, next);
+      if (saleReview || next.saleResults.length > current.saleResults.length) {
+        const results = saleReview?.results ?? next.saleResults;
+        return results.some((result) => result.winner) ? "coin-sale" : "round-end";
       }
       if (next.activePlayer !== current.activePlayer) {
         return "ready-confirm";
@@ -2908,7 +3196,10 @@ export default function App() {
       playedInfluences: current.playedInfluences,
       roundBonuses: current.roundBonuses,
       productDeckLength: current.productDeck.length,
-      influenceDeckLength: current.influenceDeck.length
+      influenceDeckLength: current.influenceDeck.length,
+      purchaseAppealThreshold: purchaseAppealThresholdForState(current),
+      firstPlayer: current.firstPlayer,
+      round: current.round
     };
     const isTrainingMode = current.aiMode === "training";
     const aiDifficulty = current.campaignRun?.aiDifficulty ?? current.aiDifficulty;
@@ -2978,7 +3269,7 @@ export default function App() {
       };
     }
 
-    return resolveRoundSales(baseState);
+    return continueAfterSales(resolveRoundSales(baseState));
   }
 
   function applyAiUpgradeTurn(current: GameState, aiPlayerId: PlayerId): GameState {
@@ -3056,8 +3347,10 @@ export default function App() {
       if (next.phase === "game_end") {
         return "game-win";
       }
-      if (next.saleResults.length > current.saleResults.length) {
-        return next.saleResults.some((result) => result.winner) ? "coin-sale" : "round-end";
+      const saleReview = resolvedSalesReview(current, next);
+      if (saleReview || next.saleResults.length > current.saleResults.length) {
+        const results = saleReview?.results ?? next.saleResults;
+        return results.some((result) => result.winner) ? "coin-sale" : "round-end";
       }
       if (next.phase === "upgrade" && current.phase !== "upgrade") {
         return "trend-shift";
@@ -3078,13 +3371,16 @@ export default function App() {
       : [];
   const forecastSaleResults = state.phase === "planning" ? calculateRoundSales(state).saleResults : [];
   const shownSaleResults = state.phase === "planning" ? forecastSaleResults : state.saleResults;
+  const currentPurchaseAppealThreshold = purchaseAppealThresholdForState(state);
   const shownSaleInsights =
     state.phase === "sale_resolution" && state.saleResults.length > 0
       ? state.saleResults.map((result) => describeSaleInsight(result, localPlayerId, language))
       : state.saleInsights;
   const salePanelTitle = state.phase === "planning" ? ui(language, "saleForecast") : state.phase === "sale_resolution" ? ui(language, "saleResults") : ui(language, "saleCalculation");
   const nextCustomer = state.customerDeck[0] ?? null;
-  const nextTrend = state.trendDeck[0] ?? null;
+  const nextTrendPool = state.activeTrends.length > 0 ? state.activeTrends.slice(1) : state.activeTrends;
+  const [previewNextTrends] = drawCompatibleTrends(state.trendDeck, 1, nextTrendPool);
+  const nextTrend = previewNextTrends[0] ?? null;
   const showUpcomingCards = state.round < 8 && state.phase !== "game_end";
   const showUpcomingTrends = showUpcomingCards && (!state.campaignRun || state.activeTrends.length > 0);
   const influenceImpact = selectedInfluence ? influenceImpactLines(selectedInfluence, handPlayer, opponentPlayer, state.selectedTag) : [];
@@ -3102,7 +3398,10 @@ export default function App() {
         playedInfluences: state.playedInfluences,
         roundBonuses: state.roundBonuses,
         productDeckLength: state.productDeck.length,
-        influenceDeckLength: state.influenceDeck.length
+        influenceDeckLength: state.influenceDeck.length,
+        purchaseAppealThreshold: currentPurchaseAppealThreshold,
+        firstPlayer: state.firstPlayer,
+        round: state.round
       },
       localPlayer.id
     );
@@ -3117,12 +3416,111 @@ export default function App() {
     state.roundBonuses,
     state.productDeck.length,
     state.influenceDeck.length,
+    currentPurchaseAppealThreshold,
+    state.firstPlayer,
+    state.round,
     localPlayer.id
+  ]);
+  const correctMovePlanningPlan = useMemo(() => {
+    if (!localHintMarkersEnabled || state.phase !== "planning" || state.choiceDraft || !canControlActivePlayer) {
+      return null;
+    }
+
+    return planAiPlanningTurn(
+      {
+        players: state.players,
+        currentCustomers: state.currentCustomers,
+        activeTrends: state.activeTrends,
+        playedInfluences: state.playedInfluences,
+        roundBonuses: state.roundBonuses,
+        productDeckLength: state.productDeck.length,
+        influenceDeckLength: state.influenceDeck.length,
+        purchaseAppealThreshold: currentPurchaseAppealThreshold,
+        firstPlayer: state.firstPlayer,
+        round: state.round
+      },
+      handPlayer.id
+    );
+  }, [
+    state.phase,
+    state.choiceDraft,
+    canControlActivePlayer,
+    state.players,
+    state.currentCustomers,
+    state.activeTrends,
+    state.playedInfluences,
+    state.roundBonuses,
+    state.productDeck.length,
+    state.influenceDeck.length,
+    currentPurchaseAppealThreshold,
+    state.firstPlayer,
+    state.round,
+    handPlayer.id,
+    localHintMarkersEnabled
+  ]);
+  const correctMoveUpgradeId = useMemo(() => {
+    if (!localHintMarkersEnabled || state.phase !== "upgrade" || !canControlActivePlayer) {
+      return null;
+    }
+
+    const buyer = state.players.find((player) => player.id === state.upgradeQueue[0]);
+    return buyer ? chooseAiUpgrade(buyer, state.upgradeOffer)?.upgradeId ?? null : null;
+  }, [state.phase, canControlActivePlayer, state.players, state.upgradeQueue, state.upgradeOffer, localHintMarkersEnabled]);
+  const correctMoveChoiceCardId = useMemo(() => {
+    if (!localHintMarkersEnabled || !state.choiceDraft || !canResolveChoiceDraft) {
+      return null;
+    }
+
+    const draftPlayer = state.players.find((player) => player.id === state.choiceDraft?.playerId);
+    const opponent = draftPlayer ? state.players.find((player) => player.id === opponentOf(draftPlayer.id)) : null;
+    if (!draftPlayer || !opponent) {
+      return null;
+    }
+
+    const input = {
+      players: state.players,
+      currentCustomers: state.currentCustomers,
+      activeTrends: state.activeTrends,
+      playedInfluences: state.playedInfluences,
+      roundBonuses: state.roundBonuses,
+      productDeckLength: state.productDeck.length,
+      influenceDeckLength: state.influenceDeck.length,
+      purchaseAppealThreshold: currentPurchaseAppealThreshold,
+      firstPlayer: state.firstPlayer,
+      round: state.round
+    };
+
+    if (state.choiceDraft.type === "product") {
+      const products = state.choiceDraft.cards.filter((card): card is ProductInstance => card.type === "product");
+      return chooseAiProductChoice(input, draftPlayer, products)?.cardId ?? null;
+    }
+
+    const influences = state.choiceDraft.cards.filter((card): card is InfluenceCardType => card.type === "influence");
+    return chooseAiInfluenceChoice(input, draftPlayer, opponent, influences)?.cardId ?? null;
+  }, [
+    state.choiceDraft,
+    canResolveChoiceDraft,
+    state.players,
+    state.currentCustomers,
+    state.activeTrends,
+    state.playedInfluences,
+    state.roundBonuses,
+    state.productDeck.length,
+    state.influenceDeck.length,
+    currentPurchaseAppealThreshold,
+    state.firstPlayer,
+    state.round,
+    localHintMarkersEnabled
   ]);
   const coachAdvice = buildCoachAdvice(coachPlan, localPlayer, language);
   const coachProductId = coachPlan?.productMove?.productInstanceId ?? null;
   const coachSlotIndex = coachPlan?.productMove?.slotIndex ?? null;
   const coachInfluenceId = coachPlan?.influenceMove?.cardId ?? null;
+  const correctMoveProductId = correctMovePlanningPlan?.productMove?.productInstanceId ?? null;
+  const correctMoveSlotIndex = correctMovePlanningPlan?.productMove?.slotIndex ?? null;
+  const correctMoveInfluenceMove = correctMovePlanningPlan?.influenceMove ?? null;
+  const correctMoveInfluenceId = correctMoveInfluenceMove?.cardId ?? null;
+  const correctMoveTableSlotIndex = correctMovePlanningPlan?.tableBonusMove?.slotIndex ?? null;
   const tablePlayers = [opponentPlayer, localPlayer];
   const aiPlayer = state.aiPlayerId ? state.players.find((player) => player.id === state.aiPlayerId) ?? null : null;
   const completedGoalCount = state.partyGoals.filter((goal) => goal.completed).length;
@@ -3141,6 +3539,74 @@ export default function App() {
     state.players.some((player) => player.influenceHand.length > 0) ||
     (!state.campaignRun && state.influenceDeck.length > 0) ||
     Boolean(state.campaignRun && influenceHandSizeForState(state) > 0);
+  const showPlanningTimer = state.phase === "planning" && !waitingForLobbyPlayer && !state.choiceDraft;
+  const showUpgradeTimer = state.phase === "upgrade" && showTurnTimer;
+  const planningTimerText = ui(language, opponentPlanningTurn ? "opponentTurnTimeShort" : "turnTimeShort", { time: formatTurnTime(turnSecondsLeft) });
+  const upgradeTimerText = ui(language, localUpgradeTurn ? "upgradeTimeShort" : "opponentTurnTimeShort", { time: formatTurnTime(turnSecondsLeft) });
+
+  function toggleSaleResultKey(key: string) {
+    setExpandedSaleResultKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function renderSaleResultCards(results: PurchaseResult[], namespace: string) {
+    return results.map((result, index) => {
+      const key = `${namespace}-${result.customer.id}-${index}`;
+      const contentId = `${salePanelId}-${key}`;
+      const expanded = expandedSaleResultKeys.has(key);
+      return (
+        <div key={key} className={`sale-result-card ${expanded ? "expanded" : ""}`}>
+          <button
+            type="button"
+            className="sale-result-toggle"
+            aria-expanded={expanded}
+            aria-controls={contentId}
+            onClick={() => toggleSaleResultKey(key)}
+          >
+            <span>{customerName(language, result.customer)}: {result.winner ? `${productName(language, result.winner.product)} ${ownerPhrase(result.winner.ownerId, localPlayerId, language)}` : ui(language, "noPurchase")}</span>
+          </button>
+          {expanded && (
+            <div id={contentId} className="sale-result-body">
+              {result.candidates.map((candidate) => (
+                <div key={`${candidate.ownerId}-${candidate.slotIndex}`} className={isWinningCandidate(result, candidate) ? "formula winner" : "formula"}>
+                  <b>
+                    {productName(language, candidate.product)} · {displayPlayerNameFor(state.players.find((player) => player.id === candidate.ownerId), localPlayerId, language)}
+                  </b>
+                  {candidate.appeal.breakdown.map((line) => (
+                    <span key={`${line.label}-${line.value}`} className={isFocusTrendLine(line.label) ? "focus-formula-line" : undefined}>
+                      {line.value > 0 ? "+" : ""}
+                      {line.value} {line.label}
+                    </span>
+                  ))}
+                  {candidate.requirements?.map((requirement) => (
+                    <span
+                      key={`${requirement.kind}-${requirement.actual}-${requirement.required}`}
+                      className={`formula-requirement ${requirement.passed ? "passed" : "failed"}`}
+                    >
+                      {formatCandidateRequirement(requirement, language)}
+                    </span>
+                  ))}
+                  <strong>= {candidate.appeal.total}</strong>
+                </div>
+              ))}
+              {result.personalityChoice && (
+                <p className={`formula-choice-note ${result.personalityChoice.applied ? "passed" : ""}`}>
+                  {formatPersonalityChoice(result.personalityChoice, language)}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    });
+  }
 
   return (
     <main
@@ -3325,7 +3791,22 @@ export default function App() {
       )}
 
       {turnCue && (
-        <div className="turn-cue-backdrop" aria-live="assertive" aria-atomic="true">
+        <div
+          className="turn-cue-backdrop"
+          aria-live="assertive"
+          aria-atomic="true"
+          onAnimationEnd={(event) => {
+            if (event.currentTarget !== event.target) {
+              return;
+            }
+            const cueKey = turnCue.key;
+            if (turnCueTimerRef.current !== null) {
+              window.clearTimeout(turnCueTimerRef.current);
+              turnCueTimerRef.current = null;
+            }
+            setTurnCue((current) => (current?.key === cueKey ? null : current));
+          }}
+        >
           <div className="turn-cue">{turnCue.label}</div>
         </div>
       )}
@@ -3434,6 +3915,7 @@ export default function App() {
                         language={language}
                         compact
                         focusTags={focusTrendTags}
+                        correctMove={state.selectedProductId === correctMoveProductId && player.id === handPlayer.id && correctMoveSlotIndex === slotIndex}
                         ariaDisabled={
                           !(
                             state.phase === "planning" &&
@@ -3463,7 +3945,7 @@ export default function App() {
                             ? `${productName(language, product)}. Tags: ${product.tags.map((tag) => tagText(language, tag)).join(", ")}. Price ${product.price}. Stock ${product.stock}.`
                             : `${product.name}. Теги: ${product.tags.join(", ")}. Цена ${product.price}. Запас ${product.stock}.`
                         }
-                      />
+                        />
                       {state.phase === "planning" &&
                         (!lobby || lobby.playerId === player.id) &&
                         state.activePlayer === player.id &&
@@ -3477,7 +3959,13 @@ export default function App() {
                         state.activePlayer === player.id &&
                         hasUpgrade(player.upgrades, "ad_table") &&
                         !player.tableBonusUsed && (
-                          <button className="slot-tool" onClick={() => useAdTable(player.id, slotIndex)}>
+                          <button
+                            className="slot-tool"
+                            data-correct-owner-id={localHintValue(player.id)}
+                            data-correct-slot-index={localHintValue(slotIndex)}
+                            data-correct-move={localHintMove(player.id === handPlayer.id && correctMoveTableSlotIndex === slotIndex)}
+                            onClick={() => useAdTable(player.id, slotIndex)}
+                          >
                             <Sparkles size={14} /> +1
                           </button>
                         )}
@@ -3485,6 +3973,9 @@ export default function App() {
                   ) : (
                     <button
                       className="empty-slot"
+                      data-correct-owner-id={localHintValue(player.id)}
+                      data-correct-slot-index={localHintValue(slotIndex)}
+                      data-correct-move={localHintMove(state.selectedProductId === correctMoveProductId && player.id === handPlayer.id && correctMoveSlotIndex === slotIndex)}
                       aria-disabled={
                         !(
                           state.phase === "planning" &&
@@ -3522,7 +4013,7 @@ export default function App() {
 
       </section>
 
-      <aside className="event-panel">
+      <aside className={`event-panel ${state.phase === "planning" ? "forecast-mode" : ""} ${logCollapsed ? "log-collapsed" : ""}`}>
         <div className="sale-panel-heading">
           <h2>{salePanelTitle}</h2>
           {state.phase === "planning" && <p className="sale-note">{ui(language, "forecastNote")}</p>}
@@ -3539,35 +4030,42 @@ export default function App() {
             {shownSaleResults.length === 0 ? (
               <p>{state.phase === "planning" ? ui(language, "noForecastProducts") : ui(language, "saleFormulaAfterReady")}</p>
             ) : (
-              shownSaleResults.map((result) => (
-                <details key={result.customer.id} open>
-                  <summary>
-                    {customerName(language, result.customer)}: {result.winner ? `${productName(language, result.winner.product)} ${ownerPhrase(result.winner.ownerId, localPlayerId, language)}` : ui(language, "noPurchase")}
-                  </summary>
-                  {result.candidates.map((candidate) => (
-                    <div key={`${candidate.ownerId}-${candidate.slotIndex}`} className={isWinningCandidate(result, candidate) ? "formula winner" : "formula"}>
-                      <b>
-                        {productName(language, candidate.product)} · {displayPlayerNameFor(state.players.find((player) => player.id === candidate.ownerId), localPlayerId, language)}
-                      </b>
-                      {candidate.appeal.breakdown.map((line) => (
-                        <span key={`${line.label}-${line.value}`} className={isFocusTrendLine(line.label) ? "focus-formula-line" : undefined}>
-                          {line.value > 0 ? "+" : ""}
-                          {line.value} {line.label}
-                        </span>
-                      ))}
-                      <strong>= {candidate.appeal.total}</strong>
-                    </div>
-                  ))}
-                </details>
-              ))
+              renderSaleResultCards(shownSaleResults, `${state.phase}-${state.round}`)
+            )}
+            {state.phase === "planning" && state.lastSaleReview && (
+              <div className="last-sale-review">
+                <button type="button" className="last-sale-review-toggle" aria-expanded={lastSaleReviewOpen} onClick={() => setLastSaleReviewOpen((current) => !current)}>
+                  {ui(language, "previousSales")}
+                </button>
+                {lastSaleReviewOpen && (
+                  <div className="last-sale-review-body">
+                    {state.lastSaleReview.insights.length > 0 && (
+                      <div className="sale-insights" aria-label={ui(language, "saleInsights")}>
+                        <h3>{ui(language, "saleInsights")}</h3>
+                        {state.lastSaleReview.insights.map((insight) => (
+                          <p key={insight}>{insight}</p>
+                        ))}
+                      </div>
+                    )}
+                    {renderSaleResultCards(state.lastSaleReview.results, `last-${state.lastSaleReview.round}`)}
+                  </div>
+                )}
+              </div>
             )}
           </div>
-          <h2>{ui(language, "log")}</h2>
-          <ol className="event-log">
-            {state.logs.map((log, index) => (
-              <li key={`${log}-${index}`}>{formatLogForViewer(log, localPlayerId, language)}</li>
-            ))}
-          </ol>
+          <div className="log-heading">
+            <h2>{ui(language, "log")}</h2>
+            <button type="button" className="log-toggle" aria-expanded={!logCollapsed} onClick={() => setLogCollapsed((current) => !current)}>
+              <ScrollText size={14} /> {ui(language, logCollapsed ? "showLog" : "collapseLog")}
+            </button>
+          </div>
+          {!logCollapsed && (
+            <ol className="event-log">
+              {state.logs.map((log, index) => (
+                <li key={`${log}-${index}`}>{formatLogForViewer(log, localPlayerId, language)}</li>
+              ))}
+            </ol>
+          )}
       </aside>
 
       <section className="hand-panel">
@@ -3593,8 +4091,7 @@ export default function App() {
             <div className="hand-heading">
               <div>
                 <h2>
-                  {canControlActivePlayer ? ui(language, "yourTurn") : ui(language, "opponentTurn")} ·{" "}
-                  {displayPlayerNameFor(canControlActivePlayer ? handPlayer : activePlayer, localPlayerId, language)}
+                  {activeTurnLabel}
                 </h2>
                 <div className="action-steps">
                   <span className={handPlayer.productActionUsed ? "done" : ""}>{handPlayer.productActionUsed ? ui(language, "productChosen") : ui(language, "productToSlot")}</span>
@@ -3602,7 +4099,7 @@ export default function App() {
                   <span>{ui(language, "readyStep")}</span>
                 </div>
               </div>
-              {localPlanningTurn && <div className="turn-timer" aria-label={ui(language, "turnTimer")}>{ui(language, "turnTimeShort", { time: formatTurnTime(turnSecondsLeft) })}</div>}
+              {showPlanningTimer && <div className="turn-timer" aria-label={ui(language, "turnTimer")}>{planningTimerText}</div>}
               <button className="primary-action" onClick={readyPlayer} disabled={!canControlActivePlayer || Boolean(state.choiceDraft)}>
                 <Check size={18} /> {ui(language, "ready")}
               </button>
@@ -3629,6 +4126,7 @@ export default function App() {
                       focusTags={focusTrendTags}
                       selected={state.selectedProductId === product.instanceId}
                       recommended={coachProductId === product.instanceId}
+                      correctMove={!handPlayer.productActionUsed && correctMoveProductId === product.instanceId}
                       disabled={!canControlActivePlayer}
                       onClick={() => selectProduct(product.instanceId)}
                     />
@@ -3645,6 +4143,7 @@ export default function App() {
                       language={language}
                       selected={state.selectedInfluenceId === card.id}
                       recommended={coachInfluenceId === card.id}
+                      correctMove={!handPlayer.influenceActionUsed && correctMoveInfluenceId === card.id}
                       disabled={!canControlActivePlayer || handPlayer.influenceActionUsed}
                       onClick={() => selectInfluence(card.id)}
                     />
@@ -3663,7 +4162,11 @@ export default function App() {
                       </div>
                     )}
                     {selectedInfluence.effect.kind === "anti_tag" && (
-                      <select value={state.selectedTag} onChange={(event) => patchState((current) => ({ ...current, selectedTag: event.target.value as Tag }))}>
+                      <select
+                        value={state.selectedTag}
+                        data-correct-move={localHintMove(selectedInfluence.id === correctMoveInfluenceId && correctMoveInfluenceMove?.targetTag === state.selectedTag)}
+                        onChange={(event) => patchState((current) => ({ ...current, selectedTag: event.target.value as Tag }))}
+                      >
                         {TAGS.map((tag) => (
                           <option key={tag} value={tag}>
                             {tagText(language, tag)}
@@ -3673,18 +4176,45 @@ export default function App() {
                     )}
                     {selectedInfluence.effect.kind === "target_own_bonus" &&
                       selectedOwnTarget.map(({ product, slotIndex }) => (
-                        <button key={slotIndex} disabled={!product} onClick={() => playInfluence({ ownerId: handPlayer.id, slotIndex })}>
+                        <button
+                          key={slotIndex}
+                          disabled={!product}
+                          data-correct-owner-id={localHintValue(handPlayer.id)}
+                          data-correct-slot-index={localHintValue(slotIndex)}
+                          data-correct-move={localHintMove(
+                            selectedInfluence.id === correctMoveInfluenceId && correctMoveInfluenceMove?.targetOwnerId === handPlayer.id && correctMoveInfluenceMove.targetSlotIndex === slotIndex
+                          )}
+                          onClick={() => playInfluence({ ownerId: handPlayer.id, slotIndex })}
+                        >
                           {ui(language, "ownSlot", { slot: slotIndex + 1 })}
                         </button>
                       ))}
                     {selectedInfluence.effect.kind === "target_opponent_penalty" &&
                       selectedOpponentTarget.map(({ product, slotIndex }) => (
-                        <button key={slotIndex} disabled={!product} onClick={() => playInfluence({ ownerId: opponentOf(handPlayer.id), slotIndex })}>
+                        <button
+                          key={slotIndex}
+                          disabled={!product}
+                          data-correct-owner-id={localHintValue(opponentOf(handPlayer.id))}
+                          data-correct-slot-index={localHintValue(slotIndex)}
+                          data-correct-move={localHintMove(
+                            selectedInfluence.id === correctMoveInfluenceId &&
+                              correctMoveInfluenceMove?.targetOwnerId === opponentOf(handPlayer.id) &&
+                              correctMoveInfluenceMove.targetSlotIndex === slotIndex
+                          )}
+                          onClick={() => playInfluence({ ownerId: opponentOf(handPlayer.id), slotIndex })}
+                        >
                           {ui(language, "opponentSlot", { slot: slotIndex + 1 })}
                         </button>
                       ))}
                     {["tag_modifier", "anti_tag", "tie_preference", "draw_product", "draw_influence", "rearrange"].includes(selectedInfluence.effect.kind) && (
-                      <button className="primary-action" disabled={!canPlayInfluence} onClick={() => playInfluence({ tag: state.selectedTag })}>
+                      <button
+                        className="primary-action"
+                        disabled={!canPlayInfluence}
+                        data-correct-move={localHintMove(
+                          selectedInfluence.id === correctMoveInfluenceId && (!correctMoveInfluenceMove?.targetTag || correctMoveInfluenceMove.targetTag === state.selectedTag)
+                        )}
+                        onClick={() => playInfluence({ tag: state.selectedTag })}
+                      >
                         <HandCoins size={16} /> {ui(language, "playInfluence")}
                       </button>
                     )}
@@ -3712,11 +4242,21 @@ export default function App() {
             <div>
               <h2>{ui(language, "upgradeShop")}</h2>
               <span>{ui(language, "upgradeShopText", { player: displayPlayerNameFor(state.players.find((player) => player.id === state.upgradeQueue[0]), localPlayerId, language) })}</span>
+              {showUpgradeTimer && <div className="turn-timer" aria-label={ui(language, "turnTimer")}>{upgradeTimerText}</div>}
             </div>
             <div className="upgrade-row">
               {state.upgradeOffer.map((upgrade) => {
                 const buyer = state.players.find((player) => player.id === state.upgradeQueue[0])!;
-                return <UpgradeCard key={upgrade.id} upgrade={upgrade} language={language} canBuy={canControlActivePlayer && buyer.money >= upgrade.cost} onBuy={() => buyUpgrade(upgrade.id)} />;
+                return (
+                  <UpgradeCard
+                    key={upgrade.id}
+                    upgrade={upgrade}
+                    language={language}
+                    canBuy={canControlActivePlayer && buyer.money >= upgrade.cost}
+                    correctMove={correctMoveUpgradeId === upgrade.id}
+                    onBuy={() => buyUpgrade(upgrade.id)}
+                  />
+                );
               })}
             </div>
             <button onClick={skipUpgrade} disabled={!canControlActivePlayer}>
@@ -3735,7 +4275,7 @@ export default function App() {
             <p>{finalResult.message}</p>
             {state.partyGoals.length > 0 && <div className="goal-badge">{ui(language, "partyGoals")}: {completedGoalCount} / {state.partyGoals.length}</div>}
             <div className="end-actions">
-              <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : startGame}>
+              <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : restartGame}>
                 {state.campaignRun && campaignCanAdvance && nextCampaignLevel ? <SkipForward size={18} /> : <RefreshCw size={18} />} {primaryEndActionLabel}
               </button>
               {state.campaignRun && (
@@ -3783,6 +4323,7 @@ export default function App() {
                     product={card as ProductInstance}
                     language={language}
                     focusTags={focusTrendTags}
+                    correctMove={correctMoveChoiceCardId === (card as ProductInstance).instanceId}
                     disabled={false}
                     onClick={() => keepDraftCard(index)}
                   />
@@ -3792,6 +4333,7 @@ export default function App() {
                     card={card as InfluenceCardType}
                     language={language}
                     selected={false}
+                    correctMove={correctMoveChoiceCardId === (card as InfluenceCardType).id}
                     disabled={false}
                     onClick={() => keepDraftCard(index)}
                   />
@@ -4022,30 +4564,39 @@ export default function App() {
             <p>{ui(language, "rulesIntro")}</p>
             {language === "en" ? (
               <ol>
-                <li>Customers arrive each round. Each has a primary and secondary tag and looks for matching products.</li>
-                <li>Trends do not replace customer wishes. They show which tags are stronger or weaker in the market right now.</li>
-                <li>Customer wishes and trends stack. A product matching both gets both bonuses.</li>
-                <li>On your turn, place or replace one product, then play one influence card or skip it.</li>
-                <li>The primary customer tag gives +3 appeal. The secondary tag gives +2. Trends, influence cards, and upgrades can change the score.</li>
-                <li>Customer personalities affect purchases: bargain hunters give cheap products +1, trend chasers buy only products supported by trends, and curious customers can choose the second-best product when scores are close.</li>
-                <li>If a product scores below {PURCHASE_APPEAL_THRESHOLD}, the customer will not buy it. Otherwise, the customer buys the most appealing product.</li>
-                <li>Party goals give extra coins. After rounds 2, 4, and 6, players can buy upgrades.</li>
-                <li>After round 8, the player with more coins wins. If coins are tied, sales decide the winner.</li>
+                <li>Goal: after 8 rounds, have more coins than your opponent. If coins are tied, the player with more sales wins.</li>
+                <li>Round: rounds 1-2 have 1 customer. From round 3, 2 customers arrive. Players prepare shelves first, then sales resolve for each customer from left to right.</li>
+                <li>Turn: place or replace 1 product on your shelf, then play 1 influence card or skip. When both players are ready, the sale begins.</li>
+                <li>Customer wishes: each customer has a primary tag and a secondary tag. Products try to match those tags.</li>
+                <li>Appeal scoring: the primary tag gives +3 appeal, the secondary tag gives +2. Trends, influence cards, and upgrades can add or subtract appeal.</li>
+                <li>Trends do not replace customer wishes. They show which tags are stronger or weaker on the market right now, and their modifiers stack with wishes.</li>
+                <li>The focus trend is stronger than a normal trend: each of its modifiers is 1 point stronger. A +1 becomes +2, and a -1 becomes -2.</li>
+                <li>Influence cards and upgrades are resolved as written on the card. They can change appeal, draw products, preserve stock, or change tie preference.</li>
+                <li>A customer buys only a product that reaches at least {currentPurchaseAppealThreshold} appeal. If no product reaches that number, the customer buys nothing.</li>
+                <li>If several products qualify, the customer chooses the highest appeal. Ties are broken by tie preference, lower price, fewer owner coins, first player, then the leftmost shelf slot.</li>
+                <li>Customer personalities: discount lovers give +1 appeal to budget products or price 2 and below; trend chasers buy only products with enough trend bonus; close-score customers may buy the second-highest product if it trails the best by the allowed gap.</li>
+                <li>Sale payout: when your product is bought, you gain its price in coins. At 9+ appeal you get +1 tip. In round 8 you get +1 final-round bonus. Regular Customers adds +1 on the first customer.</li>
+                <li>Stock: a sold product loses 1 stock. If its stock reaches 0, it leaves the shelf unless an effect preserved the stock.</li>
+                <li>Party goals give +2 coins once when completed. After rounds 2, 4, and 6, the upgrade shop opens; the player with fewer coins chooses first.</li>
+                <li>Story mode can temporarily hide trends, goals, influence cards, upgrades, or personalities and can lower the purchase threshold. The rules shown on a level match the mechanics currently unlocked.</li>
               </ol>
             ) : (
               <ol>
-                <li>В каждом раунде приходят клиенты. У каждого клиента есть два тега: главный и второй. Он ищет товар с похожими тегами.</li>
-                <li>Тренд не заменяет желание клиента. Клиент всё равно ищет свои теги, а тренд показывает, что сейчас сильнее или слабее на рынке.</li>
-                <li>Очки за желание клиента и тренд складываются. Например: клиент хочет напиток, а тренд усиливает дешёвое. Тогда товар с тегами «напиток» и «дешёвое» получает оба бонуса.</li>
-                <li>Лучший выбор — товар, где совпали и клиент, и тренд. Если такого товара нет, сравни сумму очков и избегай тегов со штрафом.</li>
-                <li>В свой ход сделай до двух вещей: выставь или замени 1 товар, потом сыграй 1 карту влияния или пропусти.</li>
-                <li>Главный тег клиента даёт +3 привлекательности. Второй тег даёт +2. Тренды, влияния и апгрейды могут добавить или убрать очки.</li>
-                <li>Характеры клиентов влияют на покупку: Любит скидки — Дешёвые товары получают +1, охотники за трендом покупают только товары с поддержкой тренда, а любопытные могут выбрать второй товар, если очки близки.</li>
-                <li>Если товар набрал меньше {PURCHASE_APPEAL_THRESHOLD}, клиент его не купит. Если товаров несколько, клиент берёт самый привлекательный.</li>
-                <li>Если привлекательность равна, клиент выбирает более дешёвый товар. Если снова равенство, выбирает игрока с меньшим числом монет.</li>
-                <li>Когда оба игрока готовы, игра считает продажи. За проданный товар ты получаешь его цену, иногда бонусы. Запас товара уменьшается.</li>
-                <li>Цели партии дают дополнительные монеты. После 2, 4 и 6 раунда можно купить апгрейды, которые помогают в следующих раундах.</li>
-                <li>После 8 раунда побеждает тот, у кого больше монет. Если монет поровну, побеждает тот, у кого больше продаж.</li>
+                <li>Цель игры: после 8 раундов иметь больше монет, чем соперник. Если монет поровну, побеждает игрок с большим числом продаж.</li>
+                <li>Раунд: в 1-2 раундах приходит 1 клиент. С 3-го раунда приходят 2 клиента. Сначала игроки готовят прилавки, затем продажи считаются по клиентам слева направо.</li>
+                <li>В свой ход выставь или замени 1 товар на полке, затем сыграй 1 карту влияния или пропусти. Когда оба игрока готовы, начинается продажа.</li>
+                <li>Желания клиента: у каждого клиента есть главный тег и второй тег. Товар старается совпасть с этими тегами.</li>
+                <li>Подсчёт привлекательности: главный тег клиента даёт +3, второй тег даёт +2. Тренды, влияния и апгрейды могут добавить или убрать очки.</li>
+                <li>Тренды не заменяют желания клиента. Они показывают, какие теги сейчас сильнее или слабее на рынке, и складываются с желаниями клиента.</li>
+                <li>Главный тренд сильнее обычного: каждый его модификатор меняется на 1 очко сильнее. +1 становится +2, а -1 становится -2.</li>
+                <li>Карты влияния и апгрейды выполняются так, как написано на карте. Они могут менять привлекательность, добирать товары, сохранять запас или менять выбор при равенстве.</li>
+                <li>Клиент покупает только товар, который набрал минимум {currentPurchaseAppealThreshold} привлекательности. Если таких товаров нет, клиент ничего не покупает.</li>
+                <li>Если несколько товаров подходят, клиент выбирает товар с самой высокой привлекательностью. При равенстве решают преимущество в ничьей, меньшая цена, меньше монет у владельца, первый игрок, затем левая полка.</li>
+                <li>Характеры клиентов: Любит скидки даёт +1 дешёвым товарам или товарам ценой 2 и ниже; Охотится за трендом требует нужный трендовый бонус; Почти равный выбор может купить товар со вторым результатом, если он отстаёт от лучшего на разрешённую разницу.</li>
+                <li>При продаже ты получаешь цену товара в монетах. За 9+ привлекательности добавляется +1 чаевых. В 8-м раунде добавляется +1 финального бонуса. Апгрейд Постоянные клиенты даёт +1 на первом клиенте.</li>
+                <li>Запас: проданный товар теряет 1 запас. Если запас стал 0, товар уходит с полки, кроме случаев, когда эффект сохранил запас.</li>
+                <li>Цели партии дают +2 монеты один раз за выполненную цель. После 2, 4 и 6 раунда открывается магазин апгрейдов; первым выбирает игрок с меньшим числом монет.</li>
+                <li>В режиме истории часть механик может быть временно отключена: тренды, цели, влияния, апгрейды или характеры. Порог покупки тоже может быть ниже. Правила уровня соответствуют тем механикам, которые уже открыты.</li>
               </ol>
             )}
           </div>

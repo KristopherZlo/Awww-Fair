@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+function ruleBody(css, selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = css.match(new RegExp(`^${escapedSelector}\\s*\\{([\\s\\S]*?)^\\}`, "m"));
+  expect(match).toBeTruthy();
+  return match?.[1] ?? "";
+}
+
 describe("app layout CSS", () => {
   it("lets the top bar define the first app row height from its content", () => {
     const css = readFileSync("src/styles.css", "utf8");
@@ -22,6 +29,14 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.hand-panel \.product-sprite\s*\{[\s\S]*width:\s*68px;/);
   });
 
+  it("raises personality tooltips above neighboring customer cards", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+
+    expect(css).toMatch(/\.customer-card\s*\{[\s\S]*position:\s*relative;[\s\S]*z-index:\s*0;/);
+    expect(css).toMatch(/\.customer-card:hover,[\s\S]*\.customer-card:focus-within\s*\{[\s\S]*z-index:\s*16;/);
+    expect(css).toMatch(/\.personality-tooltip\s*\{[\s\S]*max-width:\s*min\(220px,\s*calc\(100vw - 24px\)\);/);
+  });
+
   it("has invalid shelf slot feedback styles", () => {
     const css = readFileSync("src/styles.css", "utf8");
 
@@ -35,6 +50,18 @@ describe("app layout CSS", () => {
 
     expect(css).toMatch(/minmax\(252px,\s*max-content\)/);
     expect(css).toMatch(/\.hand-panel\s*\{[\s\S]*min-height:\s*252px;/);
+  });
+
+  it("lets the hand panel grow with its content", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+    const handPanel = ruleBody(css, ".hand-panel");
+    const handColumns = ruleBody(css, ".hand-columns");
+
+    expect(handPanel).toMatch(/grid-template-rows:\s*auto\s+auto\s+auto;/);
+    expect(handPanel).toMatch(/overflow:\s*visible;/);
+    expect(handPanel).not.toMatch(/minmax\(0,\s*1fr\)/);
+    expect(handColumns).toMatch(/min-height:\s*auto;/);
+    expect(handColumns).toMatch(/overflow:\s*visible;/);
   });
 
   it("gives the event panel a three-fifths sales area and two-fifths log area", () => {
@@ -98,5 +125,19 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.cutscene-subtitles p\s*\{[\s\S]*text-align:\s*center;/);
     expect(css).toMatch(/@keyframes cutscene-frame-in/);
     expect(css).not.toMatch(/\.cutscene-overlay::after/);
+  });
+
+  it("keeps long rules readable inside a scrollable modal", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+
+    expect(css).toMatch(/\.rules-modal\s*\{[\s\S]*max-height:\s*calc\(100dvh - 32px\);[\s\S]*overflow:\s*hidden;/);
+    expect(css).toMatch(/\.rules-modal ol\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow:\s*auto;/);
+  });
+
+  it("lets short desktop viewports scroll to bottom hand controls", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+
+    expect(css).toMatch(/@media\s*\(max-height:\s*760px\)\s*\{[\s\S]*body\s*\{[\s\S]*overflow:\s*auto;/);
+    expect(css).toMatch(/@media\s*\(max-height:\s*760px\)\s*\{[\s\S]*\.app-shell\s*\{[\s\S]*height:\s*auto;[\s\S]*overflow:\s*visible;/);
   });
 });

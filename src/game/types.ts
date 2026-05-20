@@ -172,6 +172,7 @@ export interface PurchaseCandidate {
   product: ProductInstance;
   appeal: AppealResult;
   trendScore?: number;
+  requirements?: PurchaseCandidateRequirement[];
 }
 
 export interface PurchaseWinner extends PurchaseCandidate {
@@ -182,9 +183,37 @@ export interface PurchaseWinner extends PurchaseCandidate {
   preserveStock: boolean;
 }
 
+export interface PurchaseRules {
+  appealThreshold: number;
+}
+
+export interface PurchaseCandidateRequirement {
+  kind: "trend_score";
+  actual: number;
+  required: number;
+  passed: boolean;
+}
+
+export interface PurchaseCandidateRef {
+  ownerId: PlayerId;
+  slotIndex: number;
+  productInstanceId: string;
+}
+
+export interface PurchasePersonalityChoice {
+  kind: "second_best";
+  applied: boolean;
+  appealGap: number;
+  maxAppealGap: number;
+  firstChoice: PurchaseCandidateRef;
+  secondChoice: PurchaseCandidateRef;
+}
+
 export interface PurchaseResult {
   customer: CustomerCard;
+  appealThreshold: number;
   candidates: PurchaseCandidate[];
   eligible: PurchaseCandidate[];
   winner: PurchaseWinner | null;
+  personalityChoice?: PurchasePersonalityChoice;
 }

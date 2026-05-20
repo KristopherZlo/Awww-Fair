@@ -73,10 +73,14 @@ export const UI_TEXT = {
     saleInsights: "Коротко о продажах",
     noForecastProducts: "Пока на полках нет подходящих товаров для прогноза.",
     saleFormulaAfterReady: "После готовности обоих игроков здесь появится формула выбора клиента.",
+    previousSales: "Итоги прошлого раунда",
     noPurchase: "без покупки",
     log: "Лог",
+    collapseLog: "Свернуть лог",
+    showLog: "Показать лог",
     partyGoals: "Цели партии",
-    yourTurn: "Ваш ход",
+    yourTurn: "Ваш ход!",
+    hotseatTurn: "Ход игрока {player}",
     opponentTurn: "Ход соперника",
     productChosen: "товар выбран",
     productToSlot: "1. товар -> слот",
@@ -85,6 +89,8 @@ export const UI_TEXT = {
     readyStep: "3. готов",
     turnTimer: "Таймер хода",
     turnTimeShort: "Ход: {time}",
+    opponentTurnTimeShort: "Ход оппонента: {time}",
+    upgradeTimeShort: "Апгрейд: {time}",
     ready: "Готов",
     coachAdvice: "Совет тренера",
     handProducts: "Товары в руке",
@@ -131,7 +137,7 @@ export const UI_TEXT = {
     nextTrack: "Следующий трек",
     aboutText1: "Игра сделана как личное развлечение, чтобы я мог поиграть со своей девушкой, а не как серьёзный проект.",
     aboutText2: "Весь арт, включая музыку, сгенерирован через ИИ. Если кто-то из художников хочет нарисовать арт или написать музыкальное сопровождение, я всегда рад такому.",
-    rulesIntro: "Коротко: продавай товары клиентам, зарабатывай монеты и к концу 8 раунда обгони соперника.",
+    rulesIntro: "Руководство к партии: как подготовить прилавок, посчитать привлекательность, провести продажи и определить победителя.",
     playAgain: "Сыграть ещё",
     nextLevel: "Следующий уровень",
     retryLevel: "Повторить уровень"
@@ -187,10 +193,14 @@ export const UI_TEXT = {
     saleInsights: "Sales summary",
     noForecastProducts: "There are no suitable shelf products for a forecast yet.",
     saleFormulaAfterReady: "After both players are ready, the customer choice formula will appear here.",
+    previousSales: "Previous sales",
     noPurchase: "no purchase",
     log: "Log",
+    collapseLog: "Collapse log",
+    showLog: "Show log",
     partyGoals: "Party goals",
-    yourTurn: "Your turn",
+    yourTurn: "Your turn!",
+    hotseatTurn: "Player {player}'s turn",
     opponentTurn: "Opponent turn",
     productChosen: "product chosen",
     productToSlot: "1. product -> slot",
@@ -199,6 +209,8 @@ export const UI_TEXT = {
     readyStep: "3. ready",
     turnTimer: "Turn timer",
     turnTimeShort: "Turn: {time}",
+    opponentTurnTimeShort: "Opponent turn: {time}",
+    upgradeTimeShort: "Upgrade: {time}",
     ready: "Ready",
     coachAdvice: "Coach advice",
     handProducts: "Products in hand",
@@ -245,14 +257,14 @@ export const UI_TEXT = {
     nextTrack: "Next track",
     aboutText1: "This game is a personal project made for playing together, not a serious commercial project.",
     aboutText2: "All art, including music, was generated with AI. If an artist wants to draw art or write music for it, I would be glad.",
-    rulesIntro: "In short: sell products to customers, earn coins, and beat your rival by the end of round 8.",
+    rulesIntro: "Game guide: prepare shelves, score appeal, resolve sales, and decide the winner.",
     playAgain: "Play again",
     nextLevel: "Next level",
     retryLevel: "Retry level"
   }
 } as const;
 
-type UiKey = keyof typeof UI_TEXT.ru;
+type UiKey = keyof typeof UI_TEXT.ru | keyof typeof UI_TEXT.en;
 
 type CampaignLevelLike = {
   level: number;
@@ -286,7 +298,7 @@ const CAMPAIGN_LEVEL_TEXT: Record<number, { title: string; district: string; sto
   21: { title: "Hat Hint", district: "Milliners' Street", story: "The shop window already shows the hat from our dream.", opponentSpecies: "rabbit" },
   22: { title: "Last Coins", district: "Cashier Yard", story: "Every customer can decide the fate of a sale.", opponentSpecies: "guinea pig" },
   23: { title: "Main Rival", district: "Grand Tent", story: "The best sellers of Aaakh have gathered near the main tent.", opponentSpecies: "fox" },
-  24: { title: "New Hat", district: "Hat Shop", story: "One last victory stands between us and the beautiful new hat.", opponentSpecies: "cat" }
+  24: { title: "New Hat", district: "Hat Shop", story: "One last victory stands between us and the beautiful new hat.", opponentSpecies: "rabbit" }
 };
 
 const CUTSCENE_TEXT_EN = [
@@ -309,7 +321,9 @@ const AI_DIFFICULTY_TEXT: Record<string, { en: string }> = {
 };
 
 export function ui(language: Language, key: UiKey, values: Record<string, string | number> = {}) {
-  let text: string = UI_TEXT[language][key];
+  const dictionary = UI_TEXT[language] as Record<string, string>;
+  const fallback = UI_TEXT.ru as Record<string, string>;
+  let text: string = dictionary[key] ?? fallback[key] ?? String(key);
   for (const [name, value] of Object.entries(values)) {
     text = text.replace(`{${name}}`, String(value));
   }
@@ -383,10 +397,10 @@ const PRODUCT_TEXT: Record<string, { ru: string; en: string }> = {
 };
 
 const CUSTOMER_TEXT: Record<string, { ru: string; en: string; label?: { ru: string; en: string }; description?: { ru: string; en: string } }> = {
-  child: { ru: "Ребёнок", en: "Child", label: { ru: "Любопытный выбор", en: "Curious choice" }, description: { ru: "Если два товара почти равны, может выбрать второй.", en: "If two products are almost tied, may choose the second." } },
+  child: { ru: "Ребёнок", en: "Child", label: { ru: "Любопытный выбор", en: "Curious choice" }, description: { ru: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", en: "If the top two scores are almost tied, may buy the second-highest product." } },
   student: { ru: "Студент", en: "Student", label: { ru: "Любит скидки", en: "Likes discounts" }, description: { ru: "Дешёвые товары получают +1 привлекательности.", en: "Budget products get +1 appeal." } },
   tourist: { ru: "Турист", en: "Tourist", label: { ru: "Верит афишам", en: "Trusts posters" }, description: { ru: "Покупает только при заметной поддержке тренда.", en: "Buys only with clear trend support." } },
-  grandma: { ru: "Бабушка", en: "Grandma", label: { ru: "Присматривается", en: "Looks closely" }, description: { ru: "Если варианты близки, берёт не самый очевидный.", en: "If options are close, takes the less obvious one." } },
+  grandma: { ru: "Бабушка", en: "Grandma", label: { ru: "Присматривается", en: "Looks closely" }, description: { ru: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", en: "If the top two scores are almost tied, may buy the second-highest product." } },
   office_worker: { ru: "Офисник", en: "Office worker", label: { ru: "Берёт хиты дня", en: "Takes the hits" }, description: { ru: "Покупает только товары с трендовым бонусом.", en: "Buys only products with a trend bonus." } },
   athlete: { ru: "Спортсмен", en: "Athlete", label: { ru: "Следит за модой", en: "Follows trends" }, description: { ru: "Покупает только при сильном тренде.", en: "Buys only with a strong trend." } },
   family: { ru: "Семья", en: "Family", label: { ru: "Семейный бюджет", en: "Family budget" }, description: { ru: "Дешёвые товары получают +1 привлекательности.", en: "Budget products get +1 appeal." } },
@@ -394,11 +408,11 @@ const CUSTOMER_TEXT: Record<string, { ru: string; en: string; label?: { ru: stri
   driver: { ru: "Водитель", en: "Driver", label: { ru: "Берёт по акции", en: "Buys on promo" }, description: { ru: "Дешёвые товары получают +1 привлекательности.", en: "Budget products get +1 appeal." } },
   blogger: { ru: "Блогер", en: "Blogger", label: { ru: "Охотится за хайпом", en: "Hunts the hype" }, description: { ru: "Покупает только при сильном тренде.", en: "Buys only with a strong trend." } },
   schoolkid: { ru: "Школьник", en: "Schoolkid", label: { ru: "Копит сдачу", en: "Saves change" }, description: { ru: "Дешёвые товары получают +1 привлекательности.", en: "Budget products get +1 appeal." } },
-  sweet_tooth: { ru: "Сладкоежка", en: "Sweet tooth", label: { ru: "Хочет сюрприз", en: "Wants a surprise" }, description: { ru: "Если варианты близки, может выбрать второй.", en: "If options are close, may choose the second." } },
-  farmer: { ru: "Фермер", en: "Farmer", label: { ru: "Сравнивает прилавки", en: "Compares stalls" }, description: { ru: "Если варианты близки, выбирает второй.", en: "If options are close, chooses the second." } },
+  sweet_tooth: { ru: "Сладкоежка", en: "Sweet tooth", label: { ru: "Хочет сюрприз", en: "Wants a surprise" }, description: { ru: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", en: "If the top two scores are almost tied, may buy the second-highest product." } },
+  farmer: { ru: "Фермер", en: "Farmer", label: { ru: "Сравнивает прилавки", en: "Compares stalls" }, description: { ru: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", en: "If the top two scores are almost tied, may buy the second-highest product." } },
   rich: { ru: "Богач", en: "Rich guest", label: { ru: "Покупает модное", en: "Buys fashionable goods" }, description: { ru: "Покупает только при трендовом бонусе.", en: "Buys only with a trend bonus." } },
   rushing: { ru: "Спешащий клиент", en: "Rushing customer", label: { ru: "Не любит переплаты", en: "Avoids overpaying" }, description: { ru: "Дешёвые товары получают +1 привлекательности.", en: "Budget products get +1 appeal." } },
-  vacationer: { ru: "Отдыхающий", en: "Vacationer", label: { ru: "Выбирает настроение", en: "Chooses by mood" }, description: { ru: "Если варианты близки, может выбрать второй.", en: "If options are close, may choose the second." } }
+  vacationer: { ru: "Отдыхающий", en: "Vacationer", label: { ru: "Выбирает настроение", en: "Chooses by mood" }, description: { ru: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", en: "If the top two scores are almost tied, may buy the second-highest product." } }
 };
 
 const TREND_TEXT: Record<string, { ru: string; en: string }> = {
@@ -440,7 +454,7 @@ const UPGRADE_TEXT: Record<string, { ru: string; en: string; description: { ru: 
   regular_customers: { ru: "Постоянные клиенты", en: "Regular Customers", description: { ru: "первый клиент раунда даёт +1 монету", en: "first customer of the round gives +1 coin" } },
   supplier: { ru: "Хороший поставщик", en: "Good Supplier", description: { ru: "новые товары получают +1 запас", en: "new products get +1 stock" } },
   bright_sign: { ru: "Яркая вывеска", en: "Bright Sign", description: { ru: "при равенстве клиент выбирает тебя", en: "customers choose you on ties" } },
-  mini_storage: { ru: "Мини-склад", en: "Mini Storage", description: { ru: "+1 карта товара в руке", en: "+1 product card in hand" } },
+  mini_storage: { ru: "Мини-склад", en: "Mini Storage", description: { ru: "+1 к лимиту карт товара; карта добирается в начале следующего раунда", en: "+1 product card limit; draw up at the start of the next round" } },
   ad_table: { ru: "Рекламный столик", en: "Ad Table", description: { ru: "раз за раунд дай своему товару +1", en: "once per round, give your product +1" } }
 };
 
@@ -458,7 +472,26 @@ export function customerPersonalityLabel(language: Language, customer: CustomerC
 }
 
 export function customerPersonalityDescription(language: Language, customer: CustomerCard) {
-  return customer.personality ? CUSTOMER_TEXT[customer.id]?.description?.[language] ?? customer.personality.description : "";
+  const personality = customer.personality;
+  if (!personality) {
+    return "";
+  }
+
+  if (personality.kind === "bargain_hunter") {
+    return language === "en"
+      ? "+1 appeal for products tagged budget or priced 2 coins or less."
+      : "+1: «дешёвое» или цена 2 и ниже.";
+  }
+
+  if (personality.kind === "trend_chaser") {
+    return language === "en"
+      ? `Only buys products with positive trend bonuses totaling ${personality.minTrendScore} or more. Wishes and influence do not count.`
+      : `Нужен трендовый бонус ${personality.minTrendScore}+. Желания и влияние не считаются.`;
+  }
+
+  return language === "en"
+    ? `May choose the second-highest scoring product when it is behind the best by ${personality.maxAppealGap} or less.`
+    : `Может купить товар со вторым результатом, если он отстаёт от лучшего на ${personality.maxAppealGap} или меньше.`;
 }
 
 export function trendName(language: Language, trend: TrendCard | { id: string; name: string }) {

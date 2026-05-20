@@ -188,6 +188,7 @@ export function clampVolume(volume: number) {
 }
 
 let sharedAudioContext: AudioContext | null = null;
+let audioContextUnavailable = false;
 
 function getSharedAudioContext() {
   if (typeof window === "undefined") {
@@ -199,8 +200,18 @@ function getSharedAudioContext() {
     return null;
   }
 
+  if (audioContextUnavailable) {
+    return null;
+  }
+
   if (!sharedAudioContext || sharedAudioContext.state === "closed") {
-    sharedAudioContext = new AudioContextClass();
+    try {
+      sharedAudioContext = new AudioContextClass();
+    } catch {
+      audioContextUnavailable = true;
+      sharedAudioContext = null;
+      return null;
+    }
   }
 
   return sharedAudioContext;
@@ -302,12 +313,22 @@ export function playSoundEffect(enabled: boolean, id: SoundEffectId, volume = 1)
   if (audio.state === "suspended") {
     void audio
       .resume()
-      .then(() => scheduleSoundEffect(audio, recipe, masterGain))
+      .then(() => {
+        try {
+          scheduleSoundEffect(audio, recipe, masterGain);
+        } catch {
+          // Sound effects are optional; audio errors must not interrupt gameplay.
+        }
+      })
       .catch(() => undefined);
     return;
   }
 
-  scheduleSoundEffect(audio, recipe, masterGain);
+  try {
+    scheduleSoundEffect(audio, recipe, masterGain);
+  } catch {
+    // Sound effects are optional; audio errors must not interrupt gameplay.
+  }
 }
 
 declare global {

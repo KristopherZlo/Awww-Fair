@@ -38,10 +38,10 @@ export const PRODUCT_CARDS: ProductCard[] = [
 ];
 
 export const CUSTOMER_CARDS: CustomerCard[] = [
-  { id: "child", name: "Ребёнок", type: "customer", primaryTag: "детское", secondaryTag: "сладкое", sprite: { col: 0, row: 0 }, personality: { kind: "second_best", label: "Любопытный выбор", description: "Если два товара почти равны, может выбрать второй.", maxAppealGap: 1 } },
+  { id: "child", name: "Ребёнок", type: "customer", primaryTag: "детское", secondaryTag: "сладкое", sprite: { col: 0, row: 0 }, personality: { kind: "second_best", label: "Любопытный выбор", description: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", maxAppealGap: 1 } },
   { id: "student", name: "Студент", type: "customer", primaryTag: "дешёвое", secondaryTag: "быстрое", sprite: { col: 1, row: 0 }, personality: { kind: "bargain_hunter", label: "Любит скидки", description: "Дешёвые товары получают +1 привлекательности." } },
   { id: "tourist", name: "Турист", type: "customer", primaryTag: "местное", secondaryTag: "дорогое", sprite: { col: 2, row: 0 }, personality: { kind: "trend_chaser", label: "Верит афишам", description: "Покупает только при заметной поддержке тренда.", minTrendScore: 2 } },
-  { id: "grandma", name: "Бабушка", type: "customer", primaryTag: "свежее", secondaryTag: "сладкое", sprite: { col: 3, row: 0 }, personality: { kind: "second_best", label: "Присматривается", description: "Если варианты близки, берёт не самый очевидный.", maxAppealGap: 1 } },
+  { id: "grandma", name: "Бабушка", type: "customer", primaryTag: "свежее", secondaryTag: "сладкое", sprite: { col: 3, row: 0 }, personality: { kind: "second_best", label: "Присматривается", description: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", maxAppealGap: 1 } },
   { id: "office_worker", name: "Офисник", type: "customer", primaryTag: "напиток", secondaryTag: "быстрое", sprite: { col: 0, row: 1 }, personality: { kind: "trend_chaser", label: "Берёт хиты дня", description: "Покупает только товары с трендовым бонусом.", minTrendScore: 2 } },
   { id: "athlete", name: "Спортсмен", type: "customer", primaryTag: "свежее", secondaryTag: "напиток", sprite: { col: 1, row: 1 }, personality: { kind: "trend_chaser", label: "Следит за модой", description: "Покупает только при сильном тренде.", minTrendScore: 3 } },
   { id: "family", name: "Семья", type: "customer", primaryTag: "детское", secondaryTag: "дешёвое", sprite: { col: 2, row: 1 }, personality: { kind: "bargain_hunter", label: "Семейный бюджет", description: "Дешёвые товары получают +1 привлекательности." } },
@@ -49,11 +49,11 @@ export const CUSTOMER_CARDS: CustomerCard[] = [
   { id: "driver", name: "Водитель", type: "customer", primaryTag: "быстрое", secondaryTag: "напиток", sprite: { col: 0, row: 2 }, personality: { kind: "bargain_hunter", label: "Берёт по акции", description: "Дешёвые товары получают +1 привлекательности." } },
   { id: "blogger", name: "Блогер", type: "customer", primaryTag: "местное", secondaryTag: "дорогое", sprite: { col: 1, row: 2 }, personality: { kind: "trend_chaser", label: "Охотится за хайпом", description: "Покупает только при сильном тренде.", minTrendScore: 3 } },
   { id: "schoolkid", name: "Школьник", type: "customer", primaryTag: "детское", secondaryTag: "дешёвое", sprite: { col: 2, row: 2 }, personality: { kind: "bargain_hunter", label: "Копит сдачу", description: "Дешёвые товары получают +1 привлекательности." } },
-  { id: "sweet_tooth", name: "Сладкоежка", type: "customer", primaryTag: "сладкое", secondaryTag: "дешёвое", sprite: { col: 3, row: 2 }, personality: { kind: "second_best", label: "Хочет сюрприз", description: "Если варианты близки, может выбрать второй.", maxAppealGap: 1 } },
-  { id: "farmer", name: "Фермер", type: "customer", primaryTag: "местное", secondaryTag: "свежее", sprite: { col: 0, row: 3 }, personality: { kind: "second_best", label: "Сравнивает прилавки", description: "Если варианты близки, выбирает второй.", maxAppealGap: 1 } },
+  { id: "sweet_tooth", name: "Сладкоежка", type: "customer", primaryTag: "сладкое", secondaryTag: "дешёвое", sprite: { col: 3, row: 2 }, personality: { kind: "second_best", label: "Хочет сюрприз", description: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", maxAppealGap: 1 } },
+  { id: "farmer", name: "Фермер", type: "customer", primaryTag: "местное", secondaryTag: "свежее", sprite: { col: 0, row: 3 }, personality: { kind: "second_best", label: "Сравнивает прилавки", description: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", maxAppealGap: 1 } },
   { id: "rich", name: "Богач", type: "customer", primaryTag: "дорогое", secondaryTag: "сладкое", sprite: { col: 1, row: 3 }, personality: { kind: "trend_chaser", label: "Покупает модное", description: "Покупает только при трендовом бонусе.", minTrendScore: 2 } },
   { id: "rushing", name: "Спешащий клиент", type: "customer", primaryTag: "быстрое", secondaryTag: "дешёвое", sprite: { col: 2, row: 3 }, personality: { kind: "bargain_hunter", label: "Не любит переплаты", description: "Дешёвые товары получают +1 привлекательности." } },
-  { id: "vacationer", name: "Отдыхающий", type: "customer", primaryTag: "напиток", secondaryTag: "сладкое", sprite: { col: 3, row: 3 }, personality: { kind: "second_best", label: "Выбирает настроение", description: "Если варианты близки, может выбрать второй.", maxAppealGap: 1 } }
+  { id: "vacationer", name: "Отдыхающий", type: "customer", primaryTag: "напиток", secondaryTag: "сладкое", sprite: { col: 3, row: 3 }, personality: { kind: "second_best", label: "Выбирает настроение", description: "Если лучший и второй по очкам товары почти равны, может купить товар со вторым результатом.", maxAppealGap: 1 } }
 ];
 
 export const TREND_CARDS: TrendCard[] = [
@@ -95,6 +95,6 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   { id: "regular_customers", name: "Постоянные клиенты", type: "upgrade", cost: 4, description: "первый клиент раунда даёт +1 монету", effect: "regular_customers" },
   { id: "supplier", name: "Хороший поставщик", type: "upgrade", cost: 8, description: "новые товары получают +1 запас", effect: "supplier" },
   { id: "bright_sign", name: "Яркая вывеска", type: "upgrade", cost: 3, description: "при равенстве клиент выбирает тебя", effect: "bright_sign" },
-  { id: "mini_storage", name: "Мини-склад", type: "upgrade", cost: 5, description: "+1 карта товара в руке", effect: "mini_storage" },
+  { id: "mini_storage", name: "Мини-склад", type: "upgrade", cost: 5, description: "+1 к лимиту карт товара; карта добирается в начале следующего раунда", effect: "mini_storage" },
   { id: "ad_table", name: "Рекламный столик", type: "upgrade", cost: 6, description: "раз за раунд дай своему товару +1", effect: "ad_table" }
 ];

@@ -245,6 +245,12 @@ describe("Trend Market engine", () => {
     });
 
     expect(withoutTrend.winner).toBeNull();
+    expect(withoutTrend.candidates[0].requirements).toEqual([
+      { kind: "trend_score", actual: 0, required: 2, passed: false }
+    ]);
+    expect(withTrend.candidates[0].requirements).toEqual([
+      { kind: "trend_score", actual: 3, required: 2, passed: true }
+    ]);
     expect(withTrend.winner?.product.name).toBe("Игрушка");
   });
 
@@ -254,7 +260,7 @@ describe("Trend Market engine", () => {
       personality: {
         kind: "second_best",
         label: "Любопытный выбор",
-        description: "Иногда берёт второй вариант, если он почти не хуже.",
+        description: "Может купить товар со вторым результатом, если он почти не хуже лучшего.",
         maxAppealGap: 1
       }
     } as CustomerCard;
@@ -275,6 +281,12 @@ describe("Trend Market engine", () => {
 
     expect(result.winner?.ownerId).toBe("B");
     expect(result.winner?.product.name).toBe("Торт");
+    expect(result.personalityChoice).toMatchObject({
+      kind: "second_best",
+      applied: true,
+      appealGap: 1,
+      maxAppealGap: 1
+    });
   });
 
   it("rejects purchases below minimum appeal and leaves the customer unserved", () => {
@@ -333,6 +345,34 @@ describe("Trend Market engine", () => {
     expect(belowThreshold.winner).toBeNull();
     expect(atThreshold.candidates[0].appeal.total).toBe(5);
     expect(atThreshold.winner?.product.name).toBe("Игрушка");
+  });
+
+  it("can lower the purchase threshold for campaign tutorial rules", () => {
+    const defaultRules = resolveCustomerPurchase({
+      customer: child,
+      players: [player("A", 0, [toy])],
+      trends: [],
+      influences: [],
+      roundBonuses: [],
+      firstPlayer: "A",
+      customerIndex: 0,
+      round: 1
+    });
+    const tutorialRules = resolveCustomerPurchase({
+      customer: child,
+      players: [player("A", 0, [toy])],
+      trends: [],
+      influences: [],
+      roundBonuses: [],
+      firstPlayer: "A",
+      customerIndex: 0,
+      round: 1,
+      rules: { appealThreshold: 3 }
+    });
+
+    expect(defaultRules.winner).toBeNull();
+    expect(tutorialRules.appealThreshold).toBe(3);
+    expect(tutorialRules.winner?.product.name).toBe(toy.name);
   });
 
   it("awards tips only from 9 appeal", () => {

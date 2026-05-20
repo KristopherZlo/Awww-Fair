@@ -674,6 +674,8 @@ button.card {
 }
 
 .customer-card {
+  position: relative;
+  z-index: 0;
   grid-template-columns: 98px minmax(112px, max-content);
   align-items: center;
   width: max-content;
@@ -682,6 +684,11 @@ button.card {
   padding: 8px;
   border-color: rgba(153, 207, 255, 0.34);
   background: linear-gradient(180deg, #e7f5ff, #ccecff);
+}
+
+.customer-card:hover,
+.customer-card:focus-within {
+  z-index: 16;
 }
 
 .customer-card .sprite {
@@ -697,6 +704,7 @@ button.card {
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
+  isolation: isolate;
   color: #6b5136;
   font-size: 0.72rem;
   font-weight: 850;
@@ -723,11 +731,12 @@ button.card {
 
 .personality-tooltip {
   position: absolute;
-  left: 0;
-  bottom: calc(100% + 6px);
+  left: 50%;
+  top: calc(100% + 6px);
   z-index: 6;
   width: max-content;
-  max-width: min(260px, 72vw);
+  min-width: 170px;
+  max-width: min(220px, calc(100vw - 24px));
   padding: 7px 8px;
   border: 1px solid rgba(248, 234, 210, 0.2);
   border-radius: 8px;
@@ -739,7 +748,7 @@ button.card {
   line-height: 1.25;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(3px);
+  transform: translate(-50%, -2px);
   transition:
     opacity 140ms ease,
     transform 140ms ease;
@@ -749,7 +758,7 @@ button.card {
 .personality-line:hover .personality-tooltip,
 .personality-badge:focus-visible + .personality-tooltip {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate(-50%, 0);
 }
 
 .tag-row {
@@ -813,6 +822,14 @@ button.card {
   overflow: hidden;
 }
 
+.event-panel.forecast-mode {
+  grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.event-panel.log-collapsed {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
 .sale-results,
 .event-log {
   min-height: 0;
@@ -837,6 +854,10 @@ button.card {
   font-size: 0.8rem;
 }
 
+.forecast-mode .sale-note {
+  font-size: 0.74rem;
+}
+
 .sale-insights {
   display: grid;
   gap: 6px;
@@ -857,7 +878,8 @@ button.card {
   line-height: 1.22;
 }
 
-.sale-results details {
+.sale-results details,
+.sale-result-card {
   margin-bottom: 8px;
   padding: 8px;
   border: 1px solid rgba(248, 234, 210, 0.16);
@@ -865,9 +887,67 @@ button.card {
   background: rgba(255, 250, 240, 0.08);
 }
 
-.sale-results summary {
+.forecast-mode .sale-results {
+  gap: 5px;
+}
+
+.forecast-mode .sale-results details,
+.forecast-mode .sale-result-card {
+  margin-bottom: 0;
+  padding: 6px 7px;
+}
+
+.forecast-mode .sale-results details:not([open]),
+.forecast-mode .sale-result-card:not(.expanded) {
+  min-height: 0;
+}
+
+.sale-results summary,
+.sale-result-toggle,
+.last-sale-review-toggle {
   cursor: pointer;
   font-weight: 900;
+  line-height: 1.18;
+}
+
+.sale-result-toggle,
+.last-sale-review-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: #fff7ed;
+  padding: 0;
+  text-align: left;
+}
+
+.sale-result-toggle::before,
+.last-sale-review-toggle::before {
+  content: ">";
+  display: inline-block;
+  width: 1em;
+  color: #f8d9a3;
+}
+
+.sale-result-toggle[aria-expanded="true"]::before,
+.last-sale-review-toggle[aria-expanded="true"]::before {
+  content: "v";
+}
+
+.sale-result-body,
+.last-sale-review-body {
+  display: grid;
+  gap: 6px;
+}
+
+.last-sale-review {
+  display: grid;
+  gap: 7px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 8px;
+  background: rgba(14, 43, 56, 0.28);
 }
 
 .formula {
@@ -890,6 +970,59 @@ button.card {
   font-weight: 950;
 }
 
+.formula-requirement {
+  color: #bbf7d0;
+  font-weight: 950;
+}
+
+.formula-requirement.failed {
+  color: #fecaca;
+}
+
+.formula-choice-note {
+  margin-top: 6px;
+  padding: 6px;
+  border-radius: 7px;
+  background: rgba(255, 250, 240, 0.08);
+  color: #f8ead2;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.formula-choice-note.passed {
+  color: #bbf7d0;
+}
+
+.log-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.log-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgba(248, 234, 210, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 250, 240, 0.08);
+  color: #f8ead2;
+  font-size: 0.76rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.log-toggle:hover {
+  background: rgba(255, 250, 240, 0.14);
+}
+
 .event-log {
   margin: 0;
   padding-left: 20px;
@@ -904,14 +1037,14 @@ button.card {
 .hand-panel {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
   min-height: 252px;
   padding: 9px 10px;
   border: 1px solid rgba(248, 234, 210, 0.16);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(54, 34, 19, 0.95), rgba(30, 20, 14, 0.96));
   box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.28);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .party-goals {
@@ -990,8 +1123,10 @@ button.card {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.8fr);
   gap: 10px;
-  min-height: 0;
-  overflow: hidden;
+  min-height: auto;
+  overflow: visible;
+  padding-bottom: 3px;
+  scrollbar-width: thin;
 }
 
 .hand-row {
@@ -1807,6 +1942,11 @@ button.card {
 
 .rules-modal {
   position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
 }
 
 .settings-modal {
@@ -1897,8 +2037,11 @@ button.card {
 }
 
 .rules-modal ol {
-  margin: 12px 0 0;
-  padding-left: 22px;
+  min-height: 0;
+  margin: 0;
+  padding: 0 8px 0 22px;
+  overflow: auto;
+  scrollbar-width: thin;
 }
 
 .rules-modal li {
@@ -2044,6 +2187,27 @@ button.card {
 
   .party-goal-list {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 760px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .hand-panel {
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+  }
+
+  .hand-columns {
+    overflow: visible;
   }
 }
 

@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { advertisedUrls, listenHost } from "./listen-config.mjs";
 import { lanUrls } from "./network-info.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -143,7 +144,7 @@ const server = createServer(async (request, response) => {
   if (request.method === "GET" && parts[0] === "api" && parts[1] === "network") {
     json(response, 200, {
       port: publicPort,
-      urls: lanUrls(publicPort)
+      urls: advertisedUrls(process.env, lanUrls(publicPort))
     });
     return;
   }
@@ -252,8 +253,10 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, "0.0.0.0", () => {
-  const urls = lanUrls(publicPort);
+const host = listenHost();
+
+server.listen(port, host, () => {
+  const urls = advertisedUrls(process.env, lanUrls(publicPort));
   console.log(`Trend Market app: http://127.0.0.1:${publicPort}`);
   urls.forEach((url) => console.log(`Trend Market LAN: ${url}`));
   if (publicPort !== port) {

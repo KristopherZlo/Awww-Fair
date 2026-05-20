@@ -9,7 +9,9 @@ import type {
   ProductCard,
   ProductInstance,
   PurchaseCandidate,
+  PurchasePersonalityChoice,
   PurchaseResult,
+  PurchaseRules,
   PurchaseWinner,
   TrendCard,
   UpgradeCard
@@ -205,6 +207,14 @@ interface ProductAdjustmentLike {
   preserveStock?: boolean;
 }
 
+function candidateRef(candidate: PurchaseCandidate) {
+  return {
+    ownerId: candidate.ownerId,
+    slotIndex: candidate.slotIndex,
+    productInstanceId: candidate.product.instanceId
+  };
+}
+
 export function resolveCustomerPurchase({
   customer,
   players,
@@ -213,7 +223,8 @@ export function resolveCustomerPurchase({
   roundBonuses,
   firstPlayer,
   customerIndex,
-  round
+  round,
+  rules
 }: {
   customer: CustomerCard;
   players: PlayerState[];
@@ -223,8 +234,10 @@ export function resolveCustomerPurchase({
   firstPlayer: PlayerId;
   customerIndex: number;
   round: number;
+  rules?: Partial<PurchaseRules>;
 }): PurchaseResult {
-  const candidates: PurchaseCandidate[] = [];
+  const appealThreshold = rules?.appealThreshold ?? PURCHASE_APPEAL_THRESHOLD;
+  let candidates: PurchaseCandidate[] = [];
 
   for (const player of players) {
     player.shelf.forEach((product, slotIndex) => {
@@ -251,13 +264,32 @@ export function resolveCustomerPurchase({
     });
   }
 
-  let eligible = candidates.filter((candidate) => candidate.appeal.total >= PURCHASE_APPEAL_THRESHOLD);
   const personality = customer.personality;
   if (personality?.kind === "trend_chaser") {
-    eligible = eligible.filter((candidate) => (candidate.trendScore ?? 0) >= personality.minTrendScore);
+    candidates = candidates.map((candidate) => {
+      const actual = candidate.trendScore ?? 0;
+      return {
+        ...candidate,
+        requirements: [
+          ...(candidate.requirements ?? []),
+          {
+            kind: "trend_score" as const,
+            actual,
+            required: personality.minTrendScore,
+            passed: actual >= personality.minTrendScore
+          }
+        ]
+      };
+    });
   }
+
+  let eligible = candidates.filter((candidate) => candidate.appeal.total >= appealThreshold);
+  if (personality?.kind === "trend_chaser") {
+    eligible = eligible.filter((candidate) => candidate.requirements?.every((requirement) => requirement.passed));
+  }
+
   if (eligible.length === 0) {
-    return { customer, candidates, eligible, winner: null };
+    return { customer, appealThreshold, candidates, eligible, winner: null };
   }
 
   const preferredOwners = tiePreferenceOwners(players, influences);
@@ -289,11 +321,23 @@ export function resolveCustomerPurchase({
     return left.slotIndex - right.slotIndex;
   });
   let winnerCandidate = sortedEligible[0];
+  let personalityChoice: PurchasePersonalityChoice | undefined;
 
   if (personality?.kind === "second_best" && sortedEligible[1]) {
-    const appealGap = winnerCandidate.appeal.total - sortedEligible[1].appeal.total;
-    if (appealGap <= personality.maxAppealGap) {
-      winnerCandidate = sortedEligible[1];
+    const firstChoice = winnerCandidate;
+    const secondChoice = sortedEligible[1];
+    const appealGap = firstChoice.appeal.total - secondChoice.appeal.total;
+    const applied = appealGap <= personality.maxAppealGap;
+    personalityChoice = {
+      kind: "second_best",
+      applied,
+      appealGap,
+      maxAppealGap: personality.maxAppealGap,
+      firstChoice: candidateRef(firstChoice),
+      secondChoice: candidateRef(secondChoice)
+    };
+    if (applied) {
+      winnerCandidate = secondChoice;
     }
   }
 
@@ -312,5 +356,5 @@ export function resolveCustomerPurchase({
     preserveStock
   };
 
-  return { customer, candidates, eligible, winner };
+  return { customer, appealThreshold, candidates, eligible, winner, personalityChoice };
 }

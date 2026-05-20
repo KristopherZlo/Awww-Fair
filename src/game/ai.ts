@@ -10,7 +10,7 @@ import type {
   TrendCard,
   UpgradeCard
 } from "./types";
-import { calculateAppeal, hasUpgrade, PURCHASE_APPEAL_THRESHOLD, TIP_APPEAL_THRESHOLD, trendModifierValue } from "./engine";
+import { calculateAppeal, hasUpgrade, PURCHASE_APPEAL_THRESHOLD, resolveCustomerPurchase, TIP_APPEAL_THRESHOLD, trendModifierValue } from "./engine";
 
 export interface AiPlanningInput {
   players: PlayerState[];
@@ -20,6 +20,9 @@ export interface AiPlanningInput {
   roundBonuses: ProductAdjustment[];
   productDeckLength: number;
   influenceDeckLength: number;
+  purchaseAppealThreshold?: number;
+  firstPlayer?: PlayerId;
+  round?: number;
 }
 
 export interface AiProductMove {
@@ -51,6 +54,11 @@ export interface AiPlanningPlan {
 
 export interface AiUpgradeChoice {
   upgradeId: string;
+  score: number;
+}
+
+export interface AiChoiceCard {
+  cardId: string;
   score: number;
 }
 
@@ -111,6 +119,36 @@ function collectRelevantTags(current: AiPlanningInput) {
   return [...tags];
 }
 
+function cloneProduct(product: ProductInstance): ProductInstance {
+  return {
+    ...product,
+    tags: [...product.tags],
+    sprite: { ...product.sprite }
+  };
+}
+
+function clonePlayers(players: PlayerState[]): PlayerState[] {
+  return players.map((player) => ({
+    ...player,
+    shelf: player.shelf.map((product) => (product ? cloneProduct(product) : null)),
+    productHand: player.productHand.map(cloneProduct),
+    influenceHand: [...player.influenceHand],
+    upgrades: [...player.upgrades]
+  }));
+}
+
+function cloneRoundBonuses(roundBonuses: ProductAdjustment[]): ProductAdjustment[] {
+  return roundBonuses.map((bonus) => ({ ...bonus }));
+}
+
+function clonePlayedInfluences(playedInfluences: PlayedInfluence[]): PlayedInfluence[] {
+  return playedInfluences.map((influence) => ({
+    ...influence,
+    modifiers: influence.modifiers?.map((modifier) => ({ ...modifier })),
+    productAdjustments: influence.productAdjustments?.map((adjustment) => ({ ...adjustment }))
+  }));
+}
+
 function chooseBestProductMove(current: AiPlanningInput, player: PlayerState): AiProductMove | null {
   if (player.productActionUsed || player.productHand.length === 0) {
     return null;
@@ -130,6 +168,48 @@ function chooseBestProductMove(current: AiPlanningInput, player: PlayerState): A
   }
 
   return best && best.score >= 0.5 ? best : null;
+}
+
+function productMoveOptions(player: PlayerState): Array<AiProductMove | null> {
+  if (player.productActionUsed || player.productHand.length === 0) {
+    return [null];
+  }
+
+  const moves: AiProductMove[] = [];
+  for (const product of player.productHand) {
+    for (let slotIndex = 0; slotIndex < player.shelf.length; slotIndex += 1) {
+      moves.push({ productInstanceId: product.instanceId, slotIndex, score: 0 });
+    }
+  }
+
+  return [null, ...moves];
+}
+
+function applyProductMove(players: PlayerState[], playerId: PlayerId, move: AiProductMove | null) {
+  if (!move) {
+    return;
+  }
+
+  const player = playerById(players, playerId);
+  if (player.productActionUsed) {
+    return;
+  }
+
+  const productIndex = player.productHand.findIndex((product) => product.instanceId === move.productInstanceId);
+  const product = player.productHand[productIndex];
+  if (!product) {
+    return;
+  }
+
+  const supplierBonus = hasUpgrade(player.upgrades, "supplier") ? 1 : 0;
+  const placedProduct =
+    supplierBonus > 0
+      ? { ...cloneProduct(product), stock: product.stock + supplierBonus, baseStock: product.baseStock + supplierBonus }
+      : cloneProduct(product);
+
+  player.shelf[move.slotIndex] = placedProduct;
+  player.productHand.splice(productIndex, 1);
+  player.productActionUsed = true;
 }
 
 function chooseWeakProductMove(current: AiPlanningInput, player: PlayerState): AiProductMove | null {
@@ -176,6 +256,7 @@ function chooseBestTableBonusMove(current: AiPlanningInput, player: PlayerState)
     return null;
   }
 
+  const appealThreshold = current.purchaseAppealThreshold ?? PURCHASE_APPEAL_THRESHOLD;
   let best: AiTableBonusMove | null = null;
   for (const [slotIndex, product] of player.shelf.entries()) {
     if (!product) {
@@ -195,7 +276,7 @@ function chooseBestTableBonusMove(current: AiPlanningInput, player: PlayerState)
         roundBonuses: current.roundBonuses
       });
       const boostedTotal = appeal.total + 1;
-      if (appeal.total < PURCHASE_APPEAL_THRESHOLD && boostedTotal >= PURCHASE_APPEAL_THRESHOLD) {
+      if (appeal.total < appealThreshold && boostedTotal >= appealThreshold) {
         score += 4;
       }
       if (appeal.total < TIP_APPEAL_THRESHOLD && boostedTotal >= TIP_APPEAL_THRESHOLD) {
@@ -214,20 +295,11 @@ function chooseBestTableBonusMove(current: AiPlanningInput, player: PlayerState)
   return best;
 }
 
-function chooseBestInfluenceMove(current: AiPlanningInput, player: PlayerState, opponent: PlayerState): AiInfluenceMove | null {
-  if (player.influenceActionUsed || player.influenceHand.length === 0) {
-    return null;
-  }
+function influenceMoveOptions(current: AiPlanningInput, player: PlayerState, opponent: PlayerState, cards: InfluenceCard[]) {
+  const options: AiInfluenceMove[] = [];
+  const consider = (choice: AiInfluenceMove) => options.push(choice);
 
-  let best: AiInfluenceMove | null = null;
-
-  function consider(choice: AiInfluenceMove) {
-    if (!best || choice.score > best.score) {
-      best = choice;
-    }
-  }
-
-  player.influenceHand.forEach((card: InfluenceCard) => {
+  cards.forEach((card: InfluenceCard) => {
     if (card.effect.kind === "tag_modifier") {
       const score = card.effect.modifiers.reduce((total, modifier) => {
         const ownShelfBonus = countShelfTag(player, modifier.tag) * 1.4;
@@ -285,8 +357,333 @@ function chooseBestInfluenceMove(current: AiPlanningInput, player: PlayerState, 
     }
   });
 
-  const selected = best as AiInfluenceMove | null;
+  return options;
+}
+
+function bestInfluenceMove(options: AiInfluenceMove[]) {
+  return options.reduce<AiInfluenceMove | null>((best, option) => (!best || option.score > best.score ? option : best), null);
+}
+
+function exactInfluenceMoveOptions(current: AiPlanningInput, player: PlayerState, opponent: PlayerState, cards = player.influenceHand): Array<AiInfluenceMove | null> {
+  if (player.influenceActionUsed || cards.length === 0) {
+    return [null];
+  }
+
+  const moves: AiInfluenceMove[] = [];
+  const relevantTags = collectRelevantTags(current);
+
+  for (const card of cards) {
+    if (card.effect.kind === "tag_modifier" || card.effect.kind === "tie_preference" || card.effect.kind === "draw_product" || card.effect.kind === "draw_influence" || card.effect.kind === "rearrange") {
+      moves.push({ cardId: card.id, score: 0 });
+    }
+
+    if (card.effect.kind === "anti_tag") {
+      for (const tag of relevantTags) {
+        moves.push({ cardId: card.id, score: 0, targetTag: tag });
+      }
+    }
+
+    if (card.effect.kind === "target_own_bonus") {
+      player.shelf.forEach((product, slotIndex) => {
+        if (product) {
+          moves.push({ cardId: card.id, score: 0, targetOwnerId: player.id, targetSlotIndex: slotIndex });
+        }
+      });
+    }
+
+    if (card.effect.kind === "target_opponent_penalty") {
+      opponent.shelf.forEach((product, slotIndex) => {
+        if (product) {
+          moves.push({ cardId: card.id, score: 0, targetOwnerId: opponent.id, targetSlotIndex: slotIndex });
+        }
+      });
+    }
+  }
+
+  return [null, ...moves];
+}
+
+function applyInfluenceMove(
+  players: PlayerState[],
+  playedInfluences: PlayedInfluence[],
+  current: AiPlanningInput,
+  playerId: PlayerId,
+  move: AiInfluenceMove | null
+) {
+  if (!move) {
+    return;
+  }
+
+  const player = playerById(players, playerId);
+  if (player.influenceActionUsed) {
+    return;
+  }
+
+  const cardIndex = player.influenceHand.findIndex((card) => card.id === move.cardId);
+  const card = player.influenceHand[cardIndex];
+  if (!card) {
+    return;
+  }
+
+  player.influenceHand.splice(cardIndex, 1);
+  player.influenceActionUsed = true;
+
+  if (card.effect.kind === "tag_modifier") {
+    playedInfluences.push({ id: card.id, name: card.name, ownerId: player.id, modifiers: card.effect.modifiers.map((modifier) => ({ ...modifier })) });
+  }
+
+  if (card.effect.kind === "anti_tag" && move.targetTag) {
+    playedInfluences.push({ id: card.id, name: card.name, ownerId: player.id, modifiers: [{ tag: move.targetTag, value: card.effect.value }] });
+  }
+
+  if ((card.effect.kind === "target_own_bonus" || card.effect.kind === "target_opponent_penalty") && move.targetOwnerId && move.targetSlotIndex !== undefined) {
+    playedInfluences.push({
+      id: card.id,
+      name: card.name,
+      ownerId: player.id,
+      productAdjustments: [
+        {
+          ownerId: move.targetOwnerId,
+          slotIndex: move.targetSlotIndex,
+          value: card.effect.value,
+          label: card.name,
+          preserveStock: "preserveStock" in card.effect ? card.effect.preserveStock : false
+        }
+      ]
+    });
+  }
+
+  if (card.effect.kind === "tie_preference") {
+    playedInfluences.push({ id: card.id, name: card.name, ownerId: player.id, tieOwner: player.id });
+  }
+
+  if (card.effect.kind === "rearrange") {
+    player.productActionUsed = false;
+  }
+}
+
+function chooseBestInfluenceMove(current: AiPlanningInput, player: PlayerState, opponent: PlayerState): AiInfluenceMove | null {
+  if (player.influenceActionUsed || player.influenceHand.length === 0) {
+    return null;
+  }
+
+  const selected = bestInfluenceMove(influenceMoveOptions(current, player, opponent, player.influenceHand));
   return selected && selected.score >= 1 ? selected : null;
+}
+
+function tableBonusMoveOptions(player: PlayerState): Array<AiTableBonusMove | null> {
+  if (!hasUpgrade(player.upgrades, "ad_table") || player.tableBonusUsed) {
+    return [null];
+  }
+
+  return [
+    null,
+    ...player.shelf.flatMap((product, slotIndex) => (product ? [{ slotIndex, score: 0 }] : []))
+  ];
+}
+
+function applyTableBonusMove(roundBonuses: ProductAdjustment[], player: PlayerState, move: AiTableBonusMove | null) {
+  if (!move || !hasUpgrade(player.upgrades, "ad_table") || player.tableBonusUsed) {
+    return;
+  }
+
+  player.tableBonusUsed = true;
+  roundBonuses.push({ ownerId: player.id, slotIndex: move.slotIndex, value: 1, label: "Рекламный столик" });
+}
+
+function roundBonusesWithTableMove(roundBonuses: ProductAdjustment[], player: PlayerState, move: AiTableBonusMove | null) {
+  if (!move || !hasUpgrade(player.upgrades, "ad_table") || player.tableBonusUsed) {
+    return roundBonuses;
+  }
+
+  return [...roundBonuses, { ownerId: player.id, slotIndex: move.slotIndex, value: 1, label: "Рекламный столик" }];
+}
+
+function resolveSalesPlayers(current: AiPlanningInput, players: PlayerState[], playedInfluences: PlayedInfluence[], roundBonuses: ProductAdjustment[]) {
+  const salePlayers = clonePlayers(players);
+  const firstPlayer = current.firstPlayer ?? current.players[0]?.id ?? "A";
+  const round = current.round ?? 1;
+  const appealThreshold = current.purchaseAppealThreshold ?? PURCHASE_APPEAL_THRESHOLD;
+
+  current.currentCustomers.forEach((customer, customerIndex) => {
+    const result = resolveCustomerPurchase({
+      customer,
+      players: salePlayers,
+      trends: current.activeTrends,
+      influences: playedInfluences,
+      roundBonuses,
+      firstPlayer,
+      customerIndex,
+      round,
+      rules: { appealThreshold }
+    });
+
+    if (!result.winner) {
+      return;
+    }
+
+    const owner = playerById(salePlayers, result.winner.ownerId);
+    owner.money += result.winner.payout;
+    owner.sales += 1;
+
+    if (!result.winner.preserveStock) {
+      const product = owner.shelf[result.winner.slotIndex];
+      if (product && product.instanceId === result.winner.product.instanceId) {
+        product.stock -= 1;
+        if (product.stock <= 0) {
+          owner.shelf[result.winner.slotIndex] = null;
+        }
+      }
+    }
+  });
+
+  return salePlayers;
+}
+
+function inventoryValue(current: AiPlanningInput, player: PlayerState) {
+  const shelfValue = player.shelf.reduce((total, product) => {
+    if (!product) {
+      return total;
+    }
+    return total + productLearningValue(current, product) * (1 + Math.max(0, Math.min(product.stock, 3)) * 0.15);
+  }, 0);
+  const handValue = player.productHand.reduce((total, product) => total + productLearningValue(current, product) * 0.35, 0);
+  return shelfValue + handValue;
+}
+
+function evaluatePlayers(current: AiPlanningInput, players: PlayerState[], playerId: PlayerId) {
+  const player = playerById(players, playerId);
+  const opponent = playerById(players, opponentOf(playerId));
+  return (player.money - opponent.money) * 10000 + (player.sales - opponent.sales) * 1000 + (inventoryValue(current, player) - inventoryValue(current, opponent));
+}
+
+interface ExactPlanCandidate {
+  productMove: AiProductMove | null;
+  influenceMove: AiInfluenceMove | null;
+  tableBonusMove: AiTableBonusMove | null;
+  score: number;
+  actionCount: number;
+}
+
+function candidateActionCount(candidate: Pick<ExactPlanCandidate, "productMove" | "influenceMove" | "tableBonusMove">) {
+  return (candidate.productMove ? 1 : 0) + (candidate.influenceMove ? 1 : 0) + (candidate.tableBonusMove ? 1 : 0);
+}
+
+function isBetterCandidate(candidate: ExactPlanCandidate, best: ExactPlanCandidate | null) {
+  if (!best) {
+    return true;
+  }
+
+  const scoreDelta = candidate.score - best.score;
+  if (Math.abs(scoreDelta) > 0.0001) {
+    return scoreDelta > 0;
+  }
+
+  return candidate.actionCount < best.actionCount;
+}
+
+function evaluateExactPlan(
+  current: AiPlanningInput,
+  playerId: PlayerId,
+  productMove: AiProductMove | null,
+  influenceMove: AiInfluenceMove | null,
+  tableBonusMove: AiTableBonusMove | null
+): ExactPlanCandidate {
+  const players = clonePlayers(current.players);
+  const playedInfluences = clonePlayedInfluences(current.playedInfluences);
+  const roundBonuses = cloneRoundBonuses(current.roundBonuses);
+
+  applyProductMove(players, playerId, productMove);
+  applyInfluenceMove(players, playedInfluences, current, playerId, influenceMove);
+  applyTableBonusMove(roundBonuses, playerById(players, playerId), tableBonusMove);
+
+  const salePlayers = resolveSalesPlayers(current, players, playedInfluences, roundBonuses);
+  return {
+    productMove,
+    influenceMove,
+    tableBonusMove,
+    score: evaluatePlayers(current, salePlayers, playerId),
+    actionCount: candidateActionCount({ productMove, influenceMove, tableBonusMove })
+  };
+}
+
+function evaluatePreparedPlan(
+  current: AiPlanningInput,
+  playerId: PlayerId,
+  players: PlayerState[],
+  playedInfluences: PlayedInfluence[],
+  roundBonuses: ProductAdjustment[],
+  productMove: AiProductMove | null,
+  influenceMove: AiInfluenceMove | null,
+  tableBonusMove: AiTableBonusMove | null
+): ExactPlanCandidate {
+  const salePlayers = resolveSalesPlayers(current, players, playedInfluences, roundBonuses);
+  return {
+    productMove,
+    influenceMove,
+    tableBonusMove,
+    score: evaluatePlayers(current, salePlayers, playerId),
+    actionCount: candidateActionCount({ productMove, influenceMove, tableBonusMove })
+  };
+}
+
+function exactPlanningTurn(current: AiPlanningInput, playerId: PlayerId): { best: ExactPlanCandidate; baseline: ExactPlanCandidate } {
+  const baseline = evaluatePreparedPlan(current, playerId, current.players, current.playedInfluences, current.roundBonuses, null, null, null);
+  let best: ExactPlanCandidate = baseline;
+  const player = playerById(current.players, playerId);
+
+  for (const productMove of productMoveOptions(player)) {
+    const productPlayers = clonePlayers(current.players);
+    applyProductMove(productPlayers, playerId, productMove);
+    const productPlayer = playerById(productPlayers, playerId);
+    const productOpponent = playerById(productPlayers, opponentOf(playerId));
+    const productInput = { ...current, players: productPlayers };
+
+    for (const influenceMove of exactInfluenceMoveOptions(productInput, productPlayer, productOpponent)) {
+      const influencePlayers = clonePlayers(productPlayers);
+      const influencePlayed = clonePlayedInfluences(current.playedInfluences);
+      applyInfluenceMove(influencePlayers, influencePlayed, productInput, playerId, influenceMove);
+      const influencePlayer = playerById(influencePlayers, playerId);
+
+      for (const tableBonusMove of tableBonusMoveOptions(influencePlayer)) {
+        const candidate = evaluatePreparedPlan(
+          current,
+          playerId,
+          influencePlayers,
+          influencePlayed,
+          roundBonusesWithTableMove(current.roundBonuses, influencePlayer, tableBonusMove),
+          productMove,
+          influenceMove,
+          tableBonusMove
+        );
+        if (isBetterCandidate(candidate, best)) {
+          best = candidate;
+        }
+      }
+    }
+  }
+
+  return { best, baseline };
+}
+
+export function chooseAiProductChoice(current: AiPlanningInput, player: PlayerState, products: ProductInstance[]): AiChoiceCard | null {
+  return products.reduce<AiChoiceCard | null>((best, product) => {
+    const players = clonePlayers(current.players);
+    const draftPlayer = playerById(players, player.id);
+    draftPlayer.productHand.push(cloneProduct(product));
+    const { best: plan } = exactPlanningTurn({ ...current, players }, player.id);
+    const choice = { cardId: product.instanceId, score: plan.score + productLearningValue(current, product) * 0.001 };
+    return !best || choice.score > best.score ? choice : best;
+  }, null);
+}
+
+export function chooseAiInfluenceChoice(current: AiPlanningInput, player: PlayerState, opponent: PlayerState, cards: InfluenceCard[]): AiChoiceCard | null {
+  const move = bestInfluenceMove(influenceMoveOptions(current, player, opponent, cards));
+  if (move) {
+    return { cardId: move.cardId, score: move.score };
+  }
+
+  return cards[0] ? { cardId: cards[0].id, score: 0 } : null;
 }
 
 function virtualPlayerAfterProduct(player: PlayerState, move: AiProductMove | null): PlayerState {
@@ -311,18 +708,17 @@ function virtualPlayerAfterProduct(player: PlayerState, move: AiProductMove | nu
 
 export function planAiPlanningTurn(current: AiPlanningInput, playerId: PlayerId): AiPlanningPlan {
   const player = playerById(current.players, playerId);
-  const opponent = playerById(current.players, opponentOf(playerId));
-  const productMove = chooseBestProductMove(current, player);
-  const virtualPlayer = virtualPlayerAfterProduct(player, productMove);
-  const virtualPlayers = current.players.map((candidate) => (candidate.id === player.id ? virtualPlayer : candidate));
-  const virtualInput = { ...current, players: virtualPlayers };
-  const influenceMove = chooseBestInfluenceMove(virtualInput, virtualPlayer, opponent);
-  const tableBonusMove = chooseBestTableBonusMove(virtualInput, virtualPlayer);
+  const { best, baseline } = exactPlanningTurn(current, playerId);
+  const scoreImprovement = best.score - baseline.score;
+  const moveScore = scoreImprovement / 10000;
+  const productMove = best.productMove ? { ...best.productMove, score: moveScore } : null;
+  const influenceMove = best.influenceMove ? { ...best.influenceMove, score: moveScore } : null;
+  const tableBonusMove = best.tableBonusMove ? { ...best.tableBonusMove, score: moveScore } : null;
   const notes: string[] = [];
   let scoreDelta = 0;
 
   if (productMove) {
-    const reward = rewardFor(productMove.score);
+    const reward = rewardFor(moveScore);
     scoreDelta += reward;
     notes.push(`${signed(reward)} за товарный ход`);
   } else if (!player.productActionUsed && player.productHand.length > 0) {
@@ -331,7 +727,7 @@ export function planAiPlanningTurn(current: AiPlanningInput, playerId: PlayerId)
   }
 
   if (influenceMove) {
-    const reward = rewardFor(influenceMove.score);
+    const reward = rewardFor(moveScore);
     scoreDelta += reward;
     notes.push(`${signed(reward)} за карту влияния`);
   } else if (!player.influenceActionUsed && player.influenceHand.length > 0) {
@@ -340,7 +736,7 @@ export function planAiPlanningTurn(current: AiPlanningInput, playerId: PlayerId)
   }
 
   if (tableBonusMove) {
-    const reward = rewardFor(tableBonusMove.score);
+    const reward = rewardFor(moveScore);
     scoreDelta += reward;
     notes.push(`${signed(reward)} за рекламный столик`);
   }

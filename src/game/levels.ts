@@ -1,3 +1,5 @@
+import type { CustomerCard } from "./types";
+
 export interface CampaignLevel {
   level: number;
   title: string;
@@ -12,6 +14,20 @@ export interface CampaignLevel {
 export interface CampaignProgress {
   highestUnlockedLevel: number;
   completedLevels: number[];
+}
+
+export type CampaignCustomerPersonalityMode = "off" | "simple" | "all";
+
+export interface CampaignLevelRules {
+  trendCount: number;
+  partyGoalCount: number;
+  influenceHandSize: number;
+  purchaseAppealThreshold: number;
+  customerPersonalityMode: CampaignCustomerPersonalityMode;
+}
+
+export interface CampaignRulesOptions {
+  customerPersonalitiesEnabled?: boolean;
 }
 
 export const CAMPAIGN_LEVELS: CampaignLevel[] = [
@@ -38,7 +54,7 @@ export const CAMPAIGN_LEVELS: CampaignLevel[] = [
   { level: 21, title: "Шляпный намёк", district: "Улица модистов", opponentName: "Виви", opponentNameEn: "Vivi", opponentSpecies: "кролик", aiDifficulty: 21, story: "В витрине магазина шляп уже видно нашу мечту." },
   { level: 22, title: "Последние монеты", district: "Кассовый дворик", opponentName: "Роро", opponentNameEn: "Roro", opponentSpecies: "морская свинка", aiDifficulty: 22, story: "Каждый клиент может решить судьбу покупки." },
   { level: 23, title: "Главный соперник", district: "Большой шатёр", opponentName: "Кира", opponentNameEn: "Kira", opponentSpecies: "лиса", aiDifficulty: 23, story: "Лучшие продавцы мира Ааах собрались у главного шатра." },
-  { level: 24, title: "Новая шляпа", district: "Шляпная лавка", opponentName: "Йода", opponentNameEn: "Yoda", opponentSpecies: "кошечка", aiDifficulty: 24, story: "Последняя победа отделяет нас от красивой новой шляпы." }
+  { level: 24, title: "Новая шляпа", district: "Шляпная лавка", opponentName: "Йода", opponentNameEn: "Yoda", opponentSpecies: "кролик", aiDifficulty: 24, story: "Последняя победа отделяет нас от красивой новой шляпы." }
 ];
 
 export function createDefaultCampaignProgress(): CampaignProgress {
@@ -60,4 +76,36 @@ export function campaignProgressAfterWin(progress: CampaignProgress, level: numb
     highestUnlockedLevel,
     completedLevels
   };
+}
+
+export function campaignRulesForLevel(level: number, options: CampaignRulesOptions = {}): CampaignLevelRules {
+  const campaignLevel = Math.max(1, Math.min(CAMPAIGN_LEVELS.length, Math.round(level)));
+  const customerPersonalityMode: CampaignCustomerPersonalityMode = options.customerPersonalitiesEnabled
+    ? campaignLevel === 1
+      ? "off"
+      : campaignLevel < 8
+        ? "simple"
+        : "all"
+    : "off";
+
+  return {
+    trendCount: campaignLevel >= 7 ? 3 : campaignLevel >= 5 ? 2 : campaignLevel >= 3 ? 1 : 0,
+    partyGoalCount: campaignLevel >= 8 ? 3 : campaignLevel >= 6 ? 2 : campaignLevel >= 4 ? 1 : 0,
+    influenceHandSize: campaignLevel >= 9 ? 2 : campaignLevel >= 7 ? 1 : 0,
+    purchaseAppealThreshold: campaignLevel <= 2 ? 3 : campaignLevel <= 4 ? 4 : 5,
+    customerPersonalityMode
+  };
+}
+
+export function campaignCustomerForRules(customer: CustomerCard, rules: CampaignLevelRules): CustomerCard {
+  if (rules.customerPersonalityMode === "all") {
+    return customer;
+  }
+
+  if (rules.customerPersonalityMode === "simple" && customer.personality?.kind !== "trend_chaser") {
+    return customer;
+  }
+
+  const { personality: _personality, ...customerWithoutPersonality } = customer;
+  return customerWithoutPersonality;
 }

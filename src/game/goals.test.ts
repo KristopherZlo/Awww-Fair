@@ -35,6 +35,7 @@ const child: CustomerCard = {
 function soldToA(product = cookie): PurchaseResult {
   return {
     customer: child,
+    appealThreshold: 5,
     candidates: [],
     eligible: [],
     winner: {
