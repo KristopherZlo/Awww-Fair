@@ -333,6 +333,13 @@ interface NetworkResponse {
 
 const LOBBY_API = "/api/lobbies";
 
+function lobbyAuthHeaders(session: Pick<LobbySession, "token">, headers: Record<string, string> = {}) {
+  return {
+    ...headers,
+    Authorization: `Bearer ${session.token}`
+  };
+}
+
 interface SavedSession {
   version: typeof SESSION_STORAGE_VERSION;
   state: GameState;
@@ -2046,7 +2053,7 @@ export default function App() {
     }
     void fetch(`${LOBBY_API}/${session.code}/state`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: lobbyAuthHeaders(session, { "Content-Type": "application/json" }),
       body: JSON.stringify({
         token: session.token,
         playerId: session.playerId,
@@ -2084,16 +2091,9 @@ export default function App() {
     });
     const url = `${LOBBY_API}/${session.code}/leave`;
 
-    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function" && typeof Blob !== "undefined") {
-      const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
-      if (sent) {
-        return;
-      }
-    }
-
     void fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: lobbyAuthHeaders(session, { "Content-Type": "application/json" }),
       body,
       keepalive: true
     }).catch(() => undefined);
@@ -2113,7 +2113,11 @@ export default function App() {
       }
 
       try {
-        const payload = await parseLobbyResponse(await fetch(`${LOBBY_API}/${session.code}?token=${session.token}`));
+        const payload = await parseLobbyResponse(
+          await fetch(`${LOBBY_API}/${session.code}`, {
+            headers: lobbyAuthHeaders(session)
+          })
+        );
         if (disposed) {
           return;
         }

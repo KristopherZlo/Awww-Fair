@@ -1745,6 +1745,7 @@ describe("App layout shell", () => {
 
   it("restarts an online lobby game without dropping to a local table", async () => {
     let postedState: Record<string, unknown> | null = null;
+    let postedAuth: string | null = null;
     saveGameState(
       {
         phase: "game_end",
@@ -1770,6 +1771,7 @@ describe("App layout shell", () => {
           return new Response(JSON.stringify({ urls: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
         if (init?.method === "PUT") {
+          postedAuth = new Headers(init.headers).get("authorization");
           postedState = JSON.parse(String(init.body)).state;
           return new Response(
             JSON.stringify({ code: "ABCD2", playerId: "A", token: "host-token", version: 4, state: postedState, seats: { A: true, B: true } }),
@@ -1787,6 +1789,7 @@ describe("App layout shell", () => {
     fireEvent.click(container.querySelector<HTMLButtonElement>(".end-actions .primary-action")!);
 
     await waitFor(() => expect(postedState?.phase).toBe("planning"));
+    expect(postedAuth).toBe("Bearer host-token");
     expect(screen.getByText(/lobby code ABCD2/i)).toBeInTheDocument();
   });
 });
