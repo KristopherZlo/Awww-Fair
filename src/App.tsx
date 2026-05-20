@@ -45,6 +45,16 @@ import {
 import { localHintMove, localHintValue, shouldExposeLocalHintMarkers } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
 import {
+  displayPlayerName,
+  displayPlayerNameFor,
+  formatLogForViewer,
+  formatModifiers,
+  formatSignedScore,
+  isFocusTrendLine,
+  ownerLogToken,
+  playerLogToken
+} from "./app/presentation";
+import {
   SESSION_STORAGE_VERSION,
   clearSavedSession,
   loadCampaignProgress,
@@ -75,6 +85,7 @@ import {
   UPGRADE_CARDS
 } from "./data/cards";
 import { CustomerCard, InfluenceCard, ProductCard, TagPill, TrendCard, UpgradeCard } from "./components/cards";
+import { SaleResultCards } from "./components/saleResults";
 import {
   buildDeck,
   createProductInstance,
@@ -141,8 +152,6 @@ import type {
   PlayerState,
   ProductAdjustment,
   ProductInstance,
-  PurchaseCandidateRequirement,
-  PurchasePersonalityChoice,
   PurchaseResult,
   Tag,
   TrendCard as TrendCardType,
@@ -355,41 +364,6 @@ function moneySoundPlayerIdFor(state: GameState, lobby: LobbySession | null): Pl
   return state.activePlayer;
 }
 
-function displayPlayerName(playerId: PlayerId, viewerId: PlayerId, language: Language) {
-  return playerId === viewerId ? ui(language, "you") : ui(language, "opponent");
-}
-
-function displayPlayerNameFor(player: PlayerState | undefined, viewerId: PlayerId, language: Language) {
-  if (!player) {
-    return ui(language, "opponent");
-  }
-  if (player.id === viewerId) {
-    return ui(language, "you");
-  }
-  return player.name && !["Вы", "Оппонент"].includes(player.name) ? player.name : ui(language, "opponent");
-}
-
-function playerLogToken(playerId: PlayerId) {
-  return `{{player:${playerId}}}`;
-}
-
-function ownerLogToken(playerId: PlayerId) {
-  return `{{owner:${playerId}}}`;
-}
-
-function formatLogForViewer(log: string, viewerId: PlayerId, language: Language) {
-  return log
-    .replace(/\{\{player:([AB])\}\}/g, (_match, playerId: string) => displayPlayerName(playerId as PlayerId, viewerId, language))
-    .replace(/\{\{owner:([AB])\}\}/g, (_match, playerId: string) => ownerPhrase(playerId as PlayerId, viewerId, language));
-}
-
-function ownerPhrase(playerId: PlayerId, viewerId: PlayerId, language: Language) {
-  if (language === "en") {
-    return playerId === viewerId ? "for you" : "for the opponent";
-  }
-  return playerId === viewerId ? "у вас" : "у оппонента";
-}
-
 function formatTurnTime(seconds: number) {
   const safeSeconds = Math.max(0, seconds);
   const minutes = Math.floor(safeSeconds / 60)
@@ -454,57 +428,12 @@ function winningPlayerId(players: PlayerState[]): PlayerId | null {
   return a.money > b.money ? a.id : b.id;
 }
 
-function formatModifiers(modifiers: { tag: Tag; value: number }[], language: Language, focused = false) {
-  return modifiers
-    .map((modifier) => {
-      const value = trendModifierValue(modifier.value, focused);
-      return `${tagText(language, modifier.tag)} ${value > 0 ? "+" : ""}${value}`;
-    })
-    .join(", ");
-}
-
-function formatSignedScore(value: number) {
-  return `${value >= 0 ? "+" : ""}${value}`;
-}
-
-function isFocusTrendLine(label: string) {
-  return label.includes("(главный тренд)");
-}
-
 function lineTag(label: string) {
   return label.split(":").pop()?.replace("(главный тренд)", "").trim() ?? "";
 }
 
 function lineSource(label: string) {
   return label.split(":")[0]?.trim() ?? label;
-}
-
-function isWinningCandidate(result: PurchaseResult, candidate: PurchaseResult["candidates"][number]) {
-  return (
-    result.winner?.ownerId === candidate.ownerId &&
-    result.winner.slotIndex === candidate.slotIndex &&
-    result.winner.product.instanceId === candidate.product.instanceId
-  );
-}
-
-function formatCandidateRequirement(requirement: PurchaseCandidateRequirement, language: Language) {
-  if (language === "en") {
-    return `personality: trend bonus ${requirement.actual} / ${requirement.required} - ${requirement.passed ? "matches" : "does not match"}`;
-  }
-
-  return `характер: трендовый бонус ${requirement.actual} / ${requirement.required} - ${requirement.passed ? "подходит" : "не подходит"}`;
-}
-
-function formatPersonalityChoice(choice: PurchasePersonalityChoice, language: Language) {
-  if (language === "en") {
-    return choice.applied
-      ? `personality: bought the second-highest product, gap ${choice.appealGap} / ${choice.maxAppealGap}`
-      : `personality: kept the highest product, gap ${choice.appealGap} / ${choice.maxAppealGap}`;
-  }
-
-  return choice.applied
-    ? `характер: куплен товар со вторым результатом, разница ${choice.appealGap} / ${choice.maxAppealGap}`
-    : `характер: куплен лучший товар, разница ${choice.appealGap} / ${choice.maxAppealGap}`;
 }
 
 function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, language: Language) {
@@ -2996,55 +2925,18 @@ export default function App() {
   }
 
   function renderSaleResultCards(results: PurchaseResult[], namespace: string) {
-    return results.map((result, index) => {
-      const key = `${namespace}-${result.customer.id}-${index}`;
-      const contentId = `${salePanelId}-${key}`;
-      const expanded = expandedSaleResultKeys.has(key);
-      return (
-        <div key={key} className={`sale-result-card ${expanded ? "expanded" : ""}`}>
-          <button
-            type="button"
-            className="sale-result-toggle"
-            aria-expanded={expanded}
-            aria-controls={contentId}
-            onClick={() => toggleSaleResultKey(key)}
-          >
-            <span>{customerName(language, result.customer)}: {result.winner ? `${productName(language, result.winner.product)} ${ownerPhrase(result.winner.ownerId, localPlayerId, language)}` : ui(language, "noPurchase")}</span>
-          </button>
-          {expanded && (
-            <div id={contentId} className="sale-result-body">
-              {result.candidates.map((candidate) => (
-                <div key={`${candidate.ownerId}-${candidate.slotIndex}`} className={isWinningCandidate(result, candidate) ? "formula winner" : "formula"}>
-                  <b>
-                    {productName(language, candidate.product)} · {displayPlayerNameFor(state.players.find((player) => player.id === candidate.ownerId), localPlayerId, language)}
-                  </b>
-                  {candidate.appeal.breakdown.map((line) => (
-                    <span key={`${line.label}-${line.value}`} className={isFocusTrendLine(line.label) ? "focus-formula-line" : undefined}>
-                      {line.value > 0 ? "+" : ""}
-                      {line.value} {line.label}
-                    </span>
-                  ))}
-                  {candidate.requirements?.map((requirement) => (
-                    <span
-                      key={`${requirement.kind}-${requirement.actual}-${requirement.required}`}
-                      className={`formula-requirement ${requirement.passed ? "passed" : "failed"}`}
-                    >
-                      {formatCandidateRequirement(requirement, language)}
-                    </span>
-                  ))}
-                  <strong>= {candidate.appeal.total}</strong>
-                </div>
-              ))}
-              {result.personalityChoice && (
-                <p className={`formula-choice-note ${result.personalityChoice.applied ? "passed" : ""}`}>
-                  {formatPersonalityChoice(result.personalityChoice, language)}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      );
-    });
+    return (
+      <SaleResultCards
+        results={results}
+        namespace={namespace}
+        contentIdPrefix={salePanelId}
+        expandedKeys={expandedSaleResultKeys}
+        players={state.players}
+        localPlayerId={localPlayerId}
+        language={language}
+        onToggle={toggleSaleResultKey}
+      />
+    );
   }
 
   return (
