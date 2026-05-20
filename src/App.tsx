@@ -42,7 +42,7 @@ import {
   MIN_TURN_TIME_SECONDS,
   clampTurnTime
 } from "./app/gameConfig";
-import { localHintMove, localHintValue, shouldExposeLocalHintMarkers } from "./app/localHints";
+import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
 import {
   displayPlayerName,
@@ -63,6 +63,8 @@ import {
   saveCampaignProgress,
   saveSession
 } from "./app/persistence";
+import { useLocalHintMarkers } from "./app/useLocalHintMarkers";
+import { useLobbyNetworkUrls } from "./app/useLobbyNetworkUrls";
 import type {
   AiMode,
   AudioSettings,
@@ -73,7 +75,6 @@ import type {
   LobbySession,
   MenuView,
   MusicStatus,
-  NetworkResponse,
   SavedSession
 } from "./app/types";
 import {
@@ -638,7 +639,7 @@ export default function App() {
   const [lobbyError, setLobbyError] = useState("");
   const [syncStatus, setSyncStatus] = useState<"local" | "online" | "syncing" | "offline">(() => (initialSession?.lobby ? "online" : "local"));
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
-  const [networkUrls, setNetworkUrls] = useState<string[]>([]);
+  const networkUrls = useLobbyNetworkUrls();
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>("idle");
@@ -649,7 +650,7 @@ export default function App() {
   const [expandedSaleResultKeys, setExpandedSaleResultKeys] = useState<Set<string>>(() => new Set());
   const [lastSaleReviewOpen, setLastSaleReviewOpen] = useState(false);
   const [turnCue, setTurnCue] = useState<{ key: string; label: string; expiresAt: number } | null>(null);
-  const [localHintMarkersEnabled, setLocalHintMarkersEnabled] = useState(() => shouldExposeLocalHintMarkers());
+  const localHintMarkersEnabled = useLocalHintMarkers();
   const lobbyRef = useRef<LobbySession | null>(null);
   const applyingRemoteRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -686,21 +687,6 @@ export default function App() {
 
     preloadImage(CUTSCENE_FRAMES[cutscene.frameIndex + 1]?.image);
   }, [cutscene?.frameIndex]);
-
-  useEffect(() => {
-    const syncLocalHintMarkers = () => setLocalHintMarkersEnabled(shouldExposeLocalHintMarkers());
-
-    syncLocalHintMarkers();
-    window.addEventListener("local-hint-markers-change", syncLocalHintMarkers);
-
-    const observer = new MutationObserver(syncLocalHintMarkers);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-local-hint-markers"] });
-
-    return () => {
-      window.removeEventListener("local-hint-markers-change", syncLocalHintMarkers);
-      observer.disconnect();
-    };
-  }, []);
 
   const activePlayer = state.players.find((player) => player.id === state.activePlayer) ?? state.players[0];
   const isAiTurn = Boolean(state.aiPlayerId && state.activePlayer === state.aiPlayerId);
@@ -743,36 +729,6 @@ export default function App() {
           : musicStatus === "paused"
             ? "пауза"
             : "готова";
-
-  useEffect(() => {
-    if (typeof fetch === "undefined") {
-      return;
-    }
-
-    let disposed = false;
-
-    async function loadNetworkUrls() {
-      try {
-        const response = await fetch("/api/network");
-        if (!response.ok) {
-          return;
-        }
-
-        const payload = (await response.json()) as NetworkResponse;
-        const urls = Array.isArray(payload.urls) ? payload.urls.filter((url): url is string => typeof url === "string") : [];
-        if (!disposed) {
-          setNetworkUrls(urls);
-        }
-      } catch {
-        // Local hotseat mode can run without the lobby server.
-      }
-    }
-
-    void loadNetworkUrls();
-    return () => {
-      disposed = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (typeof Audio === "undefined") {
