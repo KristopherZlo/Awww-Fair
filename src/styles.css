@@ -693,10 +693,63 @@ button.card {
 }
 
 .personality-line {
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   color: #6b5136;
   font-size: 0.72rem;
   font-weight: 850;
   line-height: 1.1;
+}
+
+.personality-badge {
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid rgba(107, 81, 54, 0.22);
+  border-radius: 7px;
+  background: rgba(255, 248, 233, 0.72);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.personality-badge:focus-visible {
+  outline: 2px solid rgba(107, 81, 54, 0.5);
+  outline-offset: 2px;
+}
+
+.personality-tooltip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 6;
+  width: max-content;
+  max-width: min(260px, 72vw);
+  padding: 7px 8px;
+  border: 1px solid rgba(248, 234, 210, 0.2);
+  border-radius: 8px;
+  background: #24160d;
+  color: #fff8e9;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.26);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.25;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  white-space: normal;
+}
+
+.personality-line:hover .personality-tooltip,
+.personality-badge:focus-visible + .personality-tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .tag-row {

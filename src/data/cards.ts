@@ -38,22 +38,22 @@ export const PRODUCT_CARDS: ProductCard[] = [
 ];
 
 export const CUSTOMER_CARDS: CustomerCard[] = [
-  { id: "child", name: "Ребёнок", type: "customer", primaryTag: "детское", secondaryTag: "сладкое", sprite: { col: 0, row: 0 } },
-  { id: "student", name: "Студент", type: "customer", primaryTag: "дешёвое", secondaryTag: "быстрое", sprite: { col: 1, row: 0 } },
-  { id: "tourist", name: "Турист", type: "customer", primaryTag: "местное", secondaryTag: "дорогое", sprite: { col: 2, row: 0 } },
-  { id: "grandma", name: "Бабушка", type: "customer", primaryTag: "свежее", secondaryTag: "сладкое", sprite: { col: 3, row: 0 } },
-  { id: "office_worker", name: "Офисник", type: "customer", primaryTag: "напиток", secondaryTag: "быстрое", sprite: { col: 0, row: 1 } },
-  { id: "athlete", name: "Спортсмен", type: "customer", primaryTag: "свежее", secondaryTag: "напиток", sprite: { col: 1, row: 1 } },
-  { id: "family", name: "Семья", type: "customer", primaryTag: "детское", secondaryTag: "дешёвое", sprite: { col: 2, row: 1 } },
-  { id: "gourmet", name: "Гурман", type: "customer", primaryTag: "дорогое", secondaryTag: "свежее", sprite: { col: 3, row: 1 } },
-  { id: "driver", name: "Водитель", type: "customer", primaryTag: "быстрое", secondaryTag: "напиток", sprite: { col: 0, row: 2 } },
-  { id: "blogger", name: "Блогер", type: "customer", primaryTag: "местное", secondaryTag: "дорогое", sprite: { col: 1, row: 2 } },
-  { id: "schoolkid", name: "Школьник", type: "customer", primaryTag: "детское", secondaryTag: "дешёвое", sprite: { col: 2, row: 2 } },
-  { id: "sweet_tooth", name: "Сладкоежка", type: "customer", primaryTag: "сладкое", secondaryTag: "дешёвое", sprite: { col: 3, row: 2 } },
-  { id: "farmer", name: "Фермер", type: "customer", primaryTag: "местное", secondaryTag: "свежее", sprite: { col: 0, row: 3 } },
-  { id: "rich", name: "Богач", type: "customer", primaryTag: "дорогое", secondaryTag: "сладкое", sprite: { col: 1, row: 3 } },
-  { id: "rushing", name: "Спешащий клиент", type: "customer", primaryTag: "быстрое", secondaryTag: "дешёвое", sprite: { col: 2, row: 3 } },
-  { id: "vacationer", name: "Отдыхающий", type: "customer", primaryTag: "напиток", secondaryTag: "сладкое", sprite: { col: 3, row: 3 } }
+  { id: "child", name: "Ребёнок", type: "customer", primaryTag: "детское", secondaryTag: "сладкое", sprite: { col: 0, row: 0 }, personality: { kind: "second_best", label: "Любопытный выбор", description: "Если два товара почти равны, может выбрать второй.", maxAppealGap: 1 } },
+  { id: "student", name: "Студент", type: "customer", primaryTag: "дешёвое", secondaryTag: "быстрое", sprite: { col: 1, row: 0 }, personality: { kind: "bargain_hunter", label: "Любит скидки", description: "Дешёвые товары получают +1 привлекательности." } },
+  { id: "tourist", name: "Турист", type: "customer", primaryTag: "местное", secondaryTag: "дорогое", sprite: { col: 2, row: 0 }, personality: { kind: "trend_chaser", label: "Верит афишам", description: "Покупает только при заметной поддержке тренда.", minTrendScore: 2 } },
+  { id: "grandma", name: "Бабушка", type: "customer", primaryTag: "свежее", secondaryTag: "сладкое", sprite: { col: 3, row: 0 }, personality: { kind: "second_best", label: "Присматривается", description: "Если варианты близки, берёт не самый очевидный.", maxAppealGap: 1 } },
+  { id: "office_worker", name: "Офисник", type: "customer", primaryTag: "напиток", secondaryTag: "быстрое", sprite: { col: 0, row: 1 }, personality: { kind: "trend_chaser", label: "Берёт хиты дня", description: "Покупает только товары с трендовым бонусом.", minTrendScore: 2 } },
+  { id: "athlete", name: "Спортсмен", type: "customer", primaryTag: "свежее", secondaryTag: "напиток", sprite: { col: 1, row: 1 }, personality: { kind: "trend_chaser", label: "Следит за модой", description: "Покупает только при сильном тренде.", minTrendScore: 3 } },
+  { id: "family", name: "Семья", type: "customer", primaryTag: "детское", secondaryTag: "дешёвое", sprite: { col: 2, row: 1 }, personality: { kind: "bargain_hunter", label: "Семейный бюджет", description: "Дешёвые товары получают +1 привлекательности." } },
+  { id: "gourmet", name: "Гурман", type: "customer", primaryTag: "дорогое", secondaryTag: "свежее", sprite: { col: 3, row: 1 }, personality: { kind: "trend_chaser", label: "Ищет рекомендацию", description: "Покупает только при сильном тренде.", minTrendScore: 3 } },
+  { id: "driver", name: "Водитель", type: "customer", primaryTag: "быстрое", secondaryTag: "напиток", sprite: { col: 0, row: 2 }, personality: { kind: "bargain_hunter", label: "Берёт по акции", description: "Дешёвые товары получают +1 привлекательности." } },
+  { id: "blogger", name: "Блогер", type: "customer", primaryTag: "местное", secondaryTag: "дорогое", sprite: { col: 1, row: 2 }, personality: { kind: "trend_chaser", label: "Охотится за хайпом", description: "Покупает только при сильном тренде.", minTrendScore: 3 } },
+  { id: "schoolkid", name: "Школьник", type: "customer", primaryTag: "детское", secondaryTag: "дешёвое", sprite: { col: 2, row: 2 }, personality: { kind: "bargain_hunter", label: "Копит сдачу", description: "Дешёвые товары получают +1 привлекательности." } },
+  { id: "sweet_tooth", name: "Сладкоежка", type: "customer", primaryTag: "сладкое", secondaryTag: "дешёвое", sprite: { col: 3, row: 2 }, personality: { kind: "second_best", label: "Хочет сюрприз", description: "Если варианты близки, может выбрать второй.", maxAppealGap: 1 } },
+  { id: "farmer", name: "Фермер", type: "customer", primaryTag: "местное", secondaryTag: "свежее", sprite: { col: 0, row: 3 }, personality: { kind: "second_best", label: "Сравнивает прилавки", description: "Если варианты близки, выбирает второй.", maxAppealGap: 1 } },
+  { id: "rich", name: "Богач", type: "customer", primaryTag: "дорогое", secondaryTag: "сладкое", sprite: { col: 1, row: 3 }, personality: { kind: "trend_chaser", label: "Покупает модное", description: "Покупает только при трендовом бонусе.", minTrendScore: 2 } },
+  { id: "rushing", name: "Спешащий клиент", type: "customer", primaryTag: "быстрое", secondaryTag: "дешёвое", sprite: { col: 2, row: 3 }, personality: { kind: "bargain_hunter", label: "Не любит переплаты", description: "Дешёвые товары получают +1 привлекательности." } },
+  { id: "vacationer", name: "Отдыхающий", type: "customer", primaryTag: "напиток", secondaryTag: "сладкое", sprite: { col: 3, row: 3 }, personality: { kind: "second_best", label: "Выбирает настроение", description: "Если варианты близки, может выбрать второй.", maxAppealGap: 1 } }
 ];
 
 export const TREND_CARDS: TrendCard[] = [

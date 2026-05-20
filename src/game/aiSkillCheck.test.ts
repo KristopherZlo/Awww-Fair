@@ -22,7 +22,7 @@ describe("AI skill check", () => {
     expect(result.baselineWinRate).toBeLessThanOrEqual(0.36);
     expect(result.noSaleRate).toBeGreaterThanOrEqual(0.08);
     expect(result.noSaleRate).toBeLessThanOrEqual(0.24);
-    expect(result.tipRateOfSales).toBeGreaterThanOrEqual(0.14);
+    expect(result.tipRateOfSales).toBeGreaterThanOrEqual(0.15);
     expect(result.productSpread).toBeLessThanOrEqual(3);
     expect(result.goalsPerGame).toBeGreaterThanOrEqual(1.2);
     expect(result.sales).toBeGreaterThan(result.games * 8);

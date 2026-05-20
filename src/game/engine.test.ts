@@ -179,7 +179,7 @@ describe("Trend Market engine", () => {
     expect(result.winner?.product.name).toBe("Игрушка");
   });
 
-  it("ignores customer personalities when calculating appeal", () => {
+  it("adds a bargain hunter personality bonus to cheap products", () => {
     const bargainCustomer = {
       ...child,
       personality: {
@@ -200,11 +200,11 @@ describe("Trend Market engine", () => {
       roundBonuses: []
     });
 
-    expect(result.breakdown.some((line) => line.label.startsWith("характер"))).toBe(false);
-    expect(result.total).toBe(3);
+    expect(result.breakdown).toContainEqual({ label: "характер: любит скидки", value: 1 });
+    expect(result.total).toBe(4);
   });
 
-  it("does not let trend-chaser personalities block otherwise eligible purchases", () => {
+  it("makes trend chaser customers buy only when a product has enough trend appeal", () => {
     const trendCustomer = {
       ...child,
       personality: {
@@ -220,7 +220,7 @@ describe("Trend Market engine", () => {
       players: [player("A", 0, [toy])],
       trends: [],
       influences: [],
-      roundBonuses: [{ ownerId: "A", slotIndex: 0, value: 2, label: "Тестовый минимум" }],
+      roundBonuses: [],
       firstPlayer: "A",
       customerIndex: 0,
       round: 1
@@ -238,17 +238,17 @@ describe("Trend Market engine", () => {
         }
       ],
       influences: [],
-      roundBonuses: [{ ownerId: "A", slotIndex: 0, value: 2, label: "Тестовый минимум" }],
+      roundBonuses: [],
       firstPlayer: "A",
       customerIndex: 0,
       round: 1
     });
 
-    expect(withoutTrend.winner?.product.name).toBe("Игрушка");
+    expect(withoutTrend.winner).toBeNull();
     expect(withTrend.winner?.product.name).toBe("Игрушка");
   });
 
-  it("does not let second-best personalities override the best product", () => {
+  it("lets curious customers pick the second-best product when scores are close", () => {
     const curiousCustomer = {
       ...child,
       personality: {
@@ -273,8 +273,8 @@ describe("Trend Market engine", () => {
       round: 1
     });
 
-    expect(result.winner?.ownerId).toBe("A");
-    expect(result.winner?.product.name).toBe("Игрушка");
+    expect(result.winner?.ownerId).toBe("B");
+    expect(result.winner?.product.name).toBe("Торт");
   });
 
   it("rejects purchases below minimum appeal and leaves the customer unserved", () => {

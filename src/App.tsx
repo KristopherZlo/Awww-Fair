@@ -30,7 +30,7 @@ import {
   VolumeX,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   CUSTOMER_CARDS,
   INFLUENCE_CARDS,
@@ -65,6 +65,8 @@ import {
   coinText,
   cutsceneText,
   customerName,
+  customerPersonalityDescription,
+  customerPersonalityLabel,
   goalTitle,
   influenceDescription,
   influenceName,
@@ -546,6 +548,9 @@ function isWinningCandidate(result: PurchaseResult, candidate: PurchaseResult["c
 function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, language: Language) {
   if (language === "en") {
     if (!result.winner) {
+      if (result.customer.personality?.kind === "trend_chaser") {
+        return `${customerName(language, result.customer)} bought nothing: no product matched the needed trend.`;
+      }
       return `${customerName(language, result.customer)} bought nothing: no product reached ${PURCHASE_APPEAL_THRESHOLD} appeal.`;
     }
 
@@ -557,6 +562,9 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
   }
 
   if (!result.winner) {
+    if (result.customer.personality?.kind === "trend_chaser") {
+      return `${result.customer.name} ничего не купил: ни один товар не попал в нужный тренд.`;
+    }
     return `${result.customer.name} ничего не купил: ни один товар не набрал ${PURCHASE_APPEAL_THRESHOLD} привлекательности.`;
   }
 
@@ -565,6 +573,7 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
   const focusTrend = lines.find((line) => isFocusTrendLine(line.label));
   const primaryWish = lines.find((line) => line.label.startsWith("главное желание"));
   const secondaryWish = lines.find((line) => line.label.startsWith("второе желание"));
+  const personality = lines.find((line) => line.label.startsWith("характер"));
   const influence = lines.find((line) => result.winner && !line.label.includes("желание") && !line.label.includes("тренд") && Math.abs(line.value) >= 1);
   const regularTrend = lines.find((line) => !isFocusTrendLine(line.label) && result.winner && line.label.includes(":") && !line.label.includes("желание"));
 
@@ -575,6 +584,8 @@ function describeSaleInsight(result: PurchaseResult, viewerId: PlayerId, languag
     reason = `совпало главное желание «${lineTag(primaryWish.label)}»`;
   } else if (secondaryWish) {
     reason = `совпало второе желание «${lineTag(secondaryWish.label)}»`;
+  } else if (personality) {
+    reason = `сработал характер клиента: ${lineTag(personality.label)}`;
   } else if (influence) {
     reason = `${winnerName} получил решающий бонус от «${lineSource(influence.label)}»`;
   } else if (regularTrend) {
@@ -791,18 +802,32 @@ function ProductCard({
 
 function CustomerCard({ customer, focusTags, language }: { customer: CustomerCardType; focusTags?: Set<Tag>; language: Language }) {
   const label = customerName(language, customer);
+  const personalityLabel = customerPersonalityLabel(language, customer);
+  const personalityDescription = customerPersonalityDescription(language, customer);
+  const tooltipBaseId = useId();
+  const tooltipId = `${tooltipBaseId}-${customer.id}-personality`;
   return (
     <div
       className="card customer-card"
       title={
         language === "en"
-          ? `${label}: primary ${tagText(language, customer.primaryTag)}, secondary ${tagText(language, customer.secondaryTag)}`
-          : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}`
+          ? `${label}: primary ${tagText(language, customer.primaryTag)}, secondary ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Personality: ${personalityDescription}` : ""}`
+          : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Характер: ${personalityDescription}` : ""}`
       }
     >
       <Sprite atlas={CUSTOMER_ATLAS} atlas2x={CUSTOMER_ATLAS_2X} cols={4} rows={4} col={customer.sprite.col} row={customer.sprite.row} className="customer-sprite" />
       <div className="customer-copy card-copy">
         <strong>{label}</strong>
+        {customer.personality && (
+          <span className="personality-line">
+            <span className="personality-badge" tabIndex={0} aria-describedby={tooltipId}>
+              {personalityLabel}
+            </span>
+            <span id={tooltipId} className="personality-tooltip" role="tooltip">
+              {personalityDescription}
+            </span>
+          </span>
+        )}
         <div className="tag-row">
         <TagPill tag={customer.primaryTag} language={language} matched />
         <TagPill tag={customer.secondaryTag} language={language} matched={focusTags?.has(customer.secondaryTag)} />
@@ -4002,6 +4027,7 @@ export default function App() {
                 <li>Customer wishes and trends stack. A product matching both gets both bonuses.</li>
                 <li>On your turn, place or replace one product, then play one influence card or skip it.</li>
                 <li>The primary customer tag gives +3 appeal. The secondary tag gives +2. Trends, influence cards, and upgrades can change the score.</li>
+                <li>Customer personalities affect purchases: bargain hunters give cheap products +1, trend chasers buy only products supported by trends, and curious customers can choose the second-best product when scores are close.</li>
                 <li>If a product scores below {PURCHASE_APPEAL_THRESHOLD}, the customer will not buy it. Otherwise, the customer buys the most appealing product.</li>
                 <li>Party goals give extra coins. After rounds 2, 4, and 6, players can buy upgrades.</li>
                 <li>After round 8, the player with more coins wins. If coins are tied, sales decide the winner.</li>
@@ -4014,6 +4040,7 @@ export default function App() {
                 <li>Лучший выбор — товар, где совпали и клиент, и тренд. Если такого товара нет, сравни сумму очков и избегай тегов со штрафом.</li>
                 <li>В свой ход сделай до двух вещей: выставь или замени 1 товар, потом сыграй 1 карту влияния или пропусти.</li>
                 <li>Главный тег клиента даёт +3 привлекательности. Второй тег даёт +2. Тренды, влияния и апгрейды могут добавить или убрать очки.</li>
+                <li>Характеры клиентов влияют на покупку: Любит скидки — Дешёвые товары получают +1, охотники за трендом покупают только товары с поддержкой тренда, а любопытные могут выбрать второй товар, если очки близки.</li>
                 <li>Если товар набрал меньше {PURCHASE_APPEAL_THRESHOLD}, клиент его не купит. Если товаров несколько, клиент берёт самый привлекательный.</li>
                 <li>Если привлекательность равна, клиент выбирает более дешёвый товар. Если снова равенство, выбирает игрока с меньшим числом монет.</li>
                 <li>Когда оба игрока готовы, игра считает продажи. За проданный товар ты получаешь его цену, иногда бонусы. Запас товара уменьшается.</li>

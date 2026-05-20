@@ -237,6 +237,8 @@ describe("App layout shell", () => {
     expect(screen.getByText(/лучший выбор — товар, где совпали и клиент, и тренд/i)).toBeInTheDocument();
     expect(screen.getByText(/Если товар набрал меньше 5/i)).toBeInTheDocument();
     expect(screen.getByText(/После 8 раунда побеждает тот, у кого больше монет/i)).toBeInTheDocument();
+    expect(screen.getByText(/Характеры клиентов влияют на покупку/i)).toBeInTheDocument();
+    expect(screen.getByText(/Любит скидки.*Дешёвые товары получают \+1/i)).toBeInTheDocument();
   });
 
   it("labels local player as you and the other seat as opponent", async () => {
@@ -455,6 +457,26 @@ describe("App layout shell", () => {
     expect(container.querySelector(".customer-card .customer-copy")).not.toBeNull();
     expect(container.querySelector(".product-card .product-copy")).not.toBeNull();
     expect(container.querySelector(".influence-card .influence-copy")).not.toBeNull();
+  });
+
+  it("shows a focused tooltip for customer personality effects", () => {
+    const student = CUSTOMER_CARDS.find((customer) => customer.id === "student")!;
+    saveGameState({
+      currentCustomers: [student],
+      customerDeck: [],
+      activeTrends: []
+    });
+
+    render(<App />);
+
+    const badge = screen.getByText("Любит скидки");
+    expect(badge).toHaveClass("personality-badge");
+    expect(badge).toHaveAttribute("aria-describedby");
+
+    const tooltip = document.getElementById(badge.getAttribute("aria-describedby") ?? "");
+    expect(tooltip).not.toBeNull();
+    expect(tooltip).toHaveAttribute("role", "tooltip");
+    expect(tooltip).toHaveTextContent("Дешёвые товары получают +1 привлекательности.");
   });
 
   it("uses responsive customer atlas assets instead of the oversized source atlas", () => {

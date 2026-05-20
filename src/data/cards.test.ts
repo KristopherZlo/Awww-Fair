@@ -26,8 +26,25 @@ describe("Trend Market card balance", () => {
     expect(stockById.honey).toBe(3);
   });
 
-  it("does not put purchase-changing personalities on customer cards", () => {
-    expect(CUSTOMER_CARDS.every((customer) => customer.personality === undefined)).toBe(true);
+  it("keeps the exact customer personalities used by purchase rules", () => {
+    expect(Object.fromEntries(CUSTOMER_CARDS.map((customer) => [customer.id, customer.personality]))).toEqual({
+      child: { kind: "second_best", label: "Любопытный выбор", description: "Если два товара почти равны, может выбрать второй.", maxAppealGap: 1 },
+      student: { kind: "bargain_hunter", label: "Любит скидки", description: "Дешёвые товары получают +1 привлекательности." },
+      tourist: { kind: "trend_chaser", label: "Верит афишам", description: "Покупает только при заметной поддержке тренда.", minTrendScore: 2 },
+      grandma: { kind: "second_best", label: "Присматривается", description: "Если варианты близки, берёт не самый очевидный.", maxAppealGap: 1 },
+      office_worker: { kind: "trend_chaser", label: "Берёт хиты дня", description: "Покупает только товары с трендовым бонусом.", minTrendScore: 2 },
+      athlete: { kind: "trend_chaser", label: "Следит за модой", description: "Покупает только при сильном тренде.", minTrendScore: 3 },
+      family: { kind: "bargain_hunter", label: "Семейный бюджет", description: "Дешёвые товары получают +1 привлекательности." },
+      gourmet: { kind: "trend_chaser", label: "Ищет рекомендацию", description: "Покупает только при сильном тренде.", minTrendScore: 3 },
+      driver: { kind: "bargain_hunter", label: "Берёт по акции", description: "Дешёвые товары получают +1 привлекательности." },
+      blogger: { kind: "trend_chaser", label: "Охотится за хайпом", description: "Покупает только при сильном тренде.", minTrendScore: 3 },
+      schoolkid: { kind: "bargain_hunter", label: "Копит сдачу", description: "Дешёвые товары получают +1 привлекательности." },
+      sweet_tooth: { kind: "second_best", label: "Хочет сюрприз", description: "Если варианты близки, может выбрать второй.", maxAppealGap: 1 },
+      farmer: { kind: "second_best", label: "Сравнивает прилавки", description: "Если варианты близки, выбирает второй.", maxAppealGap: 1 },
+      rich: { kind: "trend_chaser", label: "Покупает модное", description: "Покупает только при трендовом бонусе.", minTrendScore: 2 },
+      rushing: { kind: "bargain_hunter", label: "Не любит переплаты", description: "Дешёвые товары получают +1 привлекательности." },
+      vacationer: { kind: "second_best", label: "Выбирает настроение", description: "Если варианты близки, может выбрать второй.", maxAppealGap: 1 }
+    });
   });
 
   it("keeps tag influence cards at +1 while targeted influence remains stronger", () => {
