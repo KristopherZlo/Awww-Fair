@@ -33,6 +33,22 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { appAssetUrl } from "./assetUrl";
 import { preloadImage, preloadImages } from "./assetPreloader";
+import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
+import type {
+  AiMode,
+  AudioSettings,
+  CampaignRun,
+  ChoiceDraft,
+  CutsceneState,
+  GameState,
+  InitialStateOptions,
+  LobbySession,
+  MenuView,
+  MusicStatus,
+  NetworkResponse,
+  SavedSession,
+  SaleReview
+} from "./app/types";
 import {
   CUSTOMER_CARDS,
   INFLUENCE_CARDS,
@@ -105,7 +121,6 @@ import {
 import type {
   CustomerCard as CustomerCardType,
   InfluenceCard as InfluenceCardType,
-  Phase,
   PlayedInfluence,
   PlayerId,
   PlayerState,
@@ -162,13 +177,6 @@ const DEFAULT_AUDIO_SETTINGS = {
   language: "ru" as Language
 };
 
-interface InitialStateOptions {
-  influenceHandSize: number;
-  trendCount: number;
-  partyGoalCount: number;
-  customerPersonalityMode: CampaignCustomerPersonalityMode;
-}
-
 const DEFAULT_INITIAL_STATE_OPTIONS: InitialStateOptions = {
   influenceHandSize: 2,
   trendCount: 3,
@@ -219,9 +227,6 @@ const CUTSCENE_FRAMES = [
   }
 ] as const;
 
-type MusicStatus = "idle" | "playing" | "paused" | "blocked";
-type AiMode = "opponent" | "training";
-type MenuView = "main" | "levels";
 const AI_PLAYER_ID: PlayerId = "B";
 const AI_TURN_DELAY_MAX_MS = 5_000;
 const AI_DIFFICULTIES = [
@@ -233,119 +238,6 @@ const AI_DIFFICULTIES = [
 ] as const;
 
 type AiDifficultyOption = (typeof AI_DIFFICULTIES)[number];
-
-interface AudioSettings {
-  musicEnabled: boolean;
-  effectsEnabled: boolean;
-  musicVolume: number;
-  effectsVolume: number;
-  turnTimeSeconds: number;
-  language: Language;
-}
-
-interface ChoiceDraft {
-  playerId: PlayerId;
-  type: "product" | "influence";
-  cards: Array<ProductInstance | InfluenceCardType>;
-}
-
-interface PauseState {
-  active: boolean;
-  pausedBy: PlayerId | null;
-}
-
-interface CampaignRun {
-  level: number;
-  aiDifficulty: number;
-  opponentName: string;
-  opponentNameEn: string;
-  unlockRecorded: boolean;
-}
-
-interface SaleReview {
-  round: number;
-  results: PurchaseResult[];
-  insights: string[];
-}
-
-interface GameState {
-  phase: Phase;
-  round: number;
-  firstPlayer: PlayerId;
-  activePlayer: PlayerId;
-  players: PlayerState[];
-  productDeck: ProductInstance[];
-  influenceDeck: InfluenceCardType[];
-  customerDeck: CustomerCardType[];
-  trendDeck: TrendCardType[];
-  upgradeDeck: UpgradeCardType[];
-  activeTrends: TrendCardType[];
-  currentCustomers: CustomerCardType[];
-  playedInfluences: PlayedInfluence[];
-  roundBonuses: ProductAdjustment[];
-  saleResults: PurchaseResult[];
-  saleInsights: string[];
-  lastSaleReview: SaleReview | null;
-  logs: string[];
-  selectedProductId: string | null;
-  selectedInfluenceId: string | null;
-  selectedTag: Tag;
-  upgradeOffer: UpgradeCardType[];
-  upgradeQueue: PlayerId[];
-  choiceDraft: ChoiceDraft | null;
-  pause: PauseState;
-  partyGoals: PartyGoal[];
-  sound: boolean;
-  aiPlayerId: PlayerId | null;
-  aiMode: AiMode | null;
-  aiDifficulty: number | null;
-  aiScore: number;
-  aiIntent: string | null;
-  campaignRun: CampaignRun | null;
-  turnTimeSeconds: number;
-}
-
-interface CutsceneState {
-  level: CampaignLevel;
-  frameIndex: number;
-}
-
-interface LobbySession {
-  code: string;
-  playerId: PlayerId;
-  token: string;
-  version: number;
-  seats: Record<PlayerId, boolean>;
-}
-
-interface LobbyResponse {
-  code: string;
-  playerId?: PlayerId;
-  token?: string;
-  version: number;
-  state: GameState;
-  seats: Record<PlayerId, boolean>;
-}
-
-interface NetworkResponse {
-  urls?: unknown;
-}
-
-const LOBBY_API = "/api/lobbies";
-
-function lobbyAuthHeaders(session: Pick<LobbySession, "token">, headers: Record<string, string> = {}) {
-  return {
-    ...headers,
-    Authorization: `Bearer ${session.token}`
-  };
-}
-
-interface SavedSession {
-  version: typeof SESSION_STORAGE_VERSION;
-  state: GameState;
-  lobby: LobbySession | null;
-  audioSettings: AudioSettings;
-}
 
 function draw<T>(deck: T[], count: number): [T[], T[]] {
   return [deck.slice(0, count), deck.slice(count)];
@@ -1050,14 +942,6 @@ function resetPlayerForPlanning(player: PlayerState): PlayerState {
     influenceActionUsed: false,
     tableBonusUsed: false
   };
-}
-
-async function parseLobbyResponse(response: Response): Promise<LobbyResponse> {
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(payload?.error ?? "Стол недоступен");
-  }
-  return payload as LobbyResponse;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2406,7 +2290,7 @@ export default function App() {
     const language = audioSettingsRef.current.language;
     const next = {
       ...buildInitialState(state.sound, audioSettingsRef.current.turnTimeSeconds),
-      phase: "planning" as Phase,
+      phase: "planning" as const,
       logs: [
         language === "en" ? "Table created. The opponent joins with the lobby code." : "Стол создан. Оппонент входит по коду лобби.",
         ...state.logs
