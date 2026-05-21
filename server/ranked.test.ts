@@ -87,6 +87,50 @@ describe("ranked matchmaking", () => {
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1526, wins: 1 });
   });
 
+  it("lets a disconnected player reconnect before the timeout", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => now, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+
+    const disconnect = await service.disconnectFromMatch("a", "match-1");
+    now = 90_000;
+    const reconnect = await service.reconnectToMatch("a", "match-1");
+    const match = await store.matchById("match-1");
+
+    expect(disconnect).toEqual({ status: "reconnect_window", reconnectUntil: 91_000 });
+    expect(reconnect).toMatchObject({ status: "matched", match: { id: "match-1", status: "active" } });
+    expect(match?.playerADisconnectedAt).toBeNull();
+    expect(await service.statusForPlayer("a")).toMatchObject({ status: "matched", match: { id: "match-1" } });
+  });
+
+  it("settles a disconnected player as the loser after the reconnect timeout", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => now, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.disconnectFromMatch("a", "match-1");
+
+    now = 91_001;
+    const status = await service.statusForPlayer("b");
+    const match = await store.matchById("match-1");
+    const history = await store.matchHistoryForPlayer("a", 1);
+
+    expect(status).toEqual({ status: "idle" });
+    expect(match?.status).toBe("settled");
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
+    await expect(store.ratingForPlayer("b")).resolves.toMatchObject({ mmr: 1524, wins: 1 });
+    expect(history[0]).toMatchObject({ winnerId: "b", loserId: "a", playerACoins: 0, playerBCoins: 0, mmrChange: 24 });
+  });
+
   it("halves MMR change after repeated pair matches in one hour", async () => {
     let matchIndex = 0;
     const store = new MemoryRankedStore([

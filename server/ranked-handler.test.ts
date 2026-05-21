@@ -134,4 +134,30 @@ describe("ranked handler", () => {
     expect(await event.json()).toMatchObject({ event: { sequence: 1, eventType: "place_product" } });
     expect(await settlement.json()).toMatchObject({ log: { winnerId: "a", mmrChange: 26 } });
   });
+
+  it("disconnects and reconnects an authenticated match participant", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const disconnect = await fetch(`${server.url}/api/ranked/disconnect`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1" })
+    });
+    const reconnect = await fetch(`${server.url}/api/ranked/reconnect`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1" })
+    });
+
+    expect(await disconnect.json()).toEqual({ status: "reconnect_window", reconnectUntil: 91_000 });
+    expect(await reconnect.json()).toMatchObject({ status: "matched", match: { id: "match-1", status: "active" } });
+  });
 });

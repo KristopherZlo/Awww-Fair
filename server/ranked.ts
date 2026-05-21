@@ -19,6 +19,8 @@ export interface RankedMatch {
   initialState: GameState;
   status: RankedMatchStatus;
   createdAt: number;
+  playerADisconnectedAt: number | null;
+  playerBDisconnectedAt: number | null;
 }
 
 export interface RankedQueueEntry {
@@ -58,6 +60,8 @@ type MariaDbRankedPool = Pick<Pool, "query"> & {
   getConnection(): Promise<MariaDbRankedConnection>;
 };
 
+const RECONNECT_WINDOW_MS = 90 * 1000;
+
 function createRankedInitialState(seed: string): GameState {
   return {
     ...buildInitialState(true, DEFAULT_TURN_TIME_SECONDS, DEFAULT_INITIAL_STATE_OPTIONS, seededRandom(seed)),
@@ -72,6 +76,19 @@ function parseInitialState(value: unknown, seed: string): GameState {
   return (typeof value === "string" ? JSON.parse(value) : value) as GameState;
 }
 
+function dateValueToMillis(value: unknown): number | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function disconnectedAtFor(match: RankedMatch, playerId: string): number | null {
+  if (match.playerAId === playerId) return match.playerADisconnectedAt;
+  if (match.playerBId === playerId) return match.playerBDisconnectedAt;
+  return null;
+}
+
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
   waitingPlayers(): Promise<RankedQueueEntry[]>;
@@ -80,6 +97,7 @@ export interface RankedStore {
   createMatch(match: RankedMatch): Promise<void>;
   currentMatchForPlayer(playerId: string): Promise<RankedMatch | null>;
   matchById(matchId: string): Promise<RankedMatch | null>;
+  setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void>;
   recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
   recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number>;
   matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]>;
@@ -139,7 +157,9 @@ export class RankedService {
       seed,
       initialState,
       status: "active",
-      createdAt: now
+      createdAt: now,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null
     };
     await this.options.store.removeWaitingPlayer(opponent.playerId);
     await this.options.store.removeWaitingPlayer(playerId);
@@ -154,10 +174,35 @@ export class RankedService {
   async statusForPlayer(playerId: string): Promise<{ status: "matched"; match: RankedMatch } | { status: "waiting" } | { status: "idle" }> {
     const match = await this.options.store.currentMatchForPlayer(playerId);
     if (match) {
+      if (await this.settleExpiredDisconnect(match)) {
+        return { status: "idle" };
+      }
       return { status: "matched", match };
     }
     const waiting = await this.options.store.waitingPlayers();
     return waiting.some((entry) => entry.playerId === playerId) ? { status: "waiting" } : { status: "idle" };
+  }
+
+  async disconnectFromMatch(actorId: string, matchId: string): Promise<{ status: "reconnect_window"; reconnectUntil: number }> {
+    const match = await this.requireActiveMatch(actorId, matchId);
+    const now = this.options.now?.() ?? Date.now();
+    await this.options.store.setPlayerDisconnectedAt(match.id, actorId, now);
+    return { status: "reconnect_window", reconnectUntil: now + RECONNECT_WINDOW_MS };
+  }
+
+  async reconnectToMatch(actorId: string, matchId: string): Promise<{ status: "matched"; match: RankedMatch }> {
+    const match = await this.requireActiveMatch(actorId, matchId);
+    const disconnectedAt = disconnectedAtFor(match, actorId);
+    if (disconnectedAt !== null && this.reconnectExpired(disconnectedAt)) {
+      await this.settleDisconnectLoss(match, actorId);
+      throw new Error("Reconnect window expired.");
+    }
+    await this.options.store.setPlayerDisconnectedAt(match.id, actorId, null);
+    const refreshedMatch = await this.options.store.matchById(match.id);
+    if (!refreshedMatch || refreshedMatch.status !== "active") {
+      throw new Error("Active ranked match not found.");
+    }
+    return { status: "matched", match: refreshedMatch };
   }
 
   async recordEvent(
@@ -187,10 +232,15 @@ export class RankedService {
     actorId: string,
     result: { matchId: string; playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }
   ): Promise<{ log: RankedMatchLog }> {
-    const match = await this.options.store.matchById(result.matchId);
-    if (!match || match.status !== "active" || (match.playerAId !== actorId && match.playerBId !== actorId)) {
-      throw new Error("Active ranked match not found.");
-    }
+    const match = await this.requireActiveMatch(actorId, result.matchId);
+    return this.settleActiveMatch(match, result);
+  }
+
+  private async settleActiveMatch(
+    match: RankedMatch,
+    result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number },
+    forcedWinnerId?: string
+  ): Promise<{ log: RankedMatchLog }> {
     const playerA = await this.options.store.ratingForPlayer(match.playerAId);
     const playerB = await this.options.store.ratingForPlayer(match.playerBId);
     const now = this.options.now?.() ?? Date.now();
@@ -199,10 +249,12 @@ export class RankedService {
       match.playerBId,
       now - 60 * 60 * 1000
     );
-    const winnerId = getRankedWinner([
-      { playerId: match.playerAId, coins: result.playerACoins, sales: result.playerASales },
-      { playerId: match.playerBId, coins: result.playerBCoins, sales: result.playerBSales }
-    ]);
+    const winnerId =
+      forcedWinnerId ??
+      getRankedWinner([
+        { playerId: match.playerAId, coins: result.playerACoins, sales: result.playerASales },
+        { playerId: match.playerBId, coins: result.playerBCoins, sales: result.playerBSales }
+      ]);
     const rankedResult = winnerId
       ? applyRankedResult({
           winner: winnerId === match.playerAId ? playerA : playerB,
@@ -229,6 +281,41 @@ export class RankedService {
     });
     await this.options.store.settleMatch(log, playerA, playerB);
     return { log };
+  }
+
+  private async settleExpiredDisconnect(match: RankedMatch): Promise<boolean> {
+    const disconnectedPlayerId =
+      match.playerADisconnectedAt !== null && this.reconnectExpired(match.playerADisconnectedAt)
+        ? match.playerAId
+        : match.playerBDisconnectedAt !== null && this.reconnectExpired(match.playerBDisconnectedAt)
+          ? match.playerBId
+          : null;
+    if (!disconnectedPlayerId) {
+      return false;
+    }
+    await this.settleDisconnectLoss(match, disconnectedPlayerId);
+    return true;
+  }
+
+  private async settleDisconnectLoss(match: RankedMatch, loserId: string): Promise<{ log: RankedMatchLog }> {
+    const winnerId = loserId === match.playerAId ? match.playerBId : match.playerAId;
+    return this.settleActiveMatch(
+      match,
+      { playerACoins: 0, playerBCoins: 0, playerASales: 0, playerBSales: 0 },
+      winnerId
+    );
+  }
+
+  private reconnectExpired(disconnectedAt: number): boolean {
+    return (this.options.now?.() ?? Date.now()) - disconnectedAt >= RECONNECT_WINDOW_MS;
+  }
+
+  private async requireActiveMatch(actorId: string, matchId: string): Promise<RankedMatch> {
+    const match = await this.options.store.matchById(matchId);
+    if (!match || match.status !== "active" || (match.playerAId !== actorId && match.playerBId !== actorId)) {
+      throw new Error("Active ranked match not found.");
+    }
+    return match;
   }
 
   private canMatch(player: RankedQueueEntry, opponent: RankedQueueEntry, now: number) {
@@ -271,15 +358,29 @@ export class MemoryRankedStore implements RankedStore {
   }
 
   async createMatch(match: RankedMatch): Promise<void> {
-    this.matches.set(match.id, match);
+    this.matches.set(match.id, { ...match });
   }
 
   async currentMatchForPlayer(playerId: string): Promise<RankedMatch | null> {
-    return Array.from(this.matches.values()).find((match) => match.status === "active" && (match.playerAId === playerId || match.playerBId === playerId)) ?? null;
+    const match = Array.from(this.matches.values()).find((match) => match.status === "active" && (match.playerAId === playerId || match.playerBId === playerId));
+    return match ? { ...match } : null;
   }
 
   async matchById(matchId: string): Promise<RankedMatch | null> {
-    return this.matches.get(matchId) ?? null;
+    const match = this.matches.get(matchId);
+    return match ? { ...match } : null;
+  }
+
+  async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void> {
+    const match = this.matches.get(matchId);
+    if (!match) return;
+    if (match.playerAId === playerId) {
+      this.matches.set(matchId, { ...match, playerADisconnectedAt: disconnectedAt });
+      return;
+    }
+    if (match.playerBId === playerId) {
+      this.matches.set(matchId, { ...match, playerBDisconnectedAt: disconnectedAt });
+    }
   }
 
   async recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent> {
@@ -382,8 +483,9 @@ export class MariaDbRankedStore implements RankedStore {
     await this.pool.query(
       `INSERT INTO ranked_matches (
         id, player_a_id, player_b_id, player_a_mmr_before, player_b_mmr_before,
-        first_player_id, seed, initial_state, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        first_player_id, seed, initial_state, status, created_at,
+        player_a_disconnected_at, player_b_disconnected_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         match.id,
         match.playerAId,
@@ -394,7 +496,9 @@ export class MariaDbRankedStore implements RankedStore {
         match.seed,
         JSON.stringify(match.initialState),
         match.status,
-        new Date(match.createdAt)
+        new Date(match.createdAt),
+        match.playerADisconnectedAt ? new Date(match.playerADisconnectedAt) : null,
+        match.playerBDisconnectedAt ? new Date(match.playerBDisconnectedAt) : null
       ]
     );
   }
@@ -403,7 +507,8 @@ export class MariaDbRankedStore implements RankedStore {
     const rows = await this.pool.query(
       `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
-        first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt
+        first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt,
+        player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt
        FROM ranked_matches
        WHERE status = 'active' AND (player_a_id = ? OR player_b_id = ?)
        ORDER BY created_at DESC
@@ -422,7 +527,9 @@ export class MariaDbRankedStore implements RankedStore {
           seed: row.seed,
           initialState: parseInitialState(row.initialState, row.seed),
           status: row.status,
-          createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now()
+          createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
+          playerADisconnectedAt: dateValueToMillis(row.playerADisconnectedAt),
+          playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt)
         }
       : null;
   }
@@ -431,7 +538,8 @@ export class MariaDbRankedStore implements RankedStore {
     const rows = await this.pool.query(
       `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
-        first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt
+        first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt,
+        player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt
        FROM ranked_matches
        WHERE id = ?
        LIMIT 1`,
@@ -449,9 +557,22 @@ export class MariaDbRankedStore implements RankedStore {
           seed: row.seed,
           initialState: parseInitialState(row.initialState, row.seed),
           status: row.status,
-          createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now()
+          createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
+          playerADisconnectedAt: dateValueToMillis(row.playerADisconnectedAt),
+          playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt)
         }
       : null;
+  }
+
+  async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void> {
+    const disconnectedAtDate = disconnectedAt === null ? null : new Date(disconnectedAt);
+    await this.pool.query(
+      `UPDATE ranked_matches
+       SET player_a_disconnected_at = CASE WHEN player_a_id = ? THEN ? ELSE player_a_disconnected_at END,
+         player_b_disconnected_at = CASE WHEN player_b_id = ? THEN ? ELSE player_b_disconnected_at END
+       WHERE id = ? AND status = 'active' AND (player_a_id = ? OR player_b_id = ?)`,
+      [playerId, disconnectedAtDate, playerId, disconnectedAtDate, matchId, playerId, playerId]
+    );
   }
 
   async recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent> {
