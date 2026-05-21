@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { INFLUENCE_CARDS, TAGS, TREND_CARDS, UPGRADE_CARDS } from "../data/cards";
+import { CUSTOMER_CARDS, INFLUENCE_CARDS, TAGS, TREND_CARDS, UPGRADE_CARDS } from "../data/cards";
 import {
+  buildBalanceCustomerDeck,
   runAiSkillCheck,
   runAiVsAiBonusMatrix,
   runAiVsAiComebackMatrix,
@@ -14,6 +15,14 @@ import {
 } from "./aiSkillCheck";
 
 describe("AI skill check", () => {
+  it("uses customers without personalities in balance simulations by default", () => {
+    const deck = buildBalanceCustomerDeck();
+
+    expect(CUSTOMER_CARDS.some((customer) => customer.personality)).toBe(true);
+    expect(deck).toHaveLength(CUSTOMER_CARDS.length);
+    expect(deck.every((customer) => !customer.personality)).toBe(true);
+  });
+
   it("shows that stronger decisions beat valid random decisions over many games", () => {
     const result = runAiSkillCheck({ games: 240, seed: 90210 });
 
@@ -22,7 +31,7 @@ describe("AI skill check", () => {
     expect(result.baselineWinRate).toBeLessThanOrEqual(0.36);
     expect(result.noSaleRate).toBeGreaterThanOrEqual(0.08);
     expect(result.noSaleRate).toBeLessThanOrEqual(0.24);
-    expect(result.tipRateOfSales).toBeGreaterThanOrEqual(0.15);
+    expect(result.tipRateOfSales).toBeGreaterThanOrEqual(0.12);
     expect(result.productSpread).toBeLessThanOrEqual(3);
     expect(result.goalsPerGame).toBeGreaterThanOrEqual(1.2);
     expect(result.sales).toBeGreaterThan(result.games * 8);
