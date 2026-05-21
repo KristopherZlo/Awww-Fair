@@ -782,7 +782,7 @@ describe("App layout shell", () => {
 
   it("starts a ranked match from a matched queue response", async () => {
     const user = userEvent.setup();
-    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const };
+    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const, activePlayer: "A" as PlayerId, firstPlayer: "A" as PlayerId };
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/auth/me") {
         return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
@@ -829,6 +829,195 @@ describe("App layout shell", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/events", expect.objectContaining({ method: "POST" })));
     const eventCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/ranked/events" && init?.method === "POST");
     expect(JSON.parse(String(eventCall?.[1]?.body))).toEqual({ matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: {} });
+  });
+
+  it("records ranked product placements as replay events", async () => {
+    const user = userEvent.setup();
+    const localPlayer = testPlayer("A");
+    const productId = localPlayer.productHand[0].instanceId;
+    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const, activePlayer: "A" as PlayerId, players: [localPlayer, testPlayer("B")] };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "idle" });
+      }
+      if (url === "/api/ranked/queue" && init?.method === "POST") {
+        return Response.json({
+          status: "matched",
+          match: {
+            id: "match-1",
+            playerAId: "p1",
+            playerBId: "p2",
+            playerAMmrBefore: 1500,
+            playerBMmrBefore: 1500,
+            firstPlayerId: "p1",
+            seed: "seed-1",
+            initialState: rankedInitialState,
+            status: "active",
+            createdAt: 1_000,
+            playerADisconnectedAt: null,
+            playerBDisconnectedAt: null
+          }
+        });
+      }
+      if (url === "/api/ranked/events" && init?.method === "POST") {
+        return Response.json({ event: { sequence: 1 } });
+      }
+      return Response.json({ events: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+
+    await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".ranked-action")!));
+    await user.click(container.querySelector<HTMLButtonElement>(`.hand-panel [data-correct-product-id="${productId}"]`)!);
+    await user.click(container.querySelector<HTMLButtonElement>(".seat-local .empty-slot")!);
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            url === "/api/ranked/events" &&
+            init?.method === "POST" &&
+            JSON.stringify(JSON.parse(String(init.body))) === JSON.stringify({ matchId: "match-1", round: 1, phase: "planning", eventType: "place_product", payload: { productInstanceId: productId, slotIndex: 0 } })
+        )
+      ).toBe(true)
+    );
+  });
+
+  it("applies opponent ranked events and settles the finished match", async () => {
+    const user = userEvent.setup();
+    const rankedInitialState = {
+      ...buildInitialState(true, 45),
+      phase: "planning" as const,
+      round: 8,
+      activePlayer: "A" as PlayerId,
+      firstPlayer: "A" as PlayerId,
+      players: [
+        { ...testPlayer("A"), productHand: [], influenceHand: [] },
+        { ...testPlayer("B"), productHand: [], influenceHand: [] }
+      ]
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "idle" });
+      }
+      if (url === "/api/ranked/queue" && init?.method === "POST") {
+        return Response.json({
+          status: "matched",
+          match: {
+            id: "match-1",
+            playerAId: "p1",
+            playerBId: "p2",
+            playerAMmrBefore: 1500,
+            playerBMmrBefore: 1500,
+            firstPlayerId: "p1",
+            seed: "seed-1",
+            initialState: rankedInitialState,
+            status: "active",
+            createdAt: 1_000,
+            playerADisconnectedAt: null,
+            playerBDisconnectedAt: null
+          }
+        });
+      }
+      if (url === "/api/ranked/events" && init?.method === "POST") {
+        return Response.json({ event: { sequence: 1 } });
+      }
+      if (String(url).startsWith("/api/ranked/events?")) {
+        const after = new URL(`http://test${url}`).searchParams.get("after");
+        return Response.json({
+          events:
+            after === "1"
+              ? [{ matchId: "match-1", sequence: 2, actorId: "p2", round: 8, phase: "planning", eventType: "ready", payload: {}, createdAt: 2_000 }]
+              : []
+        });
+      }
+      if (url === "/api/ranked/settle" && init?.method === "POST") {
+        return Response.json({ log: { matchId: "match-1" } });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+
+    await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".ranked-action")!));
+    await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".hand-heading .primary-action")!));
+
+    await waitFor(() => expect(document.querySelector(".app-shell.phase-game_end")).not.toBeNull());
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/ranked/settle",
+        expect.objectContaining({
+          body: JSON.stringify({ matchId: "match-1", playerACoins: 0, playerBCoins: 0, playerASales: 0, playerBSales: 0 }),
+          method: "POST"
+        })
+      )
+    );
+  });
+
+  it("rebuilds an active ranked match from stored event history", async () => {
+    const rankedInitialState = {
+      ...buildInitialState(true, 45),
+      phase: "planning" as const,
+      round: 8,
+      activePlayer: "A" as PlayerId,
+      firstPlayer: "A" as PlayerId,
+      players: [
+        { ...testPlayer("A"), productHand: [], influenceHand: [] },
+        { ...testPlayer("B"), productHand: [], influenceHand: [] }
+      ]
+    };
+    const match = {
+      id: "match-1",
+      playerAId: "p1",
+      playerBId: "p2",
+      playerAMmrBefore: 1500,
+      playerBMmrBefore: 1500,
+      firstPlayerId: "p1",
+      seed: "seed-1",
+      initialState: rankedInitialState,
+      status: "active",
+      createdAt: 1_000,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "matched", match });
+      }
+      if (String(url).startsWith("/api/ranked/events?")) {
+        const after = new URL(`http://test${url}`).searchParams.get("after");
+        return Response.json({
+          events:
+            after === "0"
+              ? [
+                  { matchId: "match-1", sequence: 1, actorId: "p1", round: 8, phase: "planning", eventType: "ready", payload: {}, createdAt: 1_500 },
+                  { matchId: "match-1", sequence: 2, actorId: "p2", round: 8, phase: "planning", eventType: "ready", payload: {}, createdAt: 2_000 }
+                ]
+              : []
+        });
+      }
+      if (url === "/api/ranked/settle" && init?.method === "POST") {
+        return Response.json({ log: { matchId: "match-1" } });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(document.querySelector(".app-shell.phase-game_end")).not.toBeNull());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/settle", expect.objectContaining({ method: "POST" })));
   });
 
   it("does not show server deployment LAN hints in the main menu", async () => {
