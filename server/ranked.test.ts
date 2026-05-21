@@ -131,6 +131,33 @@ describe("ranked matchmaking", () => {
     expect(history[0]).toMatchObject({ winnerId: "b", loserId: "a", playerACoins: 0, playerBCoins: 0, mmrChange: 24 });
   });
 
+  it("blocks ranked queue while a repeated leaver is on cooldown", async () => {
+    let now = 1_000;
+    let matchIndex = 0;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({
+      store,
+      now: () => now,
+      idFactory: () => `match-${++matchIndex}`,
+      seedFactory: () => `seed-${matchIndex}`
+    });
+
+    for (let leave = 0; leave < 2; leave += 1) {
+      await service.joinQueue("a");
+      await service.joinQueue("b");
+      await service.disconnectFromMatch("a", `match-${leave + 1}`);
+      now += 91_000;
+      await service.statusForPlayer("b");
+    }
+
+    await expect(service.joinQueue("a")).rejects.toThrow("Ranked cooldown is active.");
+    now += 5 * 60 * 1000 + 1;
+    await expect(service.joinQueue("a")).resolves.toEqual({ status: "waiting" });
+  });
+
   it("halves MMR change after repeated pair matches in one hour", async () => {
     let matchIndex = 0;
     const store = new MemoryRankedStore([

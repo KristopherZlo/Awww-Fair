@@ -50,6 +50,11 @@ export interface RankedLeaderboardEntry {
   losses: number;
 }
 
+export interface RankedLeavePenalty {
+  leaveCount: number;
+  cooldownUntil: number | null;
+}
+
 type RankedMatchHistoryRow = Omit<RankedMatchLog, "createdAt"> & {
   createdAt: Date | string;
 };
@@ -91,6 +96,8 @@ function disconnectedAtFor(match: RankedMatch, playerId: string): number | null 
 
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
+  leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty>;
+  recordLeavePenalty(playerId: string, penalty: RankedLeavePenalty): Promise<void>;
   waitingPlayers(): Promise<RankedQueueEntry[]>;
   addWaitingPlayer(entry: RankedQueueEntry): Promise<void>;
   removeWaitingPlayer(playerId: string): Promise<void>;
@@ -135,6 +142,7 @@ export class RankedService {
 
   async joinQueue(playerId: string): Promise<{ status: "waiting" } | { status: "matched"; match: RankedMatch }> {
     const now = this.options.now?.() ?? Date.now();
+    await this.ensureCanJoinQueue(playerId, now);
     const rating = await this.options.store.ratingForPlayer(playerId);
     const waiting = await this.options.store.waitingPlayers();
     const opponent = waiting.find((entry) => this.canMatch({ playerId, mmr: rating.mmr, joinedAt: now }, entry, now));
@@ -294,6 +302,7 @@ export class RankedService {
       return false;
     }
     await this.settleDisconnectLoss(match, disconnectedPlayerId);
+    await this.recordLeavePenalty(disconnectedPlayerId);
     return true;
   }
 
@@ -308,6 +317,24 @@ export class RankedService {
 
   private reconnectExpired(disconnectedAt: number): boolean {
     return (this.options.now?.() ?? Date.now()) - disconnectedAt >= RECONNECT_WINDOW_MS;
+  }
+
+  private async ensureCanJoinQueue(playerId: string, now: number): Promise<void> {
+    const penalty = await this.options.store.leavePenaltyForPlayer(playerId);
+    if (penalty.cooldownUntil !== null && penalty.cooldownUntil > now) {
+      throw new Error("Ranked cooldown is active.");
+    }
+  }
+
+  private async recordLeavePenalty(playerId: string): Promise<void> {
+    const now = this.options.now?.() ?? Date.now();
+    const current = await this.options.store.leavePenaltyForPlayer(playerId);
+    const leaveCount = current.leaveCount + 1;
+    const cooldownSeconds = leaveCooldownSeconds(leaveCount);
+    await this.options.store.recordLeavePenalty(playerId, {
+      leaveCount,
+      cooldownUntil: cooldownSeconds > 0 ? now + cooldownSeconds * 1000 : null
+    });
   }
 
   private async requireActiveMatch(actorId: string, matchId: string): Promise<RankedMatch> {
@@ -331,6 +358,7 @@ export class MemoryRankedStore implements RankedStore {
   private readonly matches = new Map<string, RankedMatch>();
   private readonly events = new Map<string, RankedMatchEvent[]>();
   private readonly ratings = new Map<string, PlayerRating>();
+  private readonly leavePenalties = new Map<string, RankedLeavePenalty>();
   private readonly settledLogs: RankedMatchLog[] = [];
 
   constructor(ratings: PlayerRating[] = []) {
@@ -343,6 +371,14 @@ export class MemoryRankedStore implements RankedStore {
       throw new Error("Player rating not found.");
     }
     return { ...rating };
+  }
+
+  async leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty> {
+    return { leaveCount: 0, cooldownUntil: null, ...this.leavePenalties.get(playerId) };
+  }
+
+  async recordLeavePenalty(playerId: string, penalty: RankedLeavePenalty): Promise<void> {
+    this.leavePenalties.set(playerId, { ...penalty });
   }
 
   async waitingPlayers(): Promise<RankedQueueEntry[]> {
@@ -438,7 +474,7 @@ export class MariaDbRankedStore implements RankedStore {
   constructor(private readonly pool: MariaDbRankedPool) {}
 
   async ratingForPlayer(playerId: string): Promise<PlayerRating> {
-    await this.pool.query("INSERT INTO player_ratings (player_id) VALUES (?) ON DUPLICATE KEY UPDATE player_id = player_id", [playerId]);
+    await this.ensureRatingRow(playerId);
     const rows = await this.pool.query(
       `SELECT player_id AS playerId, mmr, ranked_games AS rankedGames, wins, losses, last_ranked_at AS lastRankedAt
        FROM player_ratings
@@ -455,6 +491,31 @@ export class MariaDbRankedStore implements RankedStore {
       losses: Number(row?.losses ?? DEFAULT_PLAYER_RATING.losses),
       lastRankedAt: row?.lastRankedAt instanceof Date ? row.lastRankedAt.toISOString() : null
     };
+  }
+
+  async leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty> {
+    await this.ensureRatingRow(playerId);
+    const rows = await this.pool.query(
+      `SELECT ranked_leave_count AS leaveCount, ranked_cooldown_until AS cooldownUntil
+       FROM player_ratings
+       WHERE player_id = ?
+       LIMIT 1`,
+      [playerId]
+    );
+    return {
+      leaveCount: Number(rows[0]?.leaveCount ?? 0),
+      cooldownUntil: dateValueToMillis(rows[0]?.cooldownUntil)
+    };
+  }
+
+  async recordLeavePenalty(playerId: string, penalty: RankedLeavePenalty): Promise<void> {
+    await this.ensureRatingRow(playerId);
+    await this.pool.query(
+      `UPDATE player_ratings
+       SET ranked_leave_count = ?, ranked_cooldown_until = ?
+       WHERE player_id = ?`,
+      [penalty.leaveCount, penalty.cooldownUntil === null ? null : new Date(penalty.cooldownUntil), playerId]
+    );
   }
 
   async waitingPlayers(): Promise<RankedQueueEntry[]> {
@@ -688,6 +749,10 @@ export class MariaDbRankedStore implements RankedStore {
       wins: Number(row.wins),
       losses: Number(row.losses)
     }));
+  }
+
+  private async ensureRatingRow(playerId: string): Promise<void> {
+    await this.pool.query("INSERT INTO player_ratings (player_id) VALUES (?) ON DUPLICATE KEY UPDATE player_id = player_id", [playerId]);
   }
 
   private async withTransaction<T>(work: (connection: MariaDbRankedConnection) => Promise<T>): Promise<T> {

@@ -36,5 +36,7 @@ describe("MariaDB server database setup", () => {
     expect(sql).toContain("initial_state JSON NOT NULL");
     expect(sql).toContain("player_a_disconnected_at DATETIME(3) NULL");
     expect(sql).toContain("player_b_disconnected_at DATETIME(3) NULL");
+    expect(sql).toContain("ranked_leave_count INT NOT NULL DEFAULT 0");
+    expect(sql).toContain("ranked_cooldown_until DATETIME(3) NULL");
   });
 });

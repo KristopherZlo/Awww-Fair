@@ -160,4 +160,33 @@ describe("ranked handler", () => {
     expect(await disconnect.json()).toEqual({ status: "reconnect_window", reconnectUntil: 91_000 });
     expect(await reconnect.json()).toMatchObject({ status: "matched", match: { id: "match-1", status: "active" } });
   });
+
+  it("returns a cooldown error when ranked queue is locked", async () => {
+    let now = 1_000;
+    let matchIndex = 0;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({
+      store,
+      now: () => now,
+      idFactory: () => `match-${++matchIndex}`,
+      seedFactory: () => `seed-${matchIndex}`
+    });
+    for (let leave = 0; leave < 2; leave += 1) {
+      await service.joinQueue("a");
+      await service.joinQueue("b");
+      await service.disconnectFromMatch("a", `match-${leave + 1}`);
+      now += 91_000;
+      await service.statusForPlayer("b");
+    }
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/queue`, { method: "POST", headers: { Cookie: "tm_session=token" } });
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "Ranked cooldown is active." });
+  });
 });

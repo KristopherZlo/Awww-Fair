@@ -41,6 +41,13 @@ function numberField(body: Record<string, unknown>, name: string): number {
   return value;
 }
 
+function rankedErrorResponse(error: unknown): { status: number; body: { error: string } } {
+  if (error instanceof Error && error.message === "Ranked cooldown is active.") {
+    return { status: 429, body: { error: error.message } };
+  }
+  return { status: 500, body: { error: "Ranked server error." } };
+}
+
 export function createRankedHandler({ authStore, service }: { authStore: AuthStore; service: RankedService }) {
   return async function rankedHandler(request: IncomingMessage, response: ServerResponse) {
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
@@ -116,8 +123,9 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         return;
       }
       json(response, 404, { error: "Unknown ranked route." });
-    } catch {
-      json(response, 500, { error: "Ranked server error." });
+    } catch (error) {
+      const errorResponse = rankedErrorResponse(error);
+      json(response, errorResponse.status, errorResponse.body);
     }
   };
 }

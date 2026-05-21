@@ -53,8 +53,12 @@ export function createMigrationStatements(): string[] {
       wins INT NOT NULL DEFAULT 0,
       losses INT NOT NULL DEFAULT 0,
       last_ranked_at DATETIME(3) NULL,
+      ranked_leave_count INT NOT NULL DEFAULT 0,
+      ranked_cooldown_until DATETIME(3) NULL,
       CONSTRAINT fk_player_ratings_user FOREIGN KEY (player_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
+    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS ranked_leave_count INT NOT NULL DEFAULT 0 AFTER last_ranked_at`,
+    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS ranked_cooldown_until DATETIME(3) NULL AFTER ranked_leave_count`,
     `CREATE TABLE IF NOT EXISTS ranked_matches (
       id CHAR(36) PRIMARY KEY,
       player_a_id CHAR(36) NOT NULL,
