@@ -3,7 +3,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppHandler } from "./app-handler";
-import type { AuthStore } from "./auth";
+import { sessionTokenHash, type AuthStore } from "./auth";
+import { MemoryRankedStore, RankedService } from "./ranked";
 
 async function startTestServer(handler: ReturnType<typeof createAppHandler>) {
   const server = createServer(handler);
@@ -44,6 +45,7 @@ describe("app handler", () => {
       createAppHandler({
         env: { AUTH_DEV_LOGIN: "true" },
         authStore: store(),
+        rankedService: new RankedService({ store: new MemoryRankedStore() }),
         tokenFactory: () => "token",
         fallbackHandler: (_request: IncomingMessage, response: ServerResponse) => {
           fallbackCalled = true;
@@ -60,5 +62,33 @@ describe("app handler", () => {
     expect(auth.status).toBe(200);
     expect(fallbackCalled).toBe(true);
     expect(lobby.status).toBe(204);
+  });
+
+  it("routes ranked API requests before falling back to the lobby handler", async () => {
+    const rankedAuthStore: AuthStore = {
+      ...store(),
+      async findUserBySessionHash(tokenHash) {
+        return tokenHash === sessionTokenHash("token") ? { id: "dev", displayName: "Dev", avatarUrl: null, email: null } : null;
+      }
+    };
+    const server = await startTestServer(
+      createAppHandler({
+        authStore: rankedAuthStore,
+        rankedService: new RankedService({
+          store: new MemoryRankedStore([{ playerId: "dev", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }]),
+          now: () => 1_000
+        }),
+        fallbackHandler: (_request: IncomingMessage, response: ServerResponse) => {
+          response.writeHead(204);
+          response.end();
+        }
+      })
+    );
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/queue`, { method: "POST", headers: { Cookie: "tm_session=token" } });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "waiting" });
   });
 });

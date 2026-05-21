@@ -71,11 +71,18 @@ export function createMigrationStatements(): string[] {
       player_b_mmr_after INT NULL,
       mmr_change INT NOT NULL DEFAULT 0,
       first_player_id CHAR(36) NOT NULL,
+      seed VARCHAR(128) NOT NULL,
       status VARCHAR(24) NOT NULL DEFAULT 'active',
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       settled_at DATETIME(3) NULL,
       CONSTRAINT fk_ranked_matches_player_a FOREIGN KEY (player_a_id) REFERENCES users(id),
       CONSTRAINT fk_ranked_matches_player_b FOREIGN KEY (player_b_id) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS ranked_queue (
+      player_id CHAR(36) PRIMARY KEY,
+      mmr INT NOT NULL,
+      joined_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      CONSTRAINT fk_ranked_queue_user FOREIGN KEY (player_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
     `CREATE TABLE IF NOT EXISTS ranked_match_events (
       match_id CHAR(36) NOT NULL,
