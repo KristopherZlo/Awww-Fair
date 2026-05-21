@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { MariaDbRankedStore, MemoryRankedStore, RankedService, getAllowedMmrRange, leaveCooldownSeconds, repeatMatchMultiplier } from "./ranked";
 import { calculateMmrChange, type PlayerRating, type RankedMatchLog } from "../src/game/rating";
+import { buildInitialState, seededRandom } from "../src/game/session";
+import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 
 describe("ranked matchmaking", () => {
   it("expands the MMR search range by wait time", () => {
@@ -34,6 +36,26 @@ describe("ranked matchmaking", () => {
       match: { id: "match-1", playerAId: "a", playerBId: "b", seed: "seed-1", status: "active" }
     });
     expect(await store.currentMatchForPlayer("c")).toBeNull();
+  });
+
+  it("creates deterministic ranked initial state from the match seed", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    const expectedInitialState = {
+      ...buildInitialState(true, DEFAULT_TURN_TIME_SECONDS, DEFAULT_INITIAL_STATE_OPTIONS, seededRandom("seed-1")),
+      phase: "planning" as const
+    };
+
+    await service.joinQueue("a");
+    const result = await service.joinQueue("b");
+
+    expect(result).toMatchObject({ status: "matched" });
+    if (result.status !== "matched") throw new Error("Expected ranked match.");
+    expect(result.match.initialState).toEqual(expectedInitialState);
+    expect(result.match.firstPlayerId).toBe(expectedInitialState.firstPlayer === "A" ? "a" : "b");
   });
 
   it("records turn events and settles an active ranked match", async () => {

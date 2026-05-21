@@ -2,7 +2,7 @@ import {
   DEFAULT_INITIAL_STATE_OPTIONS,
   DEFAULT_TURN_TIME_SECONDS,
   clampTurnTime
-} from "../app/gameConfig";
+} from "./sessionConfig";
 import type { GameState, InitialStateOptions } from "../app/types";
 import {
   CUSTOMER_CARDS,

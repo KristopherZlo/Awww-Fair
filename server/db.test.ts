@@ -33,5 +33,6 @@ describe("MariaDB server database setup", () => {
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS ranked_queue");
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS ranked_match_events");
     expect(sql).toContain("seed VARCHAR(128) NOT NULL");
+    expect(sql).toContain("initial_state JSON NOT NULL");
   });
 });

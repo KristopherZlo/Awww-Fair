@@ -72,12 +72,14 @@ export function createMigrationStatements(): string[] {
       mmr_change INT NOT NULL DEFAULT 0,
       first_player_id CHAR(36) NOT NULL,
       seed VARCHAR(128) NOT NULL,
+      initial_state JSON NOT NULL,
       status VARCHAR(24) NOT NULL DEFAULT 'active',
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       settled_at DATETIME(3) NULL,
       CONSTRAINT fk_ranked_matches_player_a FOREIGN KEY (player_a_id) REFERENCES users(id),
       CONSTRAINT fk_ranked_matches_player_b FOREIGN KEY (player_b_id) REFERENCES users(id)
     )`,
+    `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS initial_state JSON NULL AFTER seed`,
     `CREATE TABLE IF NOT EXISTS ranked_queue (
       player_id CHAR(36) PRIMARY KEY,
       mmr INT NOT NULL,

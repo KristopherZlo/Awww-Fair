@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import type { Pool, PoolConnection } from "mariadb";
+import type { GameState } from "../src/app/types";
 import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
+import { buildInitialState, seededRandom } from "../src/game/session";
+import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 import type { PlayerRating } from "../src/game/rating";
 
 export type RankedMatchStatus = "active" | "settled" | "abandoned";
@@ -13,6 +16,7 @@ export interface RankedMatch {
   playerBMmrBefore: number;
   firstPlayerId: string;
   seed: string;
+  initialState: GameState;
   status: RankedMatchStatus;
   createdAt: number;
 }
@@ -53,6 +57,20 @@ type MariaDbRankedConnection = Pick<PoolConnection, "beginTransaction" | "commit
 type MariaDbRankedPool = Pick<Pool, "query"> & {
   getConnection(): Promise<MariaDbRankedConnection>;
 };
+
+function createRankedInitialState(seed: string): GameState {
+  return {
+    ...buildInitialState(true, DEFAULT_TURN_TIME_SECONDS, DEFAULT_INITIAL_STATE_OPTIONS, seededRandom(seed)),
+    phase: "planning"
+  };
+}
+
+function parseInitialState(value: unknown, seed: string): GameState {
+  if (!value) {
+    return createRankedInitialState(seed);
+  }
+  return (typeof value === "string" ? JSON.parse(value) : value) as GameState;
+}
 
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
@@ -109,14 +127,17 @@ export class RankedService {
     }
 
     const opponentRating = await this.options.store.ratingForPlayer(opponent.playerId);
+    const seed = this.options.seedFactory?.() ?? crypto.randomUUID();
+    const initialState = createRankedInitialState(seed);
     const match: RankedMatch = {
       id: this.options.idFactory?.() ?? crypto.randomUUID(),
       playerAId: opponent.playerId,
       playerBId: playerId,
       playerAMmrBefore: opponentRating.mmr,
       playerBMmrBefore: rating.mmr,
-      firstPlayerId: Math.random() > 0.5 ? opponent.playerId : playerId,
-      seed: this.options.seedFactory?.() ?? crypto.randomUUID(),
+      firstPlayerId: initialState.firstPlayer === "A" ? opponent.playerId : playerId,
+      seed,
+      initialState,
       status: "active",
       createdAt: now
     };
@@ -361,8 +382,8 @@ export class MariaDbRankedStore implements RankedStore {
     await this.pool.query(
       `INSERT INTO ranked_matches (
         id, player_a_id, player_b_id, player_a_mmr_before, player_b_mmr_before,
-        first_player_id, seed, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        first_player_id, seed, initial_state, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         match.id,
         match.playerAId,
@@ -371,6 +392,7 @@ export class MariaDbRankedStore implements RankedStore {
         match.playerBMmrBefore,
         match.firstPlayerId,
         match.seed,
+        JSON.stringify(match.initialState),
         match.status,
         new Date(match.createdAt)
       ]
@@ -381,7 +403,7 @@ export class MariaDbRankedStore implements RankedStore {
     const rows = await this.pool.query(
       `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
-        first_player_id AS firstPlayerId, seed, status, created_at AS createdAt
+        first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt
        FROM ranked_matches
        WHERE status = 'active' AND (player_a_id = ? OR player_b_id = ?)
        ORDER BY created_at DESC
@@ -398,6 +420,7 @@ export class MariaDbRankedStore implements RankedStore {
           playerBMmrBefore: Number(row.playerBMmrBefore),
           firstPlayerId: row.firstPlayerId,
           seed: row.seed,
+          initialState: parseInitialState(row.initialState, row.seed),
           status: row.status,
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now()
         }
@@ -408,7 +431,7 @@ export class MariaDbRankedStore implements RankedStore {
     const rows = await this.pool.query(
       `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
-        first_player_id AS firstPlayerId, seed, status, created_at AS createdAt
+        first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt
        FROM ranked_matches
        WHERE id = ?
        LIMIT 1`,
@@ -424,6 +447,7 @@ export class MariaDbRankedStore implements RankedStore {
           playerBMmrBefore: Number(row.playerBMmrBefore),
           firstPlayerId: row.firstPlayerId,
           seed: row.seed,
+          initialState: parseInitialState(row.initialState, row.seed),
           status: row.status,
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now()
         }

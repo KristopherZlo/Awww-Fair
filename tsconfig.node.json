@@ -9,5 +9,19 @@
     "strict": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "server/**/*.ts", "src/game/rating.ts"]
+  "include": [
+    "vite.config.ts",
+    "server/**/*.ts",
+    "src/app/types.ts",
+    "src/data/cards.ts",
+    "src/game/engine.ts",
+    "src/game/goals.ts",
+    "src/game/levels.ts",
+    "src/game/rating.ts",
+    "src/game/session.ts",
+    "src/game/sessionConfig.ts",
+    "src/game/trends.ts",
+    "src/game/types.ts",
+    "src/i18n.ts"
+  ]
 }
