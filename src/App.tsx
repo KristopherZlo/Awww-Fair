@@ -48,7 +48,7 @@ import {
 import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
 import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
-import { joinRankedQueue, loadLeaderboard, type LeaderboardEntry } from "./app/rankedClient";
+import { joinRankedQueue, loadLeaderboard, loadMyRating, type LeaderboardEntry, type PlayerRating } from "./app/rankedClient";
 import {
   displayPlayerName,
   displayPlayerNameFor,
@@ -663,6 +663,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState("");
   const [devLoginName, setDevLoginName] = useState("Player");
+  const [profileRating, setProfileRating] = useState<PlayerRating | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardError, setLeaderboardError] = useState("");
   const [rankedStatus, setRankedStatus] = useState("");
@@ -736,6 +737,25 @@ export default function App() {
       disposed = true;
     };
   }, [menuTab]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setProfileRating(null);
+      return;
+    }
+    let disposed = false;
+    setProfileRating(null);
+    loadMyRating()
+      .then((rating) => {
+        if (!disposed) {
+          setProfileRating(rating);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (state.phase === "menu" && menuView === "levels" && campaignProgress.highestUnlockedLevel === 1) {
@@ -3148,7 +3168,7 @@ export default function App() {
                         <div className="profile-avatar">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={24} />}</div>
                         <div>
                           <strong>{currentUser.displayName}</strong>
-                          <span>MMR: 1500</span>
+                          <span>MMR: {profileRating?.mmr ?? "..."}</span>
                         </div>
                         <button onClick={() => void signOut()}>
                           <LogOut size={16} /> Выйти

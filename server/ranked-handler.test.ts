@@ -81,6 +81,16 @@ describe("ranked handler", () => {
     expect(await status.json()).toEqual({ status: "waiting" });
   });
 
+  it("returns the authenticated player rating", async () => {
+    const store = new MemoryRankedStore([{ playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null }]);
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service: new RankedService({ store }) }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/rating`, { headers: { Cookie: "tm_session=token" } });
+
+    expect(await response.json()).toEqual({ rating: { playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+  });
+
   it("records ranked events and settles the current match", async () => {
     const store = new MemoryRankedStore([
       { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },

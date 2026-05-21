@@ -142,6 +142,10 @@ export class RankedService {
     return this.options.store.leaderboard(limit);
   }
 
+  async ratingForPlayer(playerId: string): Promise<PlayerRating> {
+    return this.options.store.ratingForPlayer(playerId);
+  }
+
   async settleMatch(
     actorId: string,
     result: { matchId: string; playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }

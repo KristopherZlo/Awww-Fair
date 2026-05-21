@@ -704,6 +704,29 @@ describe("App layout shell", () => {
     expect(screen.getByText(/В разработке/i)).toBeInTheDocument();
   });
 
+  it("shows the logged-in player MMR in profile", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+        }
+        if (url === "/api/ranked/rating") {
+          return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Профиль/i }));
+
+    expect(await screen.findByText(/Player One/i)).toBeInTheDocument();
+    expect(await screen.findByText(/MMR: 1518/i)).toBeInTheDocument();
+  });
+
   it("does not show server deployment LAN hints in the main menu", async () => {
     const fetchMock = vi.fn(async () => new Response("{}", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
