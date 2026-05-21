@@ -292,36 +292,6 @@
   align-items: stretch;
 }
 
-.menu-network-divider {
-  height: 1px;
-  background: rgba(248, 234, 210, 0.14);
-}
-
-.lan-addresses {
-  display: grid;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid rgba(248, 234, 210, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 250, 240, 0.08);
-}
-
-.lan-addresses span {
-  color: #e8d4b4;
-  font-size: 0.78rem;
-  font-weight: 850;
-}
-
-.lan-addresses a {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #ffe6a6;
-  font-size: 0.84rem;
-  font-weight: 850;
-  overflow-wrap: anywhere;
-}
-
 .join-lobby {
   display: grid;
   grid-template-columns: 1fr;

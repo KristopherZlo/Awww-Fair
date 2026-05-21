@@ -64,7 +64,6 @@ import {
   saveSession
 } from "./app/persistence";
 import { useLocalHintMarkers } from "./app/useLocalHintMarkers";
-import { useLobbyNetworkUrls } from "./app/useLobbyNetworkUrls";
 import type {
   AiMode,
   AudioSettings,
@@ -655,7 +654,6 @@ export default function App() {
   const [lobbyError, setLobbyError] = useState("");
   const [syncStatus, setSyncStatus] = useState<"local" | "online" | "syncing" | "offline">(() => (initialSession?.lobby ? "online" : "local"));
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
-  const networkUrls = useLobbyNetworkUrls();
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>("idle");
@@ -2999,17 +2997,6 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                  {networkUrls.length > 0 && (
-                    <div className="lan-addresses" aria-label={ui(language, "lanAddressLabel")}>
-                      <span>{ui(language, "lanAddressLabel")}</span>
-                      {networkUrls.map((url) => (
-                        <a key={url} href={url} target="_blank" rel="noreferrer">
-                          <ExternalLink size={14} /> {url}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  <div className="menu-network-divider" aria-hidden="true" />
                 </section>
 
                 <div className="menu-footer-actions">
@@ -3050,7 +3037,6 @@ export default function App() {
               </div>
 
               {lobbyError && <p className="lobby-error">{lobbyError}</p>}
-              <small>{ui(language, "lobbyHint")}</small>
             </div>
           ) : (
             <div className="menu-box level-map-box">

@@ -670,32 +670,24 @@ describe("App layout shell", () => {
     expect(screen.queryByRole("button", { name: /^Уровни$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /против ии/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /обучение/i })).toBeInTheDocument();
-    expect(container.querySelector(".menu-network-divider")).not.toBeNull();
     expect(container.querySelector(".menu-secondary-actions")).toBeNull();
     expect(container.querySelector(".menu-footer-actions")).not.toBeNull();
     expect(container.querySelector(".menu-support-actions")).not.toBeNull();
     expect(screen.getByRole("button", { name: /Об игре/i })).toBeInTheDocument();
   });
 
-  it("shows the local network address returned by the lobby server", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/api/network") {
-          return new Response(JSON.stringify({ urls: ["http://192.168.1.24:5175"] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-
-        return new Response("{}", { status: 404 });
-      })
-    );
+  it("does not show server deployment LAN hints in the main menu", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
 
-    expect(await screen.findByRole("link", { name: "http://192.168.1.24:5175" })).toHaveAttribute("href", "http://192.168.1.24:5175");
-    expect(screen.getByText(/адрес для игроков/i)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/network");
+    expect(screen.queryByText(/npm run lan/i)).not.toBeInTheDocument();
+    expect(document.querySelector(".lan-addresses")).toBeNull();
   });
 
   it("chooses AI opponent difficulty before starting a versus AI game", async () => {

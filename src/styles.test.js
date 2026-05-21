@@ -121,7 +121,6 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.menu-primary-grid\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
     expect(css).toMatch(/\.menu-online-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
     expect(css).toMatch(/\.join-lobby\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*1fr;/);
-    expect(css).toMatch(/\.menu-network-divider\s*\{[\s\S]*height:\s*1px;/);
     expect(css).toMatch(/\.menu-footer-actions\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*1fr;/);
     expect(css).toMatch(/\.menu-support-actions\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
   });

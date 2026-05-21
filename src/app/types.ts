@@ -120,10 +120,6 @@ export interface LobbyResponse<TState = GameState> {
   seats: Record<PlayerId, boolean>;
 }
 
-export interface NetworkResponse {
-  urls?: unknown;
-}
-
 export interface SavedSession {
   version: number;
   state: GameState;
