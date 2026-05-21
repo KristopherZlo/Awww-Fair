@@ -161,6 +161,7 @@
   .menu-primary-grid,
   .menu-online-row,
   .menu-tabs,
+  .match-history-row,
   .oauth-actions,
   .dev-login-row {
     grid-template-columns: 1fr;

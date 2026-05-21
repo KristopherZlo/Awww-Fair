@@ -44,6 +44,10 @@ export interface RankedLeaderboardEntry {
   losses: number;
 }
 
+type RankedMatchHistoryRow = Omit<RankedMatchLog, "createdAt"> & {
+  createdAt: Date | string;
+};
+
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
   waitingPlayers(): Promise<RankedQueueEntry[]>;
@@ -54,6 +58,7 @@ export interface RankedStore {
   matchById(matchId: string): Promise<RankedMatch | null>;
   recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
   recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number>;
+  matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]>;
   settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void>;
   leaderboard(limit: number): Promise<RankedLeaderboardEntry[]>;
 }
@@ -145,6 +150,10 @@ export class RankedService {
 
   async ratingForPlayer(playerId: string): Promise<PlayerRating> {
     return this.options.store.ratingForPlayer(playerId);
+  }
+
+  async matchHistoryForPlayer(playerId: string, limit = 10): Promise<RankedMatchLog[]> {
+    return this.options.store.matchHistoryForPlayer(playerId, Math.max(1, Math.min(50, Math.floor(limit))));
   }
 
   async settleMatch(
@@ -261,6 +270,14 @@ export class MemoryRankedStore implements RankedStore {
         (log.playerAId === playerBId && log.playerBId === playerAId);
       return samePair && Date.parse(log.createdAt) >= since;
     }).length;
+  }
+
+  async matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]> {
+    return this.settledLogs
+      .filter((log) => log.playerAId === playerId || log.playerBId === playerId)
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .slice(0, limit)
+      .map((log) => ({ ...log }));
   }
 
   async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
@@ -428,6 +445,41 @@ export class MariaDbRankedStore implements RankedStore {
       [new Date(since), playerAId, playerBId, playerBId, playerAId]
     );
     return Number(rows[0]?.matchCount ?? 0);
+  }
+
+  async matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]> {
+    const rows = await this.pool.query(
+      `SELECT id AS matchId, player_a_id AS playerAId, player_b_id AS playerBId,
+        winner_id AS winnerId, loser_id AS loserId, player_a_coins AS playerACoins,
+        player_b_coins AS playerBCoins, player_a_sales AS playerASales,
+        player_b_sales AS playerBSales, player_a_mmr_before AS playerAMmrBefore,
+        player_b_mmr_before AS playerBMmrBefore, player_a_mmr_after AS playerAMmrAfter,
+        player_b_mmr_after AS playerBMmrAfter, mmr_change AS mmrChange,
+        first_player_id AS firstPlayerId, created_at AS createdAt
+       FROM ranked_matches
+       WHERE status = 'settled' AND (player_a_id = ? OR player_b_id = ?)
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [playerId, playerId, limit]
+    );
+    return rows.map((row: RankedMatchHistoryRow) => ({
+      matchId: row.matchId,
+      playerAId: row.playerAId,
+      playerBId: row.playerBId,
+      winnerId: row.winnerId ?? null,
+      loserId: row.loserId ?? null,
+      playerACoins: Number(row.playerACoins),
+      playerBCoins: Number(row.playerBCoins),
+      playerASales: Number(row.playerASales),
+      playerBSales: Number(row.playerBSales),
+      playerAMmrBefore: Number(row.playerAMmrBefore),
+      playerBMmrBefore: Number(row.playerBMmrBefore),
+      playerAMmrAfter: Number(row.playerAMmrAfter),
+      playerBMmrAfter: Number(row.playerBMmrAfter),
+      mmrChange: Number(row.mmrChange),
+      firstPlayerId: row.firstPlayerId,
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt)
+    }));
   }
 
   async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {

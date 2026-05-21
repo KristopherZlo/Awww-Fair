@@ -91,6 +91,24 @@ describe("ranked handler", () => {
     expect(await response.json()).toEqual({ rating: { playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
   });
 
+  it("returns authenticated player match history", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.settleMatch("a", { matchId: "match-1", playerACoins: 10, playerBCoins: 5, playerASales: 4, playerBSales: 2 });
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/history`, { headers: { Cookie: "tm_session=token" } });
+    const payload = await response.json();
+
+    expect(payload.history[0]).toMatchObject({ matchId: "match-1", winnerId: "a", loserId: "b", mmrChange: 26 });
+  });
+
   it("records ranked events and settles the current match", async () => {
     const store = new MemoryRankedStore([
       { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },

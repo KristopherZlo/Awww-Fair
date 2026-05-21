@@ -375,6 +375,37 @@
   gap: 6px;
 }
 
+.match-history {
+  display: grid;
+  gap: 8px;
+}
+
+.match-history h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.match-history-list {
+  display: grid;
+  gap: 6px;
+}
+
+.match-history-row {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid rgba(248, 234, 210, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.07);
+}
+
+.match-history-row span {
+  color: #d8c29f;
+}
+
 .leaderboard-row {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto auto;

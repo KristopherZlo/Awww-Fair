@@ -715,6 +715,30 @@ describe("App layout shell", () => {
         if (url === "/api/ranked/rating") {
           return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
         }
+        if (url === "/api/ranked/history") {
+          return Response.json({
+            history: [
+              {
+                matchId: "m1",
+                playerAId: "p1",
+                playerBId: "p2",
+                winnerId: "p1",
+                loserId: "p2",
+                playerACoins: 10,
+                playerBCoins: 5,
+                playerASales: 4,
+                playerBSales: 2,
+                playerAMmrBefore: 1500,
+                playerBMmrBefore: 1500,
+                playerAMmrAfter: 1518,
+                playerBMmrAfter: 1482,
+                mmrChange: 18,
+                firstPlayerId: "p1",
+                createdAt: "2026-05-21T00:00:00.000Z"
+              }
+            ]
+          });
+        }
         return Response.json({});
       })
     );
@@ -725,6 +749,8 @@ describe("App layout shell", () => {
 
     expect(await screen.findByText(/Player One/i)).toBeInTheDocument();
     expect(await screen.findByText(/MMR: 1518/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Победа/i)).toBeInTheDocument();
+    expect(screen.getByText(/\+18 MMR/i)).toBeInTheDocument();
   });
 
   it("does not show server deployment LAN hints in the main menu", async () => {

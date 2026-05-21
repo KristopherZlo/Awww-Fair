@@ -74,6 +74,10 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         json(response, 200, { rating: await service.ratingForPlayer(user.id) });
         return;
       }
+      if (request.method === "GET" && parts[2] === "history") {
+        json(response, 200, { history: await service.matchHistoryForPlayer(user.id) });
+        return;
+      }
       if (request.method === "POST" && parts[2] === "events") {
         const body = await readJson(request);
         const event = await service.recordEvent(user.id, {

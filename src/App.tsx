@@ -48,7 +48,15 @@ import {
 import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
 import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
-import { joinRankedQueue, loadLeaderboard, loadMyRating, type LeaderboardEntry, type PlayerRating } from "./app/rankedClient";
+import {
+  joinRankedQueue,
+  loadLeaderboard,
+  loadMatchHistory,
+  loadMyRating,
+  type LeaderboardEntry,
+  type PlayerRating,
+  type RankedMatchHistoryEntry
+} from "./app/rankedClient";
 import {
   displayPlayerName,
   displayPlayerNameFor,
@@ -192,6 +200,20 @@ const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const UPGRADE_CHOICE_SECONDS = 20;
 type MainMenuTab = "play" | "profile" | "rating" | "dlc";
+
+function rankedHistoryResultLabel(match: RankedMatchHistoryEntry, playerId: string): string {
+  if (!match.winnerId) return "Ничья";
+  return match.winnerId === playerId ? "Победа" : "Поражение";
+}
+
+function rankedHistoryMmrChange(match: RankedMatchHistoryEntry, playerId: string): number {
+  if (!match.winnerId) return 0;
+  return match.winnerId === playerId ? match.mmrChange : -match.mmrChange;
+}
+
+function signedMmrChange(change: number): string {
+  return change > 0 ? `+${change}` : String(change);
+}
 
 const CUTSCENE_FRAMES = [
   {
@@ -664,6 +686,8 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [devLoginName, setDevLoginName] = useState("Player");
   const [profileRating, setProfileRating] = useState<PlayerRating | null>(null);
+  const [matchHistory, setMatchHistory] = useState<RankedMatchHistoryEntry[]>([]);
+  const [matchHistoryError, setMatchHistoryError] = useState("");
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardError, setLeaderboardError] = useState("");
   const [rankedStatus, setRankedStatus] = useState("");
@@ -741,10 +765,14 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) {
       setProfileRating(null);
+      setMatchHistory([]);
+      setMatchHistoryError("");
       return;
     }
     let disposed = false;
     setProfileRating(null);
+    setMatchHistory([]);
+    setMatchHistoryError("");
     loadMyRating()
       .then((rating) => {
         if (!disposed) {
@@ -752,6 +780,17 @@ export default function App() {
         }
       })
       .catch(() => undefined);
+    loadMatchHistory()
+      .then((history) => {
+        if (!disposed) {
+          setMatchHistory(history);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setMatchHistoryError(error instanceof Error ? error.message : "История рейтинга временно недоступна.");
+        }
+      });
     return () => {
       disposed = true;
     };
@@ -3175,6 +3214,27 @@ export default function App() {
                         </button>
                       </div>
                       <p className="menu-note">Рейтинговые матчи и будущие DLC доступны этому аккаунту.</p>
+                      <div className="match-history">
+                        <h3>История MMR</h3>
+                        {matchHistoryError && <p className="lobby-error">{matchHistoryError}</p>}
+                        <div className="match-history-list">
+                          {matchHistory.map((match) => {
+                            const change = rankedHistoryMmrChange(match, currentUser.id);
+                            const opponentId = match.playerAId === currentUser.id ? match.playerBId : match.playerAId;
+                            return (
+                              <div className="match-history-row" key={match.matchId}>
+                                <strong>{rankedHistoryResultLabel(match, currentUser.id)}</strong>
+                                <span>vs {opponentId}</span>
+                                <span>
+                                  {match.playerACoins}:{match.playerBCoins} монет
+                                </span>
+                                <span>{signedMmrChange(change)} MMR</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {!matchHistory.length && !matchHistoryError && <p className="menu-note">История рейтинга пока пуста.</p>}
+                      </div>
                     </>
                   ) : (
                     <>
