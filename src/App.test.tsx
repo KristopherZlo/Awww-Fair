@@ -7,6 +7,7 @@ import { clearImagePreloadCacheForTest } from "./assetPreloader";
 import { CUSTOMER_CARDS, INFLUENCE_CARDS, PRODUCT_CARDS, TREND_CARDS, UPGRADE_CARDS } from "./data/cards";
 import { customerPersonalityDescription } from "./i18n";
 import type { PartyGoal } from "./game/goals";
+import { buildInitialState } from "./game/session";
 import type { PlayerId, PlayerState, ProductCard, ProductInstance } from "./game/types";
 
 class MockAudio {
@@ -777,6 +778,48 @@ describe("App layout shell", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/queue", { method: "DELETE" }));
     expect(await screen.findByText(/Очередь рейтинга отменена/i)).toBeInTheDocument();
+  });
+
+  it("starts a ranked match from a matched queue response", async () => {
+    const user = userEvent.setup();
+    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "idle" });
+      }
+      if (url === "/api/ranked/queue" && init?.method === "POST") {
+        return Response.json({
+          status: "matched",
+          match: {
+            id: "match-1",
+            playerAId: "p1",
+            playerBId: "p2",
+            playerAMmrBefore: 1500,
+            playerBMmrBefore: 1500,
+            firstPlayerId: "p1",
+            seed: "seed-1",
+            initialState: rankedInitialState,
+            status: "active",
+            createdAt: 1_000,
+            playerADisconnectedAt: null,
+            playerBDisconnectedAt: null
+          }
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    const rankedButton = await screen.findByRole("button", { name: /Рейтинг 1vs1/i });
+    await user.click(rankedButton);
+
+    expect(await screen.findByText(/Рейтинговый матч начался/i)).toBeInTheDocument();
+    expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull();
   });
 
   it("does not show server deployment LAN hints in the main menu", async () => {

@@ -1,3 +1,5 @@
+import type { GameState } from "./types";
+
 export interface LeaderboardEntry {
   playerId: string;
   displayName: string;
@@ -36,7 +38,22 @@ export interface RankedMatchHistoryEntry {
   createdAt: string;
 }
 
-export type RankedQueueJoinResult = { status: "waiting" } | { status: "matched"; match: unknown };
+export interface RankedMatch {
+  id: string;
+  playerAId: string;
+  playerBId: string;
+  playerAMmrBefore: number;
+  playerBMmrBefore: number;
+  firstPlayerId: string;
+  seed: string;
+  initialState: GameState;
+  status: "active" | "settled" | "abandoned";
+  createdAt: number;
+  playerADisconnectedAt: number | null;
+  playerBDisconnectedAt: number | null;
+}
+
+export type RankedQueueJoinResult = { status: "waiting" } | { status: "matched"; match: RankedMatch };
 export type RankedQueueStatus = { status: "idle" } | RankedQueueJoinResult;
 
 export interface RankedEventInput {

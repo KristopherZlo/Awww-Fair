@@ -57,6 +57,7 @@ import {
   loadRankedStatus,
   type LeaderboardEntry,
   type PlayerRating,
+  type RankedMatch,
   type RankedMatchHistoryEntry,
   type RankedQueueStatus
 } from "./app/rankedClient";
@@ -654,8 +655,12 @@ export default function App() {
     loadRankedStatus()
       .then((result) => {
         if (!disposed) {
-          setRankedQueueState(result.status);
-          setRankedStatus(rankedStatusText(result.status));
+          if (result.status === "matched") {
+            startRankedMatch(result.match);
+          } else {
+            setRankedQueueState(result.status);
+            setRankedStatus(rankedStatusText(result.status));
+          }
         }
       })
       .catch(() => {
@@ -1590,8 +1595,12 @@ export default function App() {
     setRankedStatus("Ищем соперника...");
     try {
       const result = await joinRankedQueue();
-      setRankedQueueState(result.status);
-      setRankedStatus(rankedStatusText(result.status));
+      if (result.status === "matched") {
+        startRankedMatch(result.match);
+      } else {
+        setRankedQueueState(result.status);
+        setRankedStatus(rankedStatusText(result.status));
+      }
     } catch (error) {
       setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
     }
@@ -1606,6 +1615,28 @@ export default function App() {
     } catch (error) {
       setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
     }
+  }
+
+  function startRankedMatch(match: RankedMatch) {
+    musicModeRef.current = "menu";
+    lobbyRef.current = null;
+    setLobby(null);
+    setLobbyError("");
+    setSyncStatus("online");
+    setRankedQueueState("matched");
+    setRankedStatus("Матч найден.");
+    patchState((current) => {
+      const language = audioSettingsRef.current.language;
+      return {
+        ...match.initialState,
+        phase: "planning",
+        sound: current.sound,
+        logs: [
+          language === "en" ? "Ranked match started." : "Рейтинговый матч начался.",
+          ...match.initialState.logs
+        ].slice(0, 24)
+      };
+    }, "customer-arrive");
   }
 
   useEffect(() => {
