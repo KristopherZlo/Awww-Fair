@@ -12,6 +12,7 @@
     "dev:lan": "node server/lan-dev-server.mjs",
     "lan": "node server/lan-dev-server.mjs",
     "lobby": "node server/lobby-server.mjs",
+    "db:migrate": "tsx server/migrate.ts",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "preview:5175": "vite preview --host 127.0.0.1 --port 5175",
@@ -24,6 +25,7 @@
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
+    "mariadb": "^3.5.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -31,10 +33,12 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^25.9.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "6.0.2",
     "jsdom": "^25.0.1",
+    "tsx": "^4.22.3",
     "typescript": "^5.6.3",
     "vite": "8.0.13",
     "vitest": "4.1.7"
