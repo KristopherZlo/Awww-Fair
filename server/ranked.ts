@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Pool, PoolConnection } from "mariadb";
 import type { GameState } from "../src/app/types";
 import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
+import { replayRankedEvents, type RankedReplayOutcome } from "../src/game/rankedReplay";
 import { buildInitialState, seededRandom } from "../src/game/session";
 import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 import type { PlayerRating } from "../src/game/rating";
@@ -94,6 +95,18 @@ function disconnectedAtFor(match: RankedMatch, playerId: string): number | null 
   return null;
 }
 
+function sameRankedOutcome(
+  replay: RankedReplayOutcome,
+  submitted: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }
+): boolean {
+  return (
+    replay.playerACoins === submitted.playerACoins &&
+    replay.playerBCoins === submitted.playerBCoins &&
+    replay.playerASales === submitted.playerASales &&
+    replay.playerBSales === submitted.playerBSales
+  );
+}
+
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
   leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty>;
@@ -106,6 +119,7 @@ export interface RankedStore {
   matchById(matchId: string): Promise<RankedMatch | null>;
   setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void>;
   recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
+  eventsForMatch(matchId: string): Promise<RankedMatchEvent[]>;
   recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number>;
   matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]>;
   settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void>;
@@ -249,6 +263,9 @@ export class RankedService {
     result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number },
     forcedWinnerId?: string
   ): Promise<{ log: RankedMatchLog }> {
+    if (!forcedWinnerId) {
+      await this.assertReplayMatchesSubmittedResult(match, result);
+    }
     const playerA = await this.options.store.ratingForPlayer(match.playerAId);
     const playerB = await this.options.store.ratingForPlayer(match.playerBId);
     const now = this.options.now?.() ?? Date.now();
@@ -289,6 +306,24 @@ export class RankedService {
     });
     await this.options.store.settleMatch(log, playerA, playerB);
     return { log };
+  }
+
+  private async assertReplayMatchesSubmittedResult(
+    match: RankedMatch,
+    result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }
+  ): Promise<void> {
+    const events = await this.options.store.eventsForMatch(match.id);
+    if (events.length === 0) {
+      return;
+    }
+    const replayOutcome = replayRankedEvents(
+      match.initialState,
+      events.map((event) => ({ actorId: event.actorId, eventType: event.eventType, payload: event.payload })),
+      { playerAId: match.playerAId, playerBId: match.playerBId }
+    );
+    if (!sameRankedOutcome(replayOutcome, result)) {
+      throw new Error("Ranked replay result mismatch.");
+    }
   }
 
   private async settleExpiredDisconnect(match: RankedMatch): Promise<boolean> {
@@ -425,6 +460,10 @@ export class MemoryRankedStore implements RankedStore {
     events.push(recorded);
     this.events.set(event.matchId, events);
     return recorded;
+  }
+
+  async eventsForMatch(matchId: string): Promise<RankedMatchEvent[]> {
+    return [...(this.events.get(matchId) ?? [])].sort((left, right) => left.sequence - right.sequence).map((event) => ({ ...event }));
   }
 
   async recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number> {
@@ -645,6 +684,27 @@ export class MariaDbRankedStore implements RankedStore {
       [event.matchId, sequence, event.actorId, event.round, event.phase, event.eventType, JSON.stringify(event.payload), new Date(event.createdAt)]
     );
     return { ...event, sequence };
+  }
+
+  async eventsForMatch(matchId: string): Promise<RankedMatchEvent[]> {
+    const rows = await this.pool.query(
+      `SELECT match_id AS matchId, sequence, actor_id AS actorId, round, phase,
+        event_type AS eventType, payload, created_at AS createdAt
+       FROM ranked_match_events
+       WHERE match_id = ?
+       ORDER BY sequence ASC`,
+      [matchId]
+    );
+    return (rows as Array<{ matchId: string; sequence: unknown; actorId: string; round: unknown; phase: string; eventType: string; payload: unknown; createdAt: unknown }>).map((row) => ({
+      matchId: row.matchId,
+      sequence: Number(row.sequence),
+      actorId: row.actorId,
+      round: Number(row.round),
+      phase: row.phase,
+      eventType: row.eventType,
+      payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
+      createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.parse(String(row.createdAt))
+    }));
   }
 
   async recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number> {

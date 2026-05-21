@@ -45,6 +45,9 @@ function rankedErrorResponse(error: unknown): { status: number; body: { error: s
   if (error instanceof Error && error.message === "Ranked cooldown is active.") {
     return { status: 429, body: { error: error.message } };
   }
+  if (error instanceof Error && error.message === "Ranked replay result mismatch.") {
+    return { status: 409, body: { error: error.message } };
+  }
   return { status: 500, body: { error: "Ranked server error." } };
 }
 

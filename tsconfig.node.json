@@ -18,6 +18,7 @@
     "src/game/goals.ts",
     "src/game/levels.ts",
     "src/game/rating.ts",
+    "src/game/rankedReplay.ts",
     "src/game/session.ts",
     "src/game/sessionConfig.ts",
     "src/game/trends.ts",

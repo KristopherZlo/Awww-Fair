@@ -1,8 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { MariaDbRankedStore, MemoryRankedStore, RankedService, getAllowedMmrRange, leaveCooldownSeconds, repeatMatchMultiplier } from "./ranked";
 import { calculateMmrChange, type PlayerRating, type RankedMatchLog } from "../src/game/rating";
+import { applyRankedReplayEvent, type RankedReplayEvent, type RankedReplayPlayerMap } from "../src/game/rankedReplay";
 import { buildInitialState, seededRandom } from "../src/game/session";
 import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
+
+function buildNoActionReplayEvents(match: { initialState: ReturnType<typeof buildInitialState>; playerAId: string; playerBId: string }) {
+  const events: Array<RankedReplayEvent & { round: number; phase: string }> = [];
+  const playerMap: RankedReplayPlayerMap = { playerAId: match.playerAId, playerBId: match.playerBId };
+  let state = match.initialState;
+
+  while (state.phase !== "game_end") {
+    const actorSeat = state.phase === "upgrade" ? state.upgradeQueue[0] : state.activePlayer;
+    const event = {
+      actorId: actorSeat === "A" ? match.playerAId : match.playerBId,
+      eventType: state.phase === "upgrade" ? "skip_upgrade" : "ready",
+      payload: {},
+      round: state.round,
+      phase: state.phase
+    };
+    events.push(event);
+    state = applyRankedReplayEvent(state, event, playerMap);
+  }
+
+  return events;
+}
 
 describe("ranked matchmaking", () => {
   it("expands the MMR search range by wait time", () => {
@@ -58,33 +80,58 @@ describe("ranked matchmaking", () => {
     expect(result.match.firstPlayerId).toBe(expectedInitialState.firstPlayer === "A" ? "a" : "b");
   });
 
-  it("records turn events and settles an active ranked match", async () => {
+  it("replays recorded turn events before settling an active ranked match", async () => {
     const store = new MemoryRankedStore([
       { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
       { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
     ]);
     const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
     await service.joinQueue("a");
-    await service.joinQueue("b");
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
 
-    const event = await service.recordEvent("a", {
-      matchId: "match-1",
-      round: 1,
-      phase: "planning",
-      eventType: "place_product",
-      payload: { slotIndex: 0 }
-    });
+    const replayEvents = buildNoActionReplayEvents(matched.match);
+    for (const event of replayEvents) {
+      await service.recordEvent(event.actorId, { matchId: "match-1", round: event.round, phase: event.phase, eventType: event.eventType, payload: event.payload });
+    }
     const settlement = await service.settleMatch("a", {
       matchId: "match-1",
-      playerACoins: 10,
-      playerBCoins: 5,
-      playerASales: 4,
-      playerBSales: 2
+      playerACoins: 0,
+      playerBCoins: 0,
+      playerASales: 0,
+      playerBSales: 0
     });
 
-    expect(event).toMatchObject({ matchId: "match-1", sequence: 1, actorId: "a", eventType: "place_product" });
-    expect(settlement.log).toMatchObject({ winnerId: "a", loserId: "b", mmrChange: 26, playerAMmrAfter: 1526, playerBMmrAfter: 1474 });
-    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1526, wins: 1 });
+    expect(replayEvents).toHaveLength(22);
+    expect(settlement.log).toMatchObject({ winnerId: null, loserId: null, mmrChange: 0, playerAMmrAfter: 1500, playerBMmrAfter: 1500 });
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1500, wins: 0 });
+  });
+
+  it("rejects settlement when submitted result does not match the ranked replay", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+
+    for (const event of buildNoActionReplayEvents(matched.match)) {
+      await service.recordEvent(event.actorId, { matchId: "match-1", round: event.round, phase: event.phase, eventType: event.eventType, payload: event.payload });
+    }
+
+    await expect(
+      service.settleMatch("a", {
+        matchId: "match-1",
+        playerACoins: 10,
+        playerBCoins: 0,
+        playerASales: 1,
+        playerBSales: 0
+      })
+    ).rejects.toThrow("Ranked replay result mismatch.");
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1500, wins: 0 });
+    await expect(store.matchById("match-1")).resolves.toMatchObject({ status: "active" });
   });
 
   it("lets a disconnected player reconnect before the timeout", async () => {
@@ -129,6 +176,24 @@ describe("ranked matchmaking", () => {
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
     await expect(store.ratingForPlayer("b")).resolves.toMatchObject({ mmr: 1524, wins: 1 });
     expect(history[0]).toMatchObject({ winnerId: "b", loserId: "a", playerACoins: 0, playerBCoins: 0, mmrChange: 24 });
+  });
+
+  it("settles disconnect loss even when replay events are unfinished", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => now, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    await service.recordEvent(matched.match.firstPlayerId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: {} });
+    await service.disconnectFromMatch("a", "match-1");
+
+    now = 91_001;
+    await expect(service.statusForPlayer("b")).resolves.toEqual({ status: "idle" });
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
   });
 
   it("blocks ranked queue while a repeated leaver is on cooldown", async () => {
