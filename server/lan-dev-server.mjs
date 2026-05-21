@@ -8,6 +8,7 @@ const rootDir = path.resolve(__dirname, "..");
 const appPort = Number(process.env.APP_PORT ?? 5175);
 const lobbyPort = Number(process.env.LOBBY_PORT ?? 5176);
 const viteBin = path.join(rootDir, "node_modules", "vite", "bin", "vite.js");
+const tsxBin = path.join(rootDir, "node_modules", "tsx", "dist", "cli.mjs");
 const children = new Set();
 let shuttingDown = false;
 
@@ -48,7 +49,7 @@ for (const url of lanUrls(appPort)) {
 }
 console.log("Share one Network address with the other player, then create a lobby in the menu.");
 
-start("Lobby server", process.execPath, ["server/lobby-server.mjs"], {
+start("Lobby server", process.execPath, [tsxBin, "server/lobby-server.ts"], {
   PORT: String(lobbyPort),
   PUBLIC_PORT: String(appPort)
 });

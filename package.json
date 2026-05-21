@@ -11,7 +11,7 @@
     "dev:5175": "vite --host 127.0.0.1 --port 5175",
     "dev:lan": "node server/lan-dev-server.mjs",
     "lan": "node server/lan-dev-server.mjs",
-    "lobby": "node server/lobby-server.mjs",
+    "lobby": "tsx server/lobby-server.ts",
     "db:migrate": "tsx server/migrate.ts",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
