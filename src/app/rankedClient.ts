@@ -36,12 +36,41 @@ export interface RankedMatchHistoryEntry {
   createdAt: string;
 }
 
+export type RankedQueueJoinResult = { status: "waiting" } | { status: "matched"; match: unknown };
+export type RankedQueueStatus = { status: "idle" } | RankedQueueJoinResult;
+
+export interface RankedEventInput {
+  matchId: string;
+  round: number;
+  phase: string;
+  eventType: string;
+  payload?: unknown;
+}
+
+export interface RankedSettleInput {
+  matchId: string;
+  playerACoins: number;
+  playerBCoins: number;
+  playerASales: number;
+  playerBSales: number;
+}
+
 async function parseRankedResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!response.ok) {
     throw new Error(payload?.error ?? "Ranked request failed.");
   }
   return payload as T;
+}
+
+async function postRankedJson<T>(path: string, body: unknown): Promise<T> {
+  return parseRankedResponse<T>(
+    await fetch(path, {
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    })
+  );
 }
 
 export async function loadLeaderboard(): Promise<LeaderboardEntry[]> {
@@ -59,6 +88,30 @@ export async function loadMatchHistory(): Promise<RankedMatchHistoryEntry[]> {
   return payload.history;
 }
 
-export async function joinRankedQueue(): Promise<{ status: "waiting" } | { status: "matched"; match: unknown }> {
+export async function joinRankedQueue(): Promise<RankedQueueJoinResult> {
   return parseRankedResponse(await fetch("/api/ranked/queue", { method: "POST" }));
+}
+
+export async function loadRankedStatus(): Promise<RankedQueueStatus> {
+  return parseRankedResponse(await fetch("/api/ranked/status"));
+}
+
+export async function cancelRankedQueue(): Promise<{ status: "idle" }> {
+  return parseRankedResponse(await fetch("/api/ranked/queue", { method: "DELETE" }));
+}
+
+export async function recordRankedEvent(input: RankedEventInput): Promise<{ event: unknown }> {
+  return postRankedJson("/api/ranked/events", input);
+}
+
+export async function settleRankedMatch(input: RankedSettleInput): Promise<{ log: RankedMatchHistoryEntry }> {
+  return postRankedJson("/api/ranked/settle", input);
+}
+
+export async function disconnectRankedMatch(matchId: string): Promise<{ status: "reconnect_window"; reconnectUntil: number }> {
+  return postRankedJson("/api/ranked/disconnect", { matchId });
+}
+
+export async function reconnectRankedMatch(matchId: string): Promise<{ status: "matched"; match: unknown }> {
+  return postRankedJson("/api/ranked/reconnect", { matchId });
 }
