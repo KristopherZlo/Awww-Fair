@@ -107,6 +107,25 @@ describe("ranked matchmaking", () => {
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1500, wins: 0 });
   });
 
+  it("lists ranked match events after a known sequence for participants", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.recordEvent("a", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "A" } });
+    await service.recordEvent("b", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "B" } });
+
+    const events = await service.eventsForPlayer("a", "match-1", 1);
+
+    expect(events).toEqual([
+      { matchId: "match-1", sequence: 2, actorId: "b", round: 1, phase: "planning", eventType: "ready", payload: { seat: "B" }, createdAt: 1_000 }
+    ]);
+    await expect(service.eventsForPlayer("c", "match-1", 0)).rejects.toThrow("Active ranked match not found.");
+  });
+
   it("rejects settlement when submitted result does not match the ranked replay", async () => {
     const store = new MemoryRankedStore([
       { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },

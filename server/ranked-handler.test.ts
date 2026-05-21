@@ -159,6 +159,27 @@ describe("ranked handler", () => {
     expect(await settlement.json()).toMatchObject({ log: { winnerId: null, mmrChange: 0 } });
   });
 
+  it("returns ranked events after a requested sequence", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.recordEvent("a", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "A" } });
+    await service.recordEvent("b", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "B" } });
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/events?matchId=match-1&after=1`, { headers: { Cookie: "tm_session=token" } });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      events: [{ matchId: "match-1", sequence: 2, actorId: "b", eventType: "ready", payload: { seat: "B" } }]
+    });
+  });
+
   it("disconnects and reconnects an authenticated match participant", async () => {
     const store = new MemoryRankedStore([
       { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },

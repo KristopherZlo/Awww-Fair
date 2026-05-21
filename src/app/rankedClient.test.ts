@@ -6,6 +6,7 @@ import {
   loadLeaderboard,
   loadMatchHistory,
   loadMyRating,
+  loadRankedEvents,
   loadRankedStatus,
   reconnectRankedMatch,
   recordRankedEvent,
@@ -72,6 +73,13 @@ describe("ranked client", () => {
       headers: { "Content-Type": "application/json" },
       method: "POST"
     });
+  });
+
+  it("loads ranked match events after a sequence", async () => {
+    const fetchMock = stubFetch({ events: [{ matchId: "m1", sequence: 4, actorId: "b", eventType: "ready", payload: {} }] });
+
+    await expect(loadRankedEvents("m1", 3)).resolves.toEqual([{ matchId: "m1", sequence: 4, actorId: "b", eventType: "ready", payload: {} }]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/ranked/events?matchId=m1&after=3");
   });
 
   it("settles a ranked match", async () => {

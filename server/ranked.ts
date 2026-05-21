@@ -238,6 +238,12 @@ export class RankedService {
     return this.options.store.recordMatchEvent({ ...event, actorId, createdAt: this.options.now?.() ?? Date.now() });
   }
 
+  async eventsForPlayer(actorId: string, matchId: string, afterSequence = 0): Promise<RankedMatchEvent[]> {
+    const match = await this.requireActiveMatch(actorId, matchId);
+    const events = await this.options.store.eventsForMatch(match.id);
+    return events.filter((event) => event.sequence > afterSequence);
+  }
+
   async leaderboard(limit = 25): Promise<RankedLeaderboardEntry[]> {
     return this.options.store.leaderboard(limit);
   }

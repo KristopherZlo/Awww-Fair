@@ -55,6 +55,17 @@ export interface RankedSettleInput {
   playerBSales: number;
 }
 
+export interface RankedMatchEvent {
+  matchId: string;
+  sequence: number;
+  actorId: string;
+  round: number;
+  phase: string;
+  eventType: string;
+  payload: unknown;
+  createdAt: number;
+}
+
 async function parseRankedResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!response.ok) {
@@ -102,6 +113,12 @@ export async function cancelRankedQueue(): Promise<{ status: "idle" }> {
 
 export async function recordRankedEvent(input: RankedEventInput): Promise<{ event: unknown }> {
   return postRankedJson("/api/ranked/events", input);
+}
+
+export async function loadRankedEvents(matchId: string, afterSequence = 0): Promise<RankedMatchEvent[]> {
+  const query = new URLSearchParams({ matchId, after: String(afterSequence) });
+  const payload = await parseRankedResponse<{ events: RankedMatchEvent[] }>(await fetch(`/api/ranked/events?${query}`));
+  return payload.events;
 }
 
 export async function settleRankedMatch(input: RankedSettleInput): Promise<{ log: RankedMatchHistoryEntry }> {

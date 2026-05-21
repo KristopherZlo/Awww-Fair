@@ -88,6 +88,14 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         json(response, 200, { history: await service.matchHistoryForPlayer(user.id) });
         return;
       }
+      if (request.method === "GET" && parts[2] === "events") {
+        const afterSequence = Number(requestUrl.searchParams.get("after") ?? 0);
+        if (!Number.isFinite(afterSequence)) {
+          throw new Error("Invalid after.");
+        }
+        json(response, 200, { events: await service.eventsForPlayer(user.id, requestUrl.searchParams.get("matchId") ?? "", afterSequence) });
+        return;
+      }
       if (request.method === "POST" && parts[2] === "events") {
         const body = await readJson(request);
         const event = await service.recordEvent(user.id, {
