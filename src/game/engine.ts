@@ -39,10 +39,10 @@ export function buildDeck<T>(cards: T[], copies = 1): T[] {
   return Array.from({ length: copies }, () => cards).flat();
 }
 
-export function shuffleDeck<T>(cards: T[]): T[] {
+export function shuffleDeck<T>(cards: T[], random: () => number = Math.random): T[] {
   const deck = [...cards];
   for (let index = deck.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const swapIndex = Math.floor(random() * (index + 1));
     [deck[index], deck[swapIndex]] = [deck[swapIndex], deck[index]];
   }
   return deck;

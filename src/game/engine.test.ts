@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { calculateAppeal, LATE_ROUND_BONUS_ROUND, PURCHASE_APPEAL_THRESHOLD, resolveCustomerPurchase, TIP_APPEAL_THRESHOLD } from "./engine";
+import { describe, expect, it, vi } from "vitest";
+import { calculateAppeal, LATE_ROUND_BONUS_ROUND, PURCHASE_APPEAL_THRESHOLD, resolveCustomerPurchase, shuffleDeck, TIP_APPEAL_THRESHOLD } from "./engine";
 import type { CustomerCard, PlayerState, ProductInstance, TrendCard } from "./types";
 
 const toy: ProductInstance = {
@@ -82,6 +82,16 @@ function player(id: "A" | "B", money: number, shelf: Array<ProductInstance | nul
 }
 
 describe("Trend Market engine", () => {
+  it("can shuffle with an injected random source", () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
+
+    try {
+      expect(shuffleDeck([1, 2, 3], () => 0)).toEqual([2, 3, 1]);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it("adds customer tag matches and active trend modifiers to appeal breakdown", () => {
     const result = calculateAppeal({
       product: toy,

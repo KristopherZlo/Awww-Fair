@@ -89,27 +89,18 @@ import type {
   MusicStatus,
   SavedSession
 } from "./app/types";
-import {
-  CUSTOMER_CARDS,
-  INFLUENCE_CARDS,
-  PRODUCT_CARDS,
-  TAGS,
-  TREND_CARDS,
-  UPGRADE_CARDS
-} from "./data/cards";
+import { TAGS } from "./data/cards";
 import { CustomerCard, InfluenceCard, ProductCard, TagPill, TrendCard, UpgradeCard } from "./components/cards";
 import { SaleResultCards } from "./components/saleResults";
 import {
-  buildDeck,
-  createProductInstance,
   hasUpgrade,
   productHandLimit,
   PURCHASE_APPEAL_THRESHOLD,
   resolveCustomerPurchase,
-  shuffleDeck,
   trendModifierValue
 } from "./game/engine";
-import { createPartyGoals, PARTY_GOAL_REWARD, updatePartyGoalsAfterSales, type PartyGoal } from "./game/goals";
+import { PARTY_GOAL_REWARD, updatePartyGoalsAfterSales, type PartyGoal } from "./game/goals";
+import { buildInitialState, draw, GAME_TITLE } from "./game/session";
 import { drawCompatibleTrends } from "./game/trends";
 import {
   chooseAiInfluenceChoice,
@@ -125,7 +116,6 @@ import {
 import { clampVolume, playSoundEffect, primeSoundEffects, type SoundEffectId } from "./audio/soundEffects";
 import {
   CAMPAIGN_LEVELS,
-  campaignCustomerForRules,
   campaignProgressAfterWin,
   campaignRulesForLevel,
   isLevelUnlocked,
@@ -177,7 +167,6 @@ const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.webp");
 const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.webp");
 const MARKET_BG = assetUrl("market-bg.webp");
 const CARD_PRELOAD_IMAGES = [CUSTOMER_ATLAS, CUSTOMER_ATLAS_2X, PRODUCT_ATLAS] as const;
-const GAME_TITLE = "Awww Fair: Hat Hustle";
 const MENU_TRACK = { title: "Main Menu", src: assetUrl("music/main-menu.mp3") } as const;
 const CUTSCENE_TRACK = { title: "Cutscene", src: assetUrl("music/cutscene.mp3") } as const;
 const MUSIC_TRACKS = [
@@ -261,101 +250,6 @@ const AI_DIFFICULTIES = [
 ] as const;
 
 type AiDifficultyOption = (typeof AI_DIFFICULTIES)[number];
-
-function draw<T>(deck: T[], count: number): [T[], T[]] {
-  return [deck.slice(0, count), deck.slice(count)];
-}
-
-function makeProductDeck() {
-  let copy = 0;
-  return shuffleDeck(buildDeck(PRODUCT_CARDS, 2).map((card) => createProductInstance(card, `${card.id}-${copy++}`)));
-}
-
-function createPlayer(id: PlayerId, productHand: ProductInstance[], influenceHand: InfluenceCardType[]): PlayerState {
-  return {
-    id,
-    name: id === "A" ? "Вы" : "Оппонент",
-    money: 0,
-    sales: 0,
-    shelfSlots: 3,
-    shelf: [null, null, null],
-    productHand,
-    influenceHand,
-    upgrades: [],
-    planned: false,
-    productActionUsed: false,
-    influenceActionUsed: false,
-    tableBonusUsed: false,
-    color: id === "A" ? "red" : "blue"
-  };
-}
-
-function buildInitialState(sound = true, turnTimeSeconds = DEFAULT_TURN_TIME_SECONDS, options: InitialStateOptions = DEFAULT_INITIAL_STATE_OPTIONS): GameState {
-  let productDeck = makeProductDeck();
-  let influenceDeck = shuffleDeck([...INFLUENCE_CARDS]);
-  let customerDeck = shuffleDeck(
-    CUSTOMER_CARDS.map((customer) =>
-      campaignCustomerForRules(customer, {
-        trendCount: options.trendCount,
-        partyGoalCount: options.partyGoalCount,
-        influenceHandSize: options.influenceHandSize,
-        purchaseAppealThreshold: PURCHASE_APPEAL_THRESHOLD,
-        customerPersonalityMode: options.customerPersonalityMode
-      })
-    )
-  );
-  let trendDeck = shuffleDeck([...TREND_CARDS]);
-
-  const [aProducts, afterAProducts] = draw(productDeck, 4);
-  const [bProducts, afterBProducts] = draw(afterAProducts, 4);
-  const [aInfluence, afterAInfluence] = draw(influenceDeck, options.influenceHandSize);
-  const [bInfluence, afterBInfluence] = draw(afterAInfluence, options.influenceHandSize);
-  const [trends, afterTrends] = drawCompatibleTrends(trendDeck, options.trendCount);
-  const [customers, afterCustomers] = draw(customerDeck, 1);
-  const firstPlayer = Math.random() > 0.5 ? "A" : "B";
-
-  productDeck = afterBProducts;
-  influenceDeck = afterBInfluence;
-  trendDeck = afterTrends;
-  customerDeck = afterCustomers;
-
-  return {
-    phase: "menu",
-    round: 1,
-    firstPlayer,
-    activePlayer: firstPlayer,
-    players: [createPlayer("A", aProducts, aInfluence), createPlayer("B", bProducts, bInfluence)],
-    productDeck,
-    influenceDeck,
-    customerDeck,
-    trendDeck,
-    upgradeDeck: shuffleDeck([...UPGRADE_CARDS]),
-    activeTrends: trends,
-    currentCustomers: customers,
-    playedInfluences: [],
-    roundBonuses: [],
-    saleResults: [],
-    saleInsights: [],
-    lastSaleReview: null,
-    logs: [`Добро пожаловать в ${GAME_TITLE}.`],
-    selectedProductId: null,
-    selectedInfluenceId: null,
-    selectedTag: "сладкое",
-    upgradeOffer: [],
-    upgradeQueue: [],
-    choiceDraft: null,
-    pause: { active: false, pausedBy: null },
-    partyGoals: options.partyGoalCount > 0 ? createPartyGoals(trends, customers, Math.random, options.partyGoalCount) : [],
-    sound,
-    aiPlayerId: null,
-    aiMode: null,
-    aiDifficulty: null,
-    aiScore: 0,
-    aiIntent: null,
-    campaignRun: null,
-    turnTimeSeconds: clampTurnTime(turnTimeSeconds)
-  };
-}
 
 function campaignInitialStateOptions(level: number): InitialStateOptions {
   const rules = campaignRulesForLevel(level, CAMPAIGN_RULE_OPTIONS);
