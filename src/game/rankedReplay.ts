@@ -4,7 +4,7 @@ import { PURCHASE_APPEAL_THRESHOLD, hasUpgrade, productHandLimit, resolveCustome
 import { updatePartyGoalsAfterSales } from "./goals";
 import { draw } from "./session";
 import { drawCompatibleTrends } from "./trends";
-import type { InfluenceCard, PlayerId, PlayerState, ProductInstance } from "./types";
+import type { InfluenceCard, PlayerId, PlayerState, ProductInstance, Tag } from "./types";
 
 export interface RankedReplayEvent {
   actorId: string;
@@ -178,6 +178,132 @@ function applyReady(current: GameState, actor: PlayerId): GameState {
   return continueAfterSales(resolveRoundSales({ ...current, players }));
 }
 
+function replayTarget(payload: unknown): { tag?: Tag; ownerId?: PlayerId; slotIndex?: number } {
+  const raw = (payload as { target?: { tag?: Tag; ownerId?: PlayerId; slotIndex?: number } }).target ?? {};
+  return {
+    tag: raw.tag,
+    ownerId: raw.ownerId === "A" || raw.ownerId === "B" ? raw.ownerId : undefined,
+    slotIndex: typeof raw.slotIndex === "number" && Number.isInteger(raw.slotIndex) ? raw.slotIndex : undefined
+  };
+}
+
+function applyPlayInfluence(current: GameState, actor: PlayerId, payload: unknown): GameState {
+  if (current.phase !== "planning" || current.activePlayer !== actor) {
+    throw new Error("Invalid ranked influence action.");
+  }
+  const { cardId } = payload as { cardId?: unknown };
+  if (typeof cardId !== "string") {
+    throw new Error("Invalid ranked influence payload.");
+  }
+  const players = clonePlayers(current.players);
+  const player = players.find((candidate) => candidate.id === actor)!;
+  const cardIndex = player.influenceHand.findIndex((candidate) => candidate.id === cardId);
+  const card = player.influenceHand[cardIndex];
+  if (!card || player.influenceActionUsed) {
+    throw new Error("Invalid ranked influence card.");
+  }
+  const target = replayTarget(payload);
+  let productDeck = current.productDeck;
+  let influenceDeck = current.influenceDeck;
+  let choiceDraft = current.choiceDraft;
+  let playedInfluences = current.playedInfluences;
+
+  player.influenceHand.splice(cardIndex, 1);
+  player.influenceActionUsed = true;
+
+  if (card.effect.kind === "tag_modifier") {
+    playedInfluences = [...playedInfluences, { id: card.id, name: card.name, ownerId: actor, modifiers: card.effect.modifiers }];
+  }
+  if (card.effect.kind === "anti_tag") {
+    playedInfluences = [...playedInfluences, { id: card.id, name: card.name, ownerId: actor, modifiers: [{ tag: target.tag ?? current.selectedTag, value: card.effect.value }] }];
+  }
+  if (card.effect.kind === "target_own_bonus" || card.effect.kind === "target_opponent_penalty") {
+    if (!target.ownerId || target.slotIndex === undefined) throw new Error("Invalid ranked influence target.");
+    playedInfluences = [
+      ...playedInfluences,
+      {
+        id: card.id,
+        name: card.name,
+        ownerId: actor,
+        productAdjustments: [{ ownerId: target.ownerId, slotIndex: target.slotIndex, value: card.effect.value, label: card.name, preserveStock: "preserveStock" in card.effect ? card.effect.preserveStock : false }]
+      }
+    ];
+  }
+  if (card.effect.kind === "tie_preference") {
+    playedInfluences = [...playedInfluences, { id: card.id, name: card.name, ownerId: actor, tieOwner: actor }];
+  }
+  if (card.effect.kind === "rearrange") {
+    player.productActionUsed = false;
+  }
+  if (card.effect.kind === "draw_product") {
+    const [cards, rest] = draw(productDeck, card.effect.draw);
+    productDeck = rest;
+    choiceDraft = cards.length ? { playerId: actor, type: "product", cards } : choiceDraft;
+  }
+  if (card.effect.kind === "draw_influence") {
+    const [cards, rest] = draw(influenceDeck, card.effect.draw);
+    influenceDeck = rest;
+    choiceDraft = cards.length ? { playerId: actor, type: "influence", cards } : choiceDraft;
+  }
+
+  return { ...current, players, playedInfluences, productDeck, influenceDeck, choiceDraft, selectedInfluenceId: null };
+}
+
+function applyKeepDraftCard(current: GameState, actor: PlayerId, payload: unknown): GameState {
+  const { index } = payload as { index?: unknown };
+  if (!current.choiceDraft || current.choiceDraft.playerId !== actor || typeof index !== "number" || !Number.isInteger(index)) {
+    throw new Error("Invalid ranked draft action.");
+  }
+  const keep = current.choiceDraft.cards[index];
+  if (!keep) {
+    throw new Error("Invalid ranked draft index.");
+  }
+  const players = clonePlayers(current.players);
+  const player = players.find((candidate) => candidate.id === actor)!;
+  if (current.choiceDraft.type === "product") {
+    player.productHand.push(keep as ProductInstance);
+  } else {
+    player.influenceHand.push(keep as InfluenceCard);
+  }
+  return { ...current, players, choiceDraft: null };
+}
+
+function applyAdTable(current: GameState, actor: PlayerId, payload: unknown): GameState {
+  const { slotIndex } = payload as { slotIndex?: unknown };
+  if (current.phase !== "planning" || current.activePlayer !== actor || typeof slotIndex !== "number" || !Number.isInteger(slotIndex)) {
+    throw new Error("Invalid ranked ad table action.");
+  }
+  const players = clonePlayers(current.players);
+  const player = players.find((candidate) => candidate.id === actor)!;
+  if (player.tableBonusUsed || !hasUpgrade(player.upgrades, "ad_table")) {
+    throw new Error("Invalid ranked ad table use.");
+  }
+  player.tableBonusUsed = true;
+  return { ...current, players, roundBonuses: [...current.roundBonuses, { ownerId: actor, slotIndex, value: 1, label: "Рекламный столик" }] };
+}
+
+function applyBuyUpgrade(current: GameState, actor: PlayerId, payload: unknown): GameState {
+  const { upgradeId } = payload as { upgradeId?: unknown };
+  if (current.phase !== "upgrade" || current.upgradeQueue[0] !== actor || typeof upgradeId !== "string") {
+    throw new Error("Invalid ranked upgrade buy.");
+  }
+  const upgrade = current.upgradeOffer.find((candidate) => candidate.id === upgradeId);
+  const players = clonePlayers(current.players);
+  const buyer = players.find((player) => player.id === actor)!;
+  if (!upgrade || buyer.money < upgrade.cost) {
+    throw new Error("Invalid ranked upgrade purchase.");
+  }
+  buyer.money -= upgrade.cost;
+  buyer.upgrades.push(upgrade);
+  if (upgrade.effect === "extra_shelf") {
+    buyer.shelfSlots += 1;
+    buyer.shelf.push(null);
+  }
+  const queue = current.upgradeQueue.slice(1);
+  const next = { ...current, players, upgradeOffer: current.upgradeOffer.filter((candidate) => candidate.id !== upgrade.id), upgradeQueue: queue, activePlayer: queue[0] ?? current.firstPlayer };
+  return queue.length ? next : nextRoundAfterBreak(next);
+}
+
 function applySkipUpgrade(current: GameState, actor: PlayerId): GameState {
   if (current.phase !== "upgrade" || current.upgradeQueue[0] !== actor) {
     throw new Error("Invalid ranked upgrade skip.");
@@ -194,6 +320,18 @@ export function applyRankedReplayEvent(current: GameState, event: RankedReplayEv
   }
   if (event.eventType === "ready") {
     return applyReady(current, actor);
+  }
+  if (event.eventType === "play_influence") {
+    return applyPlayInfluence(current, actor, event.payload);
+  }
+  if (event.eventType === "keep_draft_card") {
+    return applyKeepDraftCard(current, actor, event.payload);
+  }
+  if (event.eventType === "use_ad_table") {
+    return applyAdTable(current, actor, event.payload);
+  }
+  if (event.eventType === "buy_upgrade") {
+    return applyBuyUpgrade(current, actor, event.payload);
   }
   if (event.eventType === "skip_upgrade") {
     return applySkipUpgrade(current, actor);
