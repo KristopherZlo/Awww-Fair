@@ -9,7 +9,7 @@ import { MariaDbRankedStore, RankedService } from "./ranked";
 export interface AppHandlerOptions {
   env?: Partial<Record<string, string | undefined>>;
   authStore?: AuthStore;
-  dbPool?: Pick<Pool, "query">;
+  dbPool?: Pick<Pool, "query" | "getConnection">;
   fallbackHandler?: RequestHandler;
   rankedService?: RankedService;
   tokenFactory?: () => string;

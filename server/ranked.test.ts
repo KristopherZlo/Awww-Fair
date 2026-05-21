@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { MemoryRankedStore, RankedService, getAllowedMmrRange, leaveCooldownSeconds, repeatMatchMultiplier } from "./ranked";
-import { calculateMmrChange } from "../src/game/rating";
+import { describe, expect, it, vi } from "vitest";
+import { MariaDbRankedStore, MemoryRankedStore, RankedService, getAllowedMmrRange, leaveCooldownSeconds, repeatMatchMultiplier } from "./ranked";
+import { calculateMmrChange, type PlayerRating, type RankedMatchLog } from "../src/game/rating";
 
 describe("ranked matchmaking", () => {
   it("expands the MMR search range by wait time", () => {
@@ -116,5 +116,56 @@ describe("ranked matchmaking", () => {
 
     expect(settlement.log.mmrChange).toBe(reducedChange);
     expect(settlement.log.mmrChange).toBeLessThan(fullChange);
+  });
+
+  it("settles MariaDB ranked matches inside one transaction", async () => {
+    const operations: string[] = [];
+    const playerA: PlayerRating = { playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: "2026-05-21T00:00:00.000Z" };
+    const playerB: PlayerRating = { playerId: "b", mmr: 1482, rankedGames: 1, wins: 0, losses: 1, lastRankedAt: "2026-05-21T00:00:00.000Z" };
+    const log: RankedMatchLog = {
+      matchId: "match-1",
+      playerAId: "a",
+      playerBId: "b",
+      winnerId: "a",
+      loserId: "b",
+      playerACoins: 10,
+      playerBCoins: 5,
+      playerASales: 4,
+      playerBSales: 2,
+      playerAMmrBefore: 1500,
+      playerBMmrBefore: 1500,
+      playerAMmrAfter: 1518,
+      playerBMmrAfter: 1482,
+      mmrChange: 18,
+      firstPlayerId: "a",
+      createdAt: "2026-05-21T00:00:00.000Z"
+    };
+    const connection = {
+      beginTransaction: vi.fn(async () => {
+        operations.push("begin");
+      }),
+      query: vi.fn(async () => {
+        operations.push("query");
+      }),
+      commit: vi.fn(async () => {
+        operations.push("commit");
+      }),
+      rollback: vi.fn(async () => {
+        operations.push("rollback");
+      }),
+      release: vi.fn(async () => {
+        operations.push("release");
+      })
+    };
+    const pool = {
+      query: vi.fn(),
+      getConnection: vi.fn(async () => connection)
+    };
+    const store = new MariaDbRankedStore(pool);
+
+    await store.settleMatch(log, playerA, playerB);
+
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(operations).toEqual(["begin", "query", "query", "query", "commit", "release"]);
   });
 });

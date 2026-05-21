@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Pool } from "mariadb";
+import type { Pool, PoolConnection } from "mariadb";
 import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
 import type { PlayerRating } from "../src/game/rating";
 
@@ -46,6 +46,12 @@ export interface RankedLeaderboardEntry {
 
 type RankedMatchHistoryRow = Omit<RankedMatchLog, "createdAt"> & {
   createdAt: Date | string;
+};
+type MariaDbRankedConnection = Pick<PoolConnection, "beginTransaction" | "commit" | "rollback" | "release"> & {
+  query(sql: string, values?: unknown[]): Promise<unknown>;
+};
+type MariaDbRankedPool = Pick<Pool, "query"> & {
+  getConnection(): Promise<MariaDbRankedConnection>;
 };
 
 export interface RankedStore {
@@ -307,7 +313,7 @@ export class MemoryRankedStore implements RankedStore {
 }
 
 export class MariaDbRankedStore implements RankedStore {
-  constructor(private readonly pool: Pick<Pool, "query">) {}
+  constructor(private readonly pool: MariaDbRankedPool) {}
 
   async ratingForPlayer(playerId: string): Promise<PlayerRating> {
     await this.pool.query("INSERT INTO player_ratings (player_id) VALUES (?) ON DUPLICATE KEY UPDATE player_id = player_id", [playerId]);
@@ -483,37 +489,39 @@ export class MariaDbRankedStore implements RankedStore {
   }
 
   async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
-    await this.pool.query(
-      `UPDATE player_ratings
-       SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
-       WHERE player_id = ?`,
-      [playerA.mmr, playerA.rankedGames, playerA.wins, playerA.losses, playerA.lastRankedAt, playerA.playerId]
-    );
-    await this.pool.query(
-      `UPDATE player_ratings
-       SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
-       WHERE player_id = ?`,
-      [playerB.mmr, playerB.rankedGames, playerB.wins, playerB.losses, playerB.lastRankedAt, playerB.playerId]
-    );
-    await this.pool.query(
-      `UPDATE ranked_matches
-       SET winner_id = ?, loser_id = ?, player_a_coins = ?, player_b_coins = ?,
-         player_a_sales = ?, player_b_sales = ?, player_a_mmr_after = ?,
-         player_b_mmr_after = ?, mmr_change = ?, status = 'settled', settled_at = CURRENT_TIMESTAMP(3)
-       WHERE id = ?`,
-      [
-        log.winnerId,
-        log.loserId,
-        log.playerACoins,
-        log.playerBCoins,
-        log.playerASales,
-        log.playerBSales,
-        log.playerAMmrAfter,
-        log.playerBMmrAfter,
-        log.mmrChange,
-        log.matchId
-      ]
-    );
+    await this.withTransaction(async (connection) => {
+      await connection.query(
+        `UPDATE player_ratings
+         SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
+         WHERE player_id = ?`,
+        [playerA.mmr, playerA.rankedGames, playerA.wins, playerA.losses, playerA.lastRankedAt, playerA.playerId]
+      );
+      await connection.query(
+        `UPDATE player_ratings
+         SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
+         WHERE player_id = ?`,
+        [playerB.mmr, playerB.rankedGames, playerB.wins, playerB.losses, playerB.lastRankedAt, playerB.playerId]
+      );
+      await connection.query(
+        `UPDATE ranked_matches
+         SET winner_id = ?, loser_id = ?, player_a_coins = ?, player_b_coins = ?,
+           player_a_sales = ?, player_b_sales = ?, player_a_mmr_after = ?,
+           player_b_mmr_after = ?, mmr_change = ?, status = 'settled', settled_at = CURRENT_TIMESTAMP(3)
+         WHERE id = ?`,
+        [
+          log.winnerId,
+          log.loserId,
+          log.playerACoins,
+          log.playerBCoins,
+          log.playerASales,
+          log.playerBSales,
+          log.playerAMmrAfter,
+          log.playerBMmrAfter,
+          log.mmrChange,
+          log.matchId
+        ]
+      );
+    });
   }
 
   async leaderboard(limit: number): Promise<RankedLeaderboardEntry[]> {
@@ -535,5 +543,20 @@ export class MariaDbRankedStore implements RankedStore {
       wins: Number(row.wins),
       losses: Number(row.losses)
     }));
+  }
+
+  private async withTransaction<T>(work: (connection: MariaDbRankedConnection) => Promise<T>): Promise<T> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await work(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      await connection.release();
+    }
   }
 }
