@@ -1289,6 +1289,92 @@ describe("App layout shell", () => {
     expect(screen.queryByText(/Оставьте одну карту/i)).not.toBeInTheDocument();
   });
 
+  it("retries lobby polling quietly before showing a reconnect notification with slower backoff", async () => {
+    vi.useFakeTimers();
+    const lobbyRequests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/network") {
+          return new Response(JSON.stringify({ urls: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+
+        if (url === "/api/lobbies/ABCD2") {
+          lobbyRequests.push(url);
+          throw new TypeError("Failed to fetch");
+        }
+
+        return new Response("{}", { status: 404 });
+      })
+    );
+    saveGameState(
+      {},
+      {
+        code: "ABCD2",
+        playerId: "A",
+        token: "host-token",
+        version: 3,
+        seats: { A: true, B: true }
+      },
+      { language: "en" }
+    );
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(lobbyRequests).toHaveLength(1);
+    expect(screen.queryByText(/Internet connection lost/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(lobbyRequests).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(lobbyRequests).toHaveLength(2);
+    expect(screen.queryByText(/Internet connection lost/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(lobbyRequests).toHaveLength(3);
+    expect(screen.queryByText(/Internet connection lost/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4999);
+    });
+    expect(lobbyRequests).toHaveLength(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(lobbyRequests).toHaveLength(4);
+    expect(screen.getByText(/Internet connection lost/i)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(lobbyRequests).toHaveLength(5);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(lobbyRequests).toHaveLength(6);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(lobbyRequests).toHaveLength(7);
+  });
+
   it("renders shared lobby log player tokens from the local viewer perspective", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     saveGameState(

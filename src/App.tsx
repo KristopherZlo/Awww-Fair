@@ -182,6 +182,9 @@ const SOUND_ASSETS = {
   money: assetUrl("sounds/money.wav"),
   victory: assetUrl("sounds/victory.wav")
 } as const;
+const LOBBY_POLL_MS = 900;
+const LOBBY_SILENT_RETRY_DELAYS_MS = [1000, 2000, 5000] as const;
+const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const UPGRADE_CHOICE_SECONDS = 20;
 
@@ -363,6 +366,19 @@ function moneySoundPlayerIdFor(state: GameState, lobby: LobbySession | null): Pl
   }
 
   return state.activePlayer;
+}
+
+function lobbyRetryDelayMs(failureCount: number) {
+  if (failureCount <= LOBBY_SILENT_RETRY_DELAYS_MS.length) {
+    return LOBBY_SILENT_RETRY_DELAYS_MS[failureCount - 1];
+  }
+
+  const visibleIndex = Math.min(failureCount - LOBBY_SILENT_RETRY_DELAYS_MS.length - 1, LOBBY_VISIBLE_RETRY_DELAYS_MS.length - 1);
+  return LOBBY_VISIBLE_RETRY_DELAYS_MS[visibleIndex];
+}
+
+function shouldShowLobbyReconnectNotice(failureCount: number) {
+  return failureCount > LOBBY_SILENT_RETRY_DELAYS_MS.length;
 }
 
 function formatTurnTime(seconds: number) {
@@ -1425,6 +1441,19 @@ export default function App() {
     }
 
     let disposed = false;
+    let pollTimer: number | null = null;
+    let failureCount = 0;
+
+    const schedulePoll = (delayMs: number) => {
+      if (disposed) {
+        return;
+      }
+
+      pollTimer = window.setTimeout(() => {
+        pollTimer = null;
+        void pullLobby();
+      }, delayMs);
+    };
 
     async function pullLobby() {
       const session = lobbyRef.current;
@@ -1464,22 +1493,30 @@ export default function App() {
           }, 0);
         }
 
+        failureCount = 0;
+        setLobbyError("");
         setSyncStatus("online");
-      } catch (error) {
+        schedulePoll(LOBBY_POLL_MS);
+      } catch {
         if (!disposed) {
-          setLobbyError(error instanceof Error ? error.message : "Нет связи со столом");
-          setSyncStatus("offline");
+          failureCount += 1;
+          if (shouldShowLobbyReconnectNotice(failureCount)) {
+            setLobbyError(ui(language, "lobbyConnectionLost"));
+            setSyncStatus("offline");
+          }
+          schedulePoll(lobbyRetryDelayMs(failureCount));
         }
       }
     }
 
     void pullLobby();
-    const timer = window.setInterval(pullLobby, 900);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+      }
     };
-  }, [lobby?.code, lobby?.token]);
+  }, [language, lobby?.code, lobby?.token]);
 
   function patchState(recipe: (draft: GameState) => GameState, tone?: SoundEffectId | ((current: GameState, next: GameState) => SoundEffectId | undefined)) {
     setState((current) => {
@@ -3095,6 +3132,12 @@ export default function App() {
           }}
         >
           <div className="turn-cue">{turnCue.label}</div>
+        </div>
+      )}
+
+      {lobby && state.phase !== "menu" && lobbyError && (
+        <div className="connection-notice" role="status" aria-live="polite">
+          {lobbyError}
         </div>
       )}
 
