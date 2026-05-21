@@ -809,6 +809,9 @@ describe("App layout shell", () => {
           }
         });
       }
+      if (url === "/api/ranked/events" && init?.method === "POST") {
+        return Response.json({ event: { sequence: 1 } });
+      }
       return Response.json({});
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -820,6 +823,12 @@ describe("App layout shell", () => {
 
     expect(await screen.findByText(/Рейтинговый матч начался/i)).toBeInTheDocument();
     expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Готов/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/events", expect.objectContaining({ method: "POST" })));
+    const eventCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/ranked/events" && init?.method === "POST");
+    expect(JSON.parse(String(eventCall?.[1]?.body))).toEqual({ matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: {} });
   });
 
   it("does not show server deployment LAN hints in the main menu", async () => {

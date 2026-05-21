@@ -59,7 +59,8 @@ import {
   type PlayerRating,
   type RankedMatch,
   type RankedMatchHistoryEntry,
-  type RankedQueueStatus
+  type RankedQueueStatus,
+  recordRankedEvent
 } from "./app/rankedClient";
 import {
   displayPlayerName,
@@ -193,6 +194,7 @@ const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const UPGRADE_CHOICE_SECONDS = 20;
 type MainMenuTab = "play" | "profile" | "rating" | "dlc";
+type RankedSession = { matchId: string };
 
 function rankedHistoryResultLabel(match: RankedMatchHistoryEntry, playerId: string): string {
   if (!match.winnerId) return "Ничья";
@@ -596,6 +598,7 @@ export default function App() {
   const [leaderboardError, setLeaderboardError] = useState("");
   const [rankedQueueState, setRankedQueueState] = useState<RankedQueueStatus["status"]>("idle");
   const [rankedStatus, setRankedStatus] = useState("");
+  const [rankedSession, setRankedSession] = useState<RankedSession | null>(null);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
@@ -1583,6 +1586,7 @@ export default function App() {
     setCurrentUser(null);
     setRankedQueueState("idle");
     setRankedStatus("");
+    setRankedSession(null);
   }
 
   async function joinRanked() {
@@ -1617,6 +1621,21 @@ export default function App() {
     }
   }
 
+  function recordRankedAction(eventType: string, payload: unknown = {}) {
+    if (!rankedSession) {
+      return;
+    }
+    void recordRankedEvent({
+      matchId: rankedSession.matchId,
+      round: state.round,
+      phase: state.phase,
+      eventType,
+      payload
+    }).catch((error) => {
+      setRankedStatus(error instanceof Error ? error.message : "Не удалось записать ход рейтинга.");
+    });
+  }
+
   function startRankedMatch(match: RankedMatch) {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
@@ -1625,6 +1644,7 @@ export default function App() {
     setSyncStatus("online");
     setRankedQueueState("matched");
     setRankedStatus("Матч найден.");
+    setRankedSession({ matchId: match.id });
     patchState((current) => {
       const language = audioSettingsRef.current.language;
       return {
@@ -1655,6 +1675,7 @@ export default function App() {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
+    setRankedSession(null);
     setLobbyError("");
     setSyncStatus("local");
     patchState((current) => {
@@ -1691,6 +1712,7 @@ export default function App() {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
+    setRankedSession(null);
     setLobbyError("");
     setSyncStatus("local");
     setCutscene(null);
@@ -1838,6 +1860,7 @@ export default function App() {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
+    setRankedSession(null);
     setLobbyError("");
     setSyncStatus("local");
     setShowAiDifficulty(false);
@@ -2416,6 +2439,9 @@ export default function App() {
   }
 
   function readyPlayer() {
+    if (rankedSession && state.phase === "planning" && !state.choiceDraft) {
+      recordRankedAction("ready", {});
+    }
     patchState((current) => {
       if (current.choiceDraft) {
         return current;
