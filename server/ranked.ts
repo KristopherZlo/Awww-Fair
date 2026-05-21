@@ -53,6 +53,7 @@ export interface RankedStore {
   currentMatchForPlayer(playerId: string): Promise<RankedMatch | null>;
   matchById(matchId: string): Promise<RankedMatch | null>;
   recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
+  recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number>;
   settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void>;
   leaderboard(limit: number): Promise<RankedLeaderboardEntry[]>;
 }
@@ -156,6 +157,12 @@ export class RankedService {
     }
     const playerA = await this.options.store.ratingForPlayer(match.playerAId);
     const playerB = await this.options.store.ratingForPlayer(match.playerBId);
+    const now = this.options.now?.() ?? Date.now();
+    const recentPairMatches = await this.options.store.recentSettledPairMatchCount(
+      match.playerAId,
+      match.playerBId,
+      now - 60 * 60 * 1000
+    );
     const winnerId = getRankedWinner([
       { playerId: match.playerAId, coins: result.playerACoins, sales: result.playerASales },
       { playerId: match.playerBId, coins: result.playerBCoins, sales: result.playerBSales }
@@ -168,7 +175,8 @@ export class RankedService {
           loserCoins: winnerId === match.playerAId ? result.playerBCoins : result.playerACoins,
           winnerSales: winnerId === match.playerAId ? result.playerASales : result.playerBSales,
           loserSales: winnerId === match.playerAId ? result.playerBSales : result.playerASales,
-          now: new Date(this.options.now?.() ?? Date.now()).toISOString()
+          now: new Date(now).toISOString(),
+          multiplier: repeatMatchMultiplier(recentPairMatches)
         })
       : null;
     const log = buildRankedMatchLog({
@@ -200,6 +208,7 @@ export class MemoryRankedStore implements RankedStore {
   private readonly matches = new Map<string, RankedMatch>();
   private readonly events = new Map<string, RankedMatchEvent[]>();
   private readonly ratings = new Map<string, PlayerRating>();
+  private readonly settledLogs: RankedMatchLog[] = [];
 
   constructor(ratings: PlayerRating[] = []) {
     ratings.forEach((rating) => this.ratings.set(rating.playerId, { ...rating }));
@@ -245,9 +254,19 @@ export class MemoryRankedStore implements RankedStore {
     return recorded;
   }
 
+  async recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number> {
+    return this.settledLogs.filter((log) => {
+      const samePair =
+        (log.playerAId === playerAId && log.playerBId === playerBId) ||
+        (log.playerAId === playerBId && log.playerBId === playerAId);
+      return samePair && Date.parse(log.createdAt) >= since;
+    }).length;
+  }
+
   async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
     this.ratings.set(playerA.playerId, { ...playerA });
     this.ratings.set(playerB.playerId, { ...playerB });
+    this.settledLogs.push(log);
     const match = this.matches.get(log.matchId);
     if (match) {
       this.matches.set(log.matchId, { ...match, status: "settled" });
@@ -397,6 +416,18 @@ export class MariaDbRankedStore implements RankedStore {
       [event.matchId, sequence, event.actorId, event.round, event.phase, event.eventType, JSON.stringify(event.payload), new Date(event.createdAt)]
     );
     return { ...event, sequence };
+  }
+
+  async recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number> {
+    const rows = await this.pool.query(
+      `SELECT COUNT(*) AS matchCount
+       FROM ranked_matches
+       WHERE status = 'settled'
+         AND created_at >= ?
+         AND ((player_a_id = ? AND player_b_id = ?) OR (player_a_id = ? AND player_b_id = ?))`,
+      [new Date(since), playerAId, playerBId, playerBId, playerAId]
+    );
+    return Number(rows[0]?.matchCount ?? 0);
   }
 
   async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {

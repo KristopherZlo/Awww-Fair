@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MemoryRankedStore, RankedService, getAllowedMmrRange, leaveCooldownSeconds, repeatMatchMultiplier } from "./ranked";
+import { calculateMmrChange } from "../src/game/rating";
 
 describe("ranked matchmaking", () => {
   it("expands the MMR search range by wait time", () => {
@@ -62,5 +63,58 @@ describe("ranked matchmaking", () => {
     expect(event).toMatchObject({ matchId: "match-1", sequence: 1, actorId: "a", eventType: "place_product" });
     expect(settlement.log).toMatchObject({ winnerId: "a", loserId: "b", mmrChange: 26, playerAMmrAfter: 1526, playerBMmrAfter: 1474 });
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1526, wins: 1 });
+  });
+
+  it("halves MMR change after repeated pair matches in one hour", async () => {
+    let matchIndex = 0;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({
+      store,
+      now: () => 10_000,
+      idFactory: () => `match-${++matchIndex}`,
+      seedFactory: () => `seed-${matchIndex}`
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      await service.joinQueue("a");
+      await service.joinQueue("b");
+      await service.settleMatch("a", {
+        matchId: `match-${index + 1}`,
+        playerACoins: 10,
+        playerBCoins: 10,
+        playerASales: 4,
+        playerBSales: 4
+      });
+    }
+
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    const winnerBefore = await store.ratingForPlayer("a");
+    const loserBefore = await store.ratingForPlayer("b");
+    const changeParams = {
+      winnerMmr: winnerBefore.mmr,
+      loserMmr: loserBefore.mmr,
+      winnerRankedGames: winnerBefore.rankedGames,
+      winnerCoins: 10,
+      loserCoins: 5,
+      winnerSales: 4,
+      loserSales: 2
+    };
+    const fullChange = calculateMmrChange(changeParams);
+    const reducedChange = calculateMmrChange({ ...changeParams, multiplier: 0.5 });
+
+    const settlement = await service.settleMatch("a", {
+      matchId: "match-5",
+      playerACoins: 10,
+      playerBCoins: 5,
+      playerASales: 4,
+      playerBSales: 2
+    });
+
+    expect(settlement.log.mmrChange).toBe(reducedChange);
+    expect(settlement.log.mmrChange).toBeLessThan(fullChange);
   });
 });
