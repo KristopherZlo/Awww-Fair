@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { Pool } from "mariadb";
-import { DEFAULT_PLAYER_RATING } from "../src/game/rating";
+import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
 import type { PlayerRating } from "../src/game/rating";
 
 export type RankedMatchStatus = "active" | "settled" | "abandoned";
@@ -23,6 +23,17 @@ export interface RankedQueueEntry {
   joinedAt: number;
 }
 
+export interface RankedMatchEvent {
+  matchId: string;
+  sequence: number;
+  actorId: string;
+  round: number;
+  phase: string;
+  eventType: string;
+  payload: unknown;
+  createdAt: number;
+}
+
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
   waitingPlayers(): Promise<RankedQueueEntry[]>;
@@ -30,6 +41,9 @@ export interface RankedStore {
   removeWaitingPlayer(playerId: string): Promise<void>;
   createMatch(match: RankedMatch): Promise<void>;
   currentMatchForPlayer(playerId: string): Promise<RankedMatch | null>;
+  matchById(matchId: string): Promise<RankedMatch | null>;
+  recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
+  settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void>;
 }
 
 export function getAllowedMmrRange(waitSeconds: number): number {
@@ -102,6 +116,58 @@ export class RankedService {
     return waiting.some((entry) => entry.playerId === playerId) ? { status: "waiting" } : { status: "idle" };
   }
 
+  async recordEvent(
+    actorId: string,
+    event: { matchId: string; round: number; phase: string; eventType: string; payload: unknown }
+  ): Promise<RankedMatchEvent> {
+    const match = await this.options.store.matchById(event.matchId);
+    if (!match || match.status !== "active" || (match.playerAId !== actorId && match.playerBId !== actorId)) {
+      throw new Error("Active ranked match not found.");
+    }
+    return this.options.store.recordMatchEvent({ ...event, actorId, createdAt: this.options.now?.() ?? Date.now() });
+  }
+
+  async settleMatch(
+    actorId: string,
+    result: { matchId: string; playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }
+  ): Promise<{ log: RankedMatchLog }> {
+    const match = await this.options.store.matchById(result.matchId);
+    if (!match || match.status !== "active" || (match.playerAId !== actorId && match.playerBId !== actorId)) {
+      throw new Error("Active ranked match not found.");
+    }
+    const playerA = await this.options.store.ratingForPlayer(match.playerAId);
+    const playerB = await this.options.store.ratingForPlayer(match.playerBId);
+    const winnerId = getRankedWinner([
+      { playerId: match.playerAId, coins: result.playerACoins, sales: result.playerASales },
+      { playerId: match.playerBId, coins: result.playerBCoins, sales: result.playerBSales }
+    ]);
+    const rankedResult = winnerId
+      ? applyRankedResult({
+          winner: winnerId === match.playerAId ? playerA : playerB,
+          loser: winnerId === match.playerAId ? playerB : playerA,
+          winnerCoins: winnerId === match.playerAId ? result.playerACoins : result.playerBCoins,
+          loserCoins: winnerId === match.playerAId ? result.playerBCoins : result.playerACoins,
+          winnerSales: winnerId === match.playerAId ? result.playerASales : result.playerBSales,
+          loserSales: winnerId === match.playerAId ? result.playerBSales : result.playerASales,
+          now: new Date(this.options.now?.() ?? Date.now()).toISOString()
+        })
+      : null;
+    const log = buildRankedMatchLog({
+      matchId: match.id,
+      playerA,
+      playerB,
+      playerACoins: result.playerACoins,
+      playerBCoins: result.playerBCoins,
+      playerASales: result.playerASales,
+      playerBSales: result.playerBSales,
+      firstPlayerId: match.firstPlayerId,
+      createdAt: new Date(match.createdAt).toISOString(),
+      result: rankedResult
+    });
+    await this.options.store.settleMatch(log, playerA, playerB);
+    return { log };
+  }
+
   private canMatch(player: RankedQueueEntry, opponent: RankedQueueEntry, now: number) {
     const playerRange = getAllowedMmrRange((now - player.joinedAt) / 1000);
     const opponentRange = getAllowedMmrRange((now - opponent.joinedAt) / 1000);
@@ -113,6 +179,7 @@ export class RankedService {
 export class MemoryRankedStore implements RankedStore {
   private readonly waiting = new Map<string, RankedQueueEntry>();
   private readonly matches = new Map<string, RankedMatch>();
+  private readonly events = new Map<string, RankedMatchEvent[]>();
   private readonly ratings = new Map<string, PlayerRating>();
 
   constructor(ratings: PlayerRating[] = []) {
@@ -145,6 +212,27 @@ export class MemoryRankedStore implements RankedStore {
 
   async currentMatchForPlayer(playerId: string): Promise<RankedMatch | null> {
     return Array.from(this.matches.values()).find((match) => match.status === "active" && (match.playerAId === playerId || match.playerBId === playerId)) ?? null;
+  }
+
+  async matchById(matchId: string): Promise<RankedMatch | null> {
+    return this.matches.get(matchId) ?? null;
+  }
+
+  async recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent> {
+    const events = this.events.get(event.matchId) ?? [];
+    const recorded = { ...event, sequence: events.length + 1 };
+    events.push(recorded);
+    this.events.set(event.matchId, events);
+    return recorded;
+  }
+
+  async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
+    this.ratings.set(playerA.playerId, { ...playerA });
+    this.ratings.set(playerB.playerId, { ...playerB });
+    const match = this.matches.get(log.matchId);
+    if (match) {
+      this.matches.set(log.matchId, { ...match, status: "settled" });
+    }
   }
 }
 
@@ -238,5 +326,76 @@ export class MariaDbRankedStore implements RankedStore {
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now()
         }
       : null;
+  }
+
+  async matchById(matchId: string): Promise<RankedMatch | null> {
+    const rows = await this.pool.query(
+      `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
+        player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
+        first_player_id AS firstPlayerId, seed, status, created_at AS createdAt
+       FROM ranked_matches
+       WHERE id = ?
+       LIMIT 1`,
+      [matchId]
+    );
+    const row = rows[0];
+    return row
+      ? {
+          id: row.id,
+          playerAId: row.playerAId,
+          playerBId: row.playerBId,
+          playerAMmrBefore: Number(row.playerAMmrBefore),
+          playerBMmrBefore: Number(row.playerBMmrBefore),
+          firstPlayerId: row.firstPlayerId,
+          seed: row.seed,
+          status: row.status,
+          createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now()
+        }
+      : null;
+  }
+
+  async recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent> {
+    const rows = await this.pool.query("SELECT COALESCE(MAX(sequence), 0) + 1 AS nextSequence FROM ranked_match_events WHERE match_id = ?", [event.matchId]);
+    const sequence = Number(rows[0]?.nextSequence ?? 1);
+    await this.pool.query(
+      `INSERT INTO ranked_match_events (match_id, sequence, actor_id, round, phase, event_type, payload, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [event.matchId, sequence, event.actorId, event.round, event.phase, event.eventType, JSON.stringify(event.payload), new Date(event.createdAt)]
+    );
+    return { ...event, sequence };
+  }
+
+  async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
+    await this.pool.query(
+      `UPDATE player_ratings
+       SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
+       WHERE player_id = ?`,
+      [playerA.mmr, playerA.rankedGames, playerA.wins, playerA.losses, playerA.lastRankedAt, playerA.playerId]
+    );
+    await this.pool.query(
+      `UPDATE player_ratings
+       SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
+       WHERE player_id = ?`,
+      [playerB.mmr, playerB.rankedGames, playerB.wins, playerB.losses, playerB.lastRankedAt, playerB.playerId]
+    );
+    await this.pool.query(
+      `UPDATE ranked_matches
+       SET winner_id = ?, loser_id = ?, player_a_coins = ?, player_b_coins = ?,
+         player_a_sales = ?, player_b_sales = ?, player_a_mmr_after = ?,
+         player_b_mmr_after = ?, mmr_change = ?, status = 'settled', settled_at = CURRENT_TIMESTAMP(3)
+       WHERE id = ?`,
+      [
+        log.winnerId,
+        log.loserId,
+        log.playerACoins,
+        log.playerBCoins,
+        log.playerASales,
+        log.playerBSales,
+        log.playerAMmrAfter,
+        log.playerBMmrAfter,
+        log.mmrChange,
+        log.matchId
+      ]
+    );
   }
 }

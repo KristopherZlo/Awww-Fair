@@ -61,4 +61,30 @@ describe("ranked handler", () => {
     expect(await queued.json()).toEqual({ status: "waiting" });
     expect(await status.json()).toEqual({ status: "waiting" });
   });
+
+  it("records ranked events and settles the current match", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const event = await fetch(`${server.url}/api/ranked/events`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1", round: 1, phase: "planning", eventType: "place_product", payload: { slotIndex: 0 } })
+    });
+    const settlement = await fetch(`${server.url}/api/ranked/settle`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1", playerACoins: 10, playerBCoins: 5, playerASales: 4, playerBSales: 2 })
+    });
+
+    expect(await event.json()).toMatchObject({ event: { sequence: 1, eventType: "place_product" } });
+    expect(await settlement.json()).toMatchObject({ log: { winnerId: "a", mmrChange: 26 } });
+  });
 });

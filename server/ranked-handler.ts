@@ -24,6 +24,23 @@ async function currentUser(request: IncomingMessage, authStore: AuthStore): Prom
   return token ? authStore.findUserBySessionHash(sessionTokenHash(token), new Date()) : null;
 }
 
+async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  return raw ? JSON.parse(raw) : {};
+}
+
+function numberField(body: Record<string, unknown>, name: string): number {
+  const value = Number(body[name]);
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid ${name}.`);
+  }
+  return value;
+}
+
 export function createRankedHandler({ authStore, service }: { authStore: AuthStore; service: RankedService }) {
   return async function rankedHandler(request: IncomingMessage, response: ServerResponse) {
     const user = await currentUser(request, authStore);
@@ -46,6 +63,33 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
       }
       if (request.method === "GET" && parts[2] === "status") {
         json(response, 200, await service.statusForPlayer(user.id));
+        return;
+      }
+      if (request.method === "POST" && parts[2] === "events") {
+        const body = await readJson(request);
+        const event = await service.recordEvent(user.id, {
+          matchId: String(body.matchId ?? ""),
+          round: numberField(body, "round"),
+          phase: String(body.phase ?? ""),
+          eventType: String(body.eventType ?? ""),
+          payload: body.payload ?? {}
+        });
+        json(response, 200, { event });
+        return;
+      }
+      if (request.method === "POST" && parts[2] === "settle") {
+        const body = await readJson(request);
+        json(
+          response,
+          200,
+          await service.settleMatch(user.id, {
+            matchId: String(body.matchId ?? ""),
+            playerACoins: numberField(body, "playerACoins"),
+            playerBCoins: numberField(body, "playerBCoins"),
+            playerASales: numberField(body, "playerASales"),
+            playerBSales: numberField(body, "playerBSales")
+          })
+        );
         return;
       }
       json(response, 404, { error: "Unknown ranked route." });

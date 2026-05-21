@@ -34,4 +34,33 @@ describe("ranked matchmaking", () => {
     });
     expect(await store.currentMatchForPlayer("c")).toBeNull();
   });
+
+  it("records turn events and settles an active ranked match", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+
+    const event = await service.recordEvent("a", {
+      matchId: "match-1",
+      round: 1,
+      phase: "planning",
+      eventType: "place_product",
+      payload: { slotIndex: 0 }
+    });
+    const settlement = await service.settleMatch("a", {
+      matchId: "match-1",
+      playerACoins: 10,
+      playerBCoins: 5,
+      playerASales: 4,
+      playerBSales: 2
+    });
+
+    expect(event).toMatchObject({ matchId: "match-1", sequence: 1, actorId: "a", eventType: "place_product" });
+    expect(settlement.log).toMatchObject({ winnerId: "a", loserId: "b", mmrChange: 26, playerAMmrAfter: 1526, playerBMmrAfter: 1474 });
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1526, wins: 1 });
+  });
 });
