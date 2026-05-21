@@ -281,8 +281,8 @@ describe("App layout shell", () => {
     expect(screen.getByText(/Главный тренд сильнее обычного/i)).toBeInTheDocument();
     expect(screen.getByText(/Клиент покупает только товар, который набрал минимум 5/i)).toBeInTheDocument();
     expect(screen.getByText(/Если несколько товаров подходят/i)).toBeInTheDocument();
-    expect(screen.getByText(/Характеры клиентов:/i)).toBeInTheDocument();
-    expect(screen.getByText(/Почти равный выбор.*товар со вторым результатом/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Характеры клиентов:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Почти равный выбор.*товар со вторым результатом/i)).not.toBeInTheDocument();
     expect(screen.getByText(/При продаже ты получаешь цену товара/i)).toBeInTheDocument();
     expect(screen.getByText(/Цели партии дают \+2 монеты/i)).toBeInTheDocument();
     expect(screen.getByText(/В режиме истории часть механик может быть временно отключена/i)).toBeInTheDocument();

@@ -2731,6 +2731,8 @@ export default function App() {
   const forecastSaleResults = state.phase === "planning" ? calculateRoundSales(state).saleResults : [];
   const shownSaleResults = state.phase === "planning" ? forecastSaleResults : state.saleResults;
   const currentPurchaseAppealThreshold = purchaseAppealThresholdForState(state);
+  const currentCustomerPersonalityMode = state.campaignRun ? campaignInitialStateOptions(state.campaignRun.level).customerPersonalityMode : DEFAULT_INITIAL_STATE_OPTIONS.customerPersonalityMode;
+  const showCustomerPersonalityRules = currentCustomerPersonalityMode !== "off";
   const shownSaleInsights =
     state.phase === "sale_resolution" && state.saleResults.length > 0
       ? state.saleResults.map((result) => describeSaleInsight(result, localPlayerId, language))
@@ -3890,7 +3892,9 @@ export default function App() {
                 <li>Influence cards and upgrades are resolved as written on the card. They can change appeal, draw products, preserve stock, or change tie preference.</li>
                 <li>A customer buys only a product that reaches at least {currentPurchaseAppealThreshold} appeal. If no product reaches that number, the customer buys nothing.</li>
                 <li>If several products qualify, the customer chooses the highest appeal. Ties are broken by tie preference, lower price, fewer owner coins, first player, then the leftmost shelf slot.</li>
-                <li>Customer personalities: discount lovers give +1 appeal to budget products or price 2 and below; trend chasers buy only products with enough trend bonus; close-score customers may buy the second-highest product if it trails the best by the allowed gap.</li>
+                {showCustomerPersonalityRules && (
+                  <li>Customer personalities: discount lovers give +1 appeal to budget products or price 2 and below; trend chasers buy only products with enough trend bonus; close-score customers may buy the second-highest product if it trails the best by the allowed gap.</li>
+                )}
                 <li>Sale payout: when your product is bought, you gain its price in coins. At 9+ appeal you get +1 tip. In round 8 you get +1 final-round bonus. Regular Customers adds +1 on the first customer.</li>
                 <li>Stock: a sold product loses 1 stock. If its stock reaches 0, it leaves the shelf unless an effect preserved the stock.</li>
                 <li>Party goals give +2 coins once when completed. After rounds 2, 4, and 6, the upgrade shop opens; the player with fewer coins chooses first.</li>
@@ -3908,7 +3912,9 @@ export default function App() {
                 <li>Карты влияния и апгрейды выполняются так, как написано на карте. Они могут менять привлекательность, добирать товары, сохранять запас или менять выбор при равенстве.</li>
                 <li>Клиент покупает только товар, который набрал минимум {currentPurchaseAppealThreshold} привлекательности. Если таких товаров нет, клиент ничего не покупает.</li>
                 <li>Если несколько товаров подходят, клиент выбирает товар с самой высокой привлекательностью. При равенстве решают преимущество в ничьей, меньшая цена, меньше монет у владельца, первый игрок, затем левая полка.</li>
-                <li>Характеры клиентов: Любит скидки даёт +1 дешёвым товарам или товарам ценой 2 и ниже; Охотится за трендом требует нужный трендовый бонус; Почти равный выбор может купить товар со вторым результатом, если он отстаёт от лучшего на разрешённую разницу.</li>
+                {showCustomerPersonalityRules && (
+                  <li>Характеры клиентов: Любит скидки даёт +1 дешёвым товарам или товарам ценой 2 и ниже; Охотится за трендом требует нужный трендовый бонус; Почти равный выбор может купить товар со вторым результатом, если он отстаёт от лучшего на разрешённую разницу.</li>
+                )}
                 <li>При продаже ты получаешь цену товара в монетах. За 9+ привлекательности добавляется +1 чаевых. В 8-м раунде добавляется +1 финального бонуса. Апгрейд Постоянные клиенты даёт +1 на первом клиенте.</li>
                 <li>Запас: проданный товар теряет 1 запас. Если запас стал 0, товар уходит с полки, кроме случаев, когда эффект сохранил запас.</li>
                 <li>Цели партии дают +2 монеты один раз за выполненную цель. После 2, 4 и 6 раунда открывается магазин апгрейдов; первым выбирает игрок с меньшим числом монет.</li>

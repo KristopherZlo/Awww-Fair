@@ -39,17 +39,49 @@ export function normalizeSavedGameState(state: GameState): GameState {
   const campaignRun = normalizeSavedCampaignRun((state as GameState & { campaignRun?: unknown }).campaignRun);
   const activeCustomerRules = campaignRun ? campaignRulesForLevel(campaignRun.level, CAMPAIGN_RULE_OPTIONS) : STANDARD_CUSTOMER_RULES;
   const normalizeCustomer = (customer: CustomerCardType) => campaignCustomerForRules(customer, activeCustomerRules);
+  const normalizeSaleResult = (result: GameState["saleResults"][number]) => {
+    const customer = normalizeCustomer(result.customer);
+    const stripPersonality = !customer.personality;
+    const normalizeCandidate = <T extends { appeal: { total: number; breakdown: Array<{ label: string; value: number }> }; requirements?: unknown }>(candidate: T) => {
+      if (!stripPersonality) {
+        return candidate;
+      }
+
+      const breakdown = candidate.appeal.breakdown.filter((line) => !line.label.toLocaleLowerCase("ru-RU").startsWith("характер"));
+      const { requirements: _requirements, ...rest } = candidate;
+      return {
+        ...rest,
+        appeal: {
+          ...candidate.appeal,
+          breakdown,
+          total: breakdown.reduce((sum, line) => sum + line.value, 0)
+        }
+      };
+    };
+
+    const normalized = {
+      ...result,
+      customer,
+      candidates: result.candidates.map(normalizeCandidate),
+      eligible: result.eligible.map(normalizeCandidate),
+      winner: result.winner ? normalizeCandidate(result.winner) : null,
+      appealThreshold: typeof result.appealThreshold === "number" ? result.appealThreshold : activeCustomerRules.purchaseAppealThreshold
+    };
+
+    if (!stripPersonality) {
+      return normalized;
+    }
+
+    const { personalityChoice: _personalityChoice, ...withoutPersonalityChoice } = normalized;
+    return withoutPersonalityChoice;
+  };
   const normalizeSaleReview = (review: unknown): SaleReview | null => {
     if (!isRecord(review) || typeof review.round !== "number" || !Array.isArray(review.results)) {
       return null;
     }
     return {
       round: review.round,
-      results: review.results.map((result) => ({
-        ...result,
-        customer: normalizeCustomer(result.customer),
-        appealThreshold: typeof result.appealThreshold === "number" ? result.appealThreshold : activeCustomerRules.purchaseAppealThreshold
-      })),
+      results: review.results.map((result) => normalizeSaleResult(result)),
       insights: Array.isArray(review.insights) ? review.insights.filter((line): line is string => typeof line === "string") : []
     };
   };
@@ -64,13 +96,7 @@ export function normalizeSavedGameState(state: GameState): GameState {
       Array.isArray(state.customerDeck)
         ? state.customerDeck.map(normalizeCustomer)
         : state.customerDeck,
-    saleResults: Array.isArray(state.saleResults)
-      ? state.saleResults.map((result) => ({
-          ...result,
-          customer: normalizeCustomer(result.customer),
-          appealThreshold: typeof result.appealThreshold === "number" ? result.appealThreshold : activeCustomerRules.purchaseAppealThreshold
-        }))
-      : [],
+    saleResults: Array.isArray(state.saleResults) ? state.saleResults.map((result) => normalizeSaleResult(result)) : [],
     saleInsights: Array.isArray(state.saleInsights) ? state.saleInsights : [],
     lastSaleReview: normalizeSaleReview((state as GameState & { lastSaleReview?: unknown }).lastSaleReview),
     pause: state.pause && typeof state.pause.active === "boolean" ? state.pause : { active: false, pausedBy: null },
