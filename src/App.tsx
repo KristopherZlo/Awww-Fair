@@ -52,12 +52,15 @@ import {
   cancelRankedQueue,
   joinRankedQueue,
   loadLeaderboard,
+  loadRankedEvents,
   loadMatchHistory,
   loadMyRating,
   loadRankedStatus,
+  settleRankedMatch,
   type LeaderboardEntry,
   type PlayerRating,
   type RankedMatch,
+  type RankedMatchEvent,
   type RankedMatchHistoryEntry,
   type RankedQueueStatus,
   recordRankedEvent
@@ -105,6 +108,7 @@ import {
   trendModifierValue
 } from "./game/engine";
 import { PARTY_GOAL_REWARD, updatePartyGoalsAfterSales, type PartyGoal } from "./game/goals";
+import { applyRankedReplayEvent } from "./game/rankedReplay";
 import { buildInitialState, draw, GAME_TITLE } from "./game/session";
 import { drawCompatibleTrends } from "./game/trends";
 import {
@@ -189,12 +193,20 @@ const SOUND_ASSETS = {
   victory: assetUrl("sounds/victory.wav")
 } as const;
 const LOBBY_POLL_MS = 900;
+const RANKED_POLL_MS = 900;
 const LOBBY_SILENT_RETRY_DELAYS_MS = [1000, 2000, 5000] as const;
 const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const UPGRADE_CHOICE_SECONDS = 20;
 type MainMenuTab = "play" | "profile" | "rating" | "dlc";
-type RankedSession = { matchId: string };
+type RankedSession = {
+  matchId: string;
+  playerAId: string;
+  playerBId: string;
+  localPlayerId: PlayerId;
+  lastEventSequence: number;
+  settled: boolean;
+};
 
 function rankedHistoryResultLabel(match: RankedMatchHistoryEntry, playerId: string): string {
   if (!match.winnerId) return "Ничья";
@@ -287,6 +299,15 @@ function opponentOf(playerId: PlayerId): PlayerId {
 
 function viewerIdFor(lobby: LobbySession | null, aiPlayerId: PlayerId | null): PlayerId {
   return lobby?.playerId ?? (aiPlayerId ? opponentOf(aiPlayerId) : "A");
+}
+
+function rankedSeatFor(match: Pick<RankedMatch, "playerAId" | "playerBId">, userId: string | undefined): PlayerId {
+  return match.playerBId === userId ? "B" : "A";
+}
+
+function rankedSequenceOf(event: unknown): number | null {
+  const sequence = Number((event as { sequence?: unknown } | null)?.sequence);
+  return Number.isFinite(sequence) ? sequence : null;
 }
 
 function moneySoundPlayerIdFor(state: GameState, lobby: LobbySession | null): PlayerId {
@@ -629,6 +650,8 @@ export default function App() {
   const skipNextSessionSaveRef = useRef(false);
   const language = audioSettings.language;
   const salePanelId = useId();
+  const rankedSessionRef = useRef<RankedSession | null>(null);
+  const pendingRankedActionKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     preloadImages(CARD_PRELOAD_IMAGES);
@@ -675,6 +698,87 @@ export default function App() {
       disposed = true;
     };
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    rankedSessionRef.current = rankedSession;
+  }, [rankedSession]);
+
+  useEffect(() => {
+    const session = rankedSession;
+    if (!session || state.phase === "game_end") {
+      return;
+    }
+    const activeSession = session;
+
+    let disposed = false;
+    let timer: number | null = null;
+
+    async function pullRankedEvents() {
+      try {
+        const events = await loadRankedEvents(activeSession.matchId, activeSession.lastEventSequence);
+        if (disposed) {
+          return;
+        }
+
+        const maxSequence = events.reduce((max, event) => Math.max(max, event.sequence), activeSession.lastEventSequence);
+        const replayEvents = activeSession.lastEventSequence === 0 ? events : events.filter((event) => event.actorId !== currentUser?.id);
+        if (replayEvents.length > 0) {
+          applyRemoteRankedEvents(activeSession, replayEvents);
+        }
+        if (maxSequence > activeSession.lastEventSequence) {
+          advanceRankedSequence(activeSession.matchId, maxSequence);
+        }
+      } catch (error) {
+        if (!disposed) {
+          setRankedStatus(error instanceof Error ? error.message : "Р РµР№С‚РёРЅРі РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ.");
+        }
+      }
+
+      if (!disposed) {
+        timer = window.setTimeout(() => void pullRankedEvents(), RANKED_POLL_MS);
+      }
+    }
+
+    void pullRankedEvents();
+    return () => {
+      disposed = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [rankedSession?.matchId, rankedSession?.lastEventSequence, state.phase, currentUser?.id]);
+
+  useEffect(() => {
+    const session = rankedSession;
+    if (!session || session.settled || state.phase !== "game_end") {
+      return;
+    }
+
+    const playerA = state.players.find((player) => player.id === "A");
+    const playerB = state.players.find((player) => player.id === "B");
+    if (!playerA || !playerB) {
+      return;
+    }
+
+    setRankedSession((current) => (current?.matchId === session.matchId ? { ...current, settled: true } : current));
+    void settleRankedMatch({
+      matchId: session.matchId,
+      playerACoins: playerA.money,
+      playerBCoins: playerB.money,
+      playerASales: playerA.sales,
+      playerBSales: playerB.sales
+    })
+      .then(() => {
+        setRankedStatus("Р РµР·СѓР»СЊС‚Р°С‚ СЂРµР№С‚РёРЅРіР° Р·Р°РїРёСЃР°РЅ.");
+        if (currentUser) {
+          void loadMyRating().then(setProfileRating).catch(() => undefined);
+          void loadMatchHistory().then(setMatchHistory).catch(() => undefined);
+        }
+      })
+      .catch((error) => {
+        setRankedStatus(error instanceof Error ? error.message : "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїРёСЃР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚ СЂРµР№С‚РёРЅРіР°.");
+      });
+  }, [rankedSession?.matchId, rankedSession?.settled, state.phase, state.players, currentUser?.id]);
 
   useEffect(() => {
     if (menuTab !== "rating") {
@@ -748,23 +852,24 @@ export default function App() {
 
   const activePlayer = state.players.find((player) => player.id === state.activePlayer) ?? state.players[0];
   const isAiTurn = Boolean(state.aiPlayerId && state.activePlayer === state.aiPlayerId);
-  const localPlayerId = viewerIdFor(lobby, state.aiPlayerId);
+  const localPlayerId = rankedSession?.localPlayerId ?? viewerIdFor(lobby, state.aiPlayerId);
   const localPlayer = state.players.find((player) => player.id === localPlayerId) ?? activePlayer;
   const opponentPlayer = state.players.find((player) => player.id === opponentOf(localPlayer.id)) ?? state.players[1];
-  const handPlayer = lobby || state.aiPlayerId ? localPlayer : activePlayer;
+  const handPlayer = rankedSession || lobby || state.aiPlayerId ? localPlayer : activePlayer;
+  const canControlSeat = (playerId: PlayerId) => (rankedSession ? localPlayerId === playerId : !lobby || lobby.playerId === playerId);
   const waitingForLobbyPlayer = Boolean(lobby && state.phase !== "game_end" && (!lobby.seats.A || !lobby.seats.B));
   const planningTurnActive = state.phase === "planning" && !waitingForLobbyPlayer && !state.pause.active && !state.choiceDraft;
-  const localPlanningTurn = planningTurnActive && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
-  const canControlActivePlayer = !waitingForLobbyPlayer && !state.pause.active && !isAiTurn && (!lobby || lobby.playerId === state.activePlayer);
+  const canControlActivePlayer = !waitingForLobbyPlayer && !state.pause.active && !isAiTurn && canControlSeat(state.activePlayer);
+  const localPlanningTurn = planningTurnActive && canControlActivePlayer;
   const opponentPlanningTurn = planningTurnActive && !localPlanningTurn;
   const upgradeTurnActive = state.phase === "upgrade" && !waitingForLobbyPlayer && !state.pause.active && state.upgradeQueue.length > 0;
   const localUpgradeTurn = upgradeTurnActive && canControlActivePlayer;
   const showTurnTimer = planningTurnActive || upgradeTurnActive;
-  const canResolveChoiceDraft = Boolean(state.choiceDraft && (!lobby || lobby.playerId === state.choiceDraft.playerId));
+  const canResolveChoiceDraft = Boolean(state.choiceDraft && canControlSeat(state.choiceDraft.playerId));
   const selectedInfluence = handPlayer.influenceHand.find((card) => card.id === state.selectedInfluenceId) ?? null;
   const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId, language), [state.players, localPlayerId, language]);
   const isTimedLocalTurn = localPlanningTurn && !state.pause.active;
-  const isHotseatGame = !lobby && !state.aiPlayerId;
+  const isHotseatGame = !rankedSession && !lobby && !state.aiPlayerId;
   const activeTurnLabel = isHotseatGame
     ? ui(language, "hotseatTurn", { player: state.activePlayer })
     : canControlActivePlayer
@@ -949,8 +1054,8 @@ export default function App() {
       !waitingForLobbyPlayer &&
       !state.pause.active &&
       !isAiTurn &&
-      (!lobby || lobby.playerId === state.activePlayer);
-    const cueKey = `${lobby?.code ?? "local"}-${state.round}-${state.activePlayer}-${state.phase}`;
+      canControlActivePlayer;
+    const cueKey = `${rankedSession?.matchId ?? lobby?.code ?? "local"}-${state.round}-${state.activePlayer}-${state.phase}`;
 
     if (!shouldCue || lastTurnCueKeyRef.current === cueKey) {
       return;
@@ -959,7 +1064,7 @@ export default function App() {
     lastTurnCueKeyRef.current = cueKey;
     setTurnCue({ key: cueKey, label: turnCueLabel, expiresAt: Date.now() + TURN_CUE_MS });
     playEffect("turn-start");
-  }, [state.phase, state.activePlayer, state.round, state.pause.active, waitingForLobbyPlayer, isAiTurn, lobby?.code, lobby?.playerId, turnCueLabel]);
+  }, [state.phase, state.activePlayer, state.round, state.pause.active, waitingForLobbyPlayer, isAiTurn, lobby?.code, rankedSession?.matchId, canControlActivePlayer, turnCueLabel]);
 
   useEffect(() => {
     if (!turnCue) {
@@ -1005,12 +1110,12 @@ export default function App() {
   }, [armedTurnTimerKey, localUpgradeTurn, turnSecondsLeft, state.round, state.activePlayer, state.phase, state.upgradeQueue]);
 
   useEffect(() => {
-    if (state.phase !== "sale_resolution" || state.pause.active || (lobby && lobby.playerId !== state.activePlayer)) {
+    if (state.phase !== "sale_resolution" || state.pause.active || !canControlSeat(state.activePlayer)) {
       return;
     }
 
     continueSalesResolution();
-  }, [state.phase, state.pause.active, state.activePlayer, lobby?.playerId]);
+  }, [state.phase, state.pause.active, state.activePlayer, lobby?.playerId, rankedSession?.localPlayerId]);
 
   useEffect(() => {
     return () => {
@@ -1572,6 +1677,25 @@ export default function App() {
     });
   }
 
+  function advanceRankedSequence(matchId: string, sequence: number) {
+    setRankedSession((current) =>
+      current?.matchId === matchId && sequence > current.lastEventSequence ? { ...current, lastEventSequence: sequence } : current
+    );
+  }
+
+  function applyRemoteRankedEvents(session: RankedSession, events: RankedMatchEvent[]) {
+    const orderedEvents = [...events].sort((left, right) => left.sequence - right.sequence);
+    setState((current) => {
+      const next = orderedEvents.reduce(
+        (updated, event) =>
+          applyRankedReplayEvent(updated, { actorId: event.actorId, eventType: event.eventType, payload: event.payload }, { playerAId: session.playerAId, playerBId: session.playerBId }),
+        current
+      );
+      playStateTransitionSounds(current, next);
+      return next;
+    });
+  }
+
   async function submitDevLogin() {
     setAuthError("");
     try {
@@ -1586,6 +1710,8 @@ export default function App() {
     setCurrentUser(null);
     setRankedQueueState("idle");
     setRankedStatus("");
+    rankedSessionRef.current = null;
+    pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
   }
 
@@ -1621,22 +1747,50 @@ export default function App() {
     }
   }
 
-  function recordRankedAction(eventType: string, payload: unknown = {}) {
-    if (!rankedSession) {
+  function recordRankedActionAt(current: GameState, eventType: string, payload: unknown = {}) {
+    const session = rankedSessionRef.current;
+    if (!session) {
       return;
     }
+    const actionKey = JSON.stringify([session.matchId, current.round, current.phase, current.activePlayer, eventType, payload]);
+    if (pendingRankedActionKeysRef.current.has(actionKey)) {
+      return;
+    }
+    pendingRankedActionKeysRef.current.add(actionKey);
     void recordRankedEvent({
-      matchId: rankedSession.matchId,
-      round: state.round,
-      phase: state.phase,
+      matchId: session.matchId,
+      round: current.round,
+      phase: current.phase,
       eventType,
       payload
-    }).catch((error) => {
-      setRankedStatus(error instanceof Error ? error.message : "Не удалось записать ход рейтинга.");
-    });
+    })
+      .then(({ event }) => {
+        const sequence = rankedSequenceOf(event);
+        if (sequence !== null) {
+          advanceRankedSequence(session.matchId, sequence);
+        }
+      })
+      .catch((error) => {
+        setRankedStatus(error instanceof Error ? error.message : "Не удалось записать ход рейтинга.");
+      })
+      .finally(() => {
+        pendingRankedActionKeysRef.current.delete(actionKey);
+      });
+  }
+
+  function recordRankedAction(eventType: string, payload: unknown = {}) {
+    recordRankedActionAt(state, eventType, payload);
   }
 
   function startRankedMatch(match: RankedMatch) {
+    const session: RankedSession = {
+      matchId: match.id,
+      playerAId: match.playerAId,
+      playerBId: match.playerBId,
+      localPlayerId: rankedSeatFor(match, currentUser?.id),
+      lastEventSequence: 0,
+      settled: false
+    };
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
@@ -1644,7 +1798,9 @@ export default function App() {
     setSyncStatus("online");
     setRankedQueueState("matched");
     setRankedStatus("Матч найден.");
-    setRankedSession({ matchId: match.id });
+    pendingRankedActionKeysRef.current.clear();
+    rankedSessionRef.current = session;
+    setRankedSession(session);
     patchState((current) => {
       const language = audioSettingsRef.current.language;
       return {
@@ -1675,6 +1831,8 @@ export default function App() {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
+    rankedSessionRef.current = null;
+    pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
     setLobbyError("");
     setSyncStatus("local");
@@ -1712,6 +1870,8 @@ export default function App() {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
+    rankedSessionRef.current = null;
+    pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
     setLobbyError("");
     setSyncStatus("local");
@@ -1860,6 +2020,8 @@ export default function App() {
     musicModeRef.current = "menu";
     lobbyRef.current = null;
     setLobby(null);
+    rankedSessionRef.current = null;
+    pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
     setLobbyError("");
     setSyncStatus("local");
@@ -2221,6 +2383,7 @@ export default function App() {
       player.shelf[slotIndex] = placedProduct;
       player.productHand = player.productHand.filter((card) => card.instanceId !== product.instanceId);
       player.productActionUsed = true;
+      recordRankedActionAt(current, "place_product", { productInstanceId: product.instanceId, slotIndex });
 
       return {
         ...current,
@@ -2369,6 +2532,7 @@ export default function App() {
         }
       }
 
+      recordRankedActionAt(current, "play_influence", { cardId: card.id, target });
       return {
         ...next,
         players,
@@ -2398,6 +2562,7 @@ export default function App() {
       } else {
         player.influenceHand.push(keep as InfluenceCardType);
       }
+      recordRankedActionAt(current, "keep_draft_card", { index });
 
       return {
         ...current,
@@ -2423,6 +2588,7 @@ export default function App() {
         return current;
       }
       player.tableBonusUsed = true;
+      recordRankedActionAt(current, "use_ad_table", { slotIndex });
 
       return {
         ...current,
@@ -2506,6 +2672,7 @@ export default function App() {
         buyer.shelfSlots += 1;
         buyer.shelf.push(null);
       }
+      recordRankedActionAt(current, "buy_upgrade", { upgradeId });
 
       const queue = current.upgradeQueue.slice(1);
       const next = {
@@ -2528,8 +2695,12 @@ export default function App() {
 
   function skipUpgrade() {
     patchState((current) => {
+      if (current.phase !== "upgrade" || current.upgradeQueue.length === 0) {
+        return current;
+      }
       const buyerId = current.upgradeQueue[0];
       const queue = current.upgradeQueue.slice(1);
+      recordRankedActionAt(current, "skip_upgrade", {});
       const next = {
         ...current,
         upgradeQueue: queue,
@@ -2882,7 +3053,7 @@ export default function App() {
   const showUpcomingCards = state.round < 8 && state.phase !== "game_end";
   const showUpcomingTrends = showUpcomingCards && (!state.campaignRun || state.activeTrends.length > 0);
   const influenceImpact = selectedInfluence ? influenceImpactLines(selectedInfluence, handPlayer, opponentPlayer, state.selectedTag) : [];
-  const canAdvanceResolution = !state.pause.active && (!lobby || lobby.playerId === state.activePlayer);
+  const canAdvanceResolution = !state.pause.active && canControlSeat(state.activePlayer);
   const coachPlan = useMemo(() => {
     if (state.aiMode !== "training" || !state.aiPlayerId || state.phase !== "planning" || localPlayer.id === state.aiPlayerId) {
       return null;
@@ -3466,7 +3637,7 @@ export default function App() {
                   key={`${player.id}-${slotIndex}`}
                   className={`shelf-slot ${
                     state.phase === "planning" &&
-                    (!lobby || lobby.playerId === player.id) &&
+                    canControlSeat(player.id) &&
                     state.activePlayer === player.id &&
                     state.selectedProductId &&
                     !player.productActionUsed &&
@@ -3488,7 +3659,7 @@ export default function App() {
                         ariaDisabled={
                           !(
                             state.phase === "planning" &&
-                            (!lobby || lobby.playerId === player.id) &&
+                            canControlSeat(player.id) &&
                             state.activePlayer === player.id &&
                             state.selectedProductId &&
                             !player.productActionUsed &&
@@ -3498,7 +3669,7 @@ export default function App() {
                         onClick={() => {
                           const canPlace =
                             state.phase === "planning" &&
-                            (!lobby || lobby.playerId === player.id) &&
+                            canControlSeat(player.id) &&
                             state.activePlayer === player.id &&
                             state.selectedProductId &&
                             !player.productActionUsed &&
@@ -3516,7 +3687,7 @@ export default function App() {
                         }
                         />
                       {state.phase === "planning" &&
-                        (!lobby || lobby.playerId === player.id) &&
+                        canControlSeat(player.id) &&
                         state.activePlayer === player.id &&
                         state.selectedProductId &&
                         !player.productActionUsed &&
@@ -3524,7 +3695,7 @@ export default function App() {
                         <span className="slot-badge">{ui(language, "replace")}</span>
                       )}
                       {state.phase === "planning" &&
-                        (!lobby || lobby.playerId === player.id) &&
+                        canControlSeat(player.id) &&
                         state.activePlayer === player.id &&
                         hasUpgrade(player.upgrades, "ad_table") &&
                         !player.tableBonusUsed && (
@@ -3548,7 +3719,7 @@ export default function App() {
                       aria-disabled={
                         !(
                           state.phase === "planning" &&
-                          (!lobby || lobby.playerId === player.id) &&
+                          canControlSeat(player.id) &&
                           state.activePlayer === player.id &&
                           state.selectedProductId &&
                           !player.productActionUsed &&
@@ -3558,7 +3729,7 @@ export default function App() {
                       onClick={() => {
                         const canPlace =
                           state.phase === "planning" &&
-                          (!lobby || lobby.playerId === player.id) &&
+                          canControlSeat(player.id) &&
                           state.activePlayer === player.id &&
                           state.selectedProductId &&
                           !player.productActionUsed &&
@@ -3571,7 +3742,7 @@ export default function App() {
                       }}
                     >
                       <ShoppingBasket size={18} />
-                      {(!lobby || lobby.playerId === player.id) && state.activePlayer === player.id && state.selectedProductId ? ui(language, "placeHere") : ui(language, "productSlot")}
+                      {canControlSeat(player.id) && state.activePlayer === player.id && state.selectedProductId ? ui(language, "placeHere") : ui(language, "productSlot")}
                     </button>
                   )}
                 </div>
