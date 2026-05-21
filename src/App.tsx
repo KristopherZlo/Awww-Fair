@@ -12,6 +12,7 @@ import {
   Info,
   Languages,
   Lock,
+  LogIn,
   LogOut,
   Mail,
   Map as MapIcon,
@@ -26,6 +27,8 @@ import {
   SkipForward,
   Sparkles,
   Timer,
+  Trophy,
+  User,
   Volume2,
   VolumeX,
   X
@@ -44,6 +47,8 @@ import {
 } from "./app/gameConfig";
 import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
+import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
+import { joinRankedQueue, loadLeaderboard, type LeaderboardEntry } from "./app/rankedClient";
 import {
   displayPlayerName,
   displayPlayerNameFor,
@@ -186,6 +191,7 @@ const LOBBY_SILENT_RETRY_DELAYS_MS = [1000, 2000, 5000] as const;
 const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const UPGRADE_CHOICE_SECONDS = 20;
+type MainMenuTab = "play" | "profile" | "rating" | "dlc";
 
 const CUTSCENE_FRAMES = [
   {
@@ -642,6 +648,7 @@ export default function App() {
   const [initialSession] = useState<SavedSession | null>(() => loadSavedSession());
   const [state, setState] = useState<GameState>(() => initialSession?.state ?? buildInitialState(true, initialSession?.audioSettings.turnTimeSeconds ?? DEFAULT_TURN_TIME_SECONDS));
   const [menuView, setMenuView] = useState<MenuView>("main");
+  const [menuTab, setMenuTab] = useState<MainMenuTab>("play");
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress>(() => loadCampaignProgress());
   const [cutscene, setCutscene] = useState<CutsceneState | null>(null);
   const [showRules, setShowRules] = useState(false);
@@ -653,6 +660,12 @@ export default function App() {
   const [joinCode, setJoinCode] = useState(() => initialSession?.lobby?.code ?? "");
   const [lobbyError, setLobbyError] = useState("");
   const [syncStatus, setSyncStatus] = useState<"local" | "online" | "syncing" | "offline">(() => (initialSession?.lobby ? "online" : "local"));
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState("");
+  const [devLoginName, setDevLoginName] = useState("Player");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardError, setLeaderboardError] = useState("");
+  const [rankedStatus, setRankedStatus] = useState("");
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
@@ -687,6 +700,42 @@ export default function App() {
   useEffect(() => {
     preloadImages(CARD_PRELOAD_IMAGES);
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    loadCurrentUser()
+      .then((user) => {
+        if (!disposed) {
+          setCurrentUser(user);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (menuTab !== "rating") {
+      return;
+    }
+    let disposed = false;
+    loadLeaderboard()
+      .then((entries) => {
+        if (!disposed) {
+          setLeaderboard(entries);
+          setLeaderboardError("");
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setLeaderboardError(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [menuTab]);
 
   useEffect(() => {
     if (state.phase === "menu" && menuView === "levels" && campaignProgress.highestUnlockedLevel === 1) {
@@ -1526,6 +1575,37 @@ export default function App() {
       playStateTransitionSounds(current, next, effect);
       return next;
     });
+  }
+
+  async function submitDevLogin() {
+    setAuthError("");
+    try {
+      setCurrentUser(await devLogin({ displayName: devLoginName }));
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось войти.");
+    }
+  }
+
+  async function signOut() {
+    await logout().catch(() => undefined);
+    setCurrentUser(null);
+    setRankedStatus("");
+  }
+
+  async function joinRanked() {
+    if (!currentUser) {
+      setMenuTab("profile");
+      setAuthError("Для рейтинга нужен аккаунт.");
+      return;
+    }
+
+    setRankedStatus("Ищем соперника...");
+    try {
+      const result = await joinRankedQueue();
+      setRankedStatus(result.status === "matched" ? "Матч найден." : "Вы в очереди рейтинга.");
+    } catch (error) {
+      setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
+    }
   }
 
   useEffect(() => {
@@ -2950,6 +3030,22 @@ export default function App() {
                 <p>{ui(language, "menuSubtitle")}</p>
               </div>
 
+              <div className="menu-tabs" role="tablist" aria-label="Главное меню">
+                <button className={menuTab === "play" ? "active" : ""} onClick={() => setMenuTab("play")}>
+                  <Play size={16} /> Играть
+                </button>
+                <button className={menuTab === "profile" ? "active" : ""} onClick={() => setMenuTab("profile")}>
+                  <User size={16} /> Профиль
+                </button>
+                <button className={menuTab === "rating" ? "active" : ""} onClick={() => setMenuTab("rating")}>
+                  <Trophy size={16} /> Рейтинг
+                </button>
+                <button className={menuTab === "dlc" ? "active" : ""} onClick={() => setMenuTab("dlc")}>
+                  <ShoppingBasket size={16} /> DLC
+                </button>
+              </div>
+
+              {menuTab === "play" && (
               <div className="menu-sections">
                 <section className="menu-section" aria-labelledby="play-mode-title">
                   <h2 id="play-mode-title">{ui(language, "chooseMode")}</h2>
@@ -2973,6 +3069,11 @@ export default function App() {
                       <Bot size={18} /> {ui(language, "aiTraining")}
                     </button>
                   </div>
+                  <button className="ranked-action" disabled={!currentUser} onClick={() => void joinRanked()}>
+                    <Trophy size={18} /> Рейтинг 1vs1
+                  </button>
+                  {!currentUser && <p className="menu-note">Для рейтинга нужен вход в аккаунт.</p>}
+                  {rankedStatus && <p className="menu-note">{rankedStatus}</p>}
                 </section>
 
                 <section className="menu-section" aria-labelledby="online-mode-title">
@@ -3037,6 +3138,71 @@ export default function App() {
                   </a>
                 </div>
               </div>
+              )}
+
+              {menuTab === "profile" && (
+                <section className="menu-panel">
+                  {currentUser ? (
+                    <>
+                      <div className="profile-card">
+                        <div className="profile-avatar">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={24} />}</div>
+                        <div>
+                          <strong>{currentUser.displayName}</strong>
+                          <span>MMR: 1500</span>
+                        </div>
+                        <button onClick={() => void signOut()}>
+                          <LogOut size={16} /> Выйти
+                        </button>
+                      </div>
+                      <p className="menu-note">Рейтинговые матчи и будущие DLC доступны этому аккаунту.</p>
+                    </>
+                  ) : (
+                    <>
+                      <h2>Войдите в аккаунт</h2>
+                      <p>Без входа нельзя играть в рейтинг и покупать будущие DLC.</p>
+                      <div className="oauth-actions">
+                        <a href="/api/auth/google/start">
+                          <LogIn size={16} /> Google
+                        </a>
+                        <a href="/api/auth/discord/start">
+                          <LogIn size={16} /> Discord
+                        </a>
+                      </div>
+                      <div className="dev-login-row">
+                        <input value={devLoginName} onChange={(event) => setDevLoginName(event.target.value)} aria-label="Имя dev-login" />
+                        <button onClick={() => void submitDevLogin()}>Тестовый вход</button>
+                      </div>
+                      {authError && <p className="lobby-error">{authError}</p>}
+                    </>
+                  )}
+                </section>
+              )}
+
+              {menuTab === "rating" && (
+                <section className="menu-panel">
+                  <h2>Рейтинг игроков</h2>
+                  {leaderboardError && <p className="lobby-error">{leaderboardError}</p>}
+                  <div className="leaderboard-list">
+                    {leaderboard.map((entry, index) => (
+                      <div className="leaderboard-row" key={entry.playerId}>
+                        <span>{index + 1}</span>
+                        <strong>{entry.displayName}</strong>
+                        <span>{entry.mmr} MMR</span>
+                        <span>{entry.wins}-{entry.losses}</span>
+                      </div>
+                    ))}
+                    {!leaderboard.length && !leaderboardError && <p className="menu-note">Рейтинг пока пуст.</p>}
+                  </div>
+                </section>
+              )}
+
+              {menuTab === "dlc" && (
+                <section className="menu-panel">
+                  <h2>DLC</h2>
+                  <p>В разработке. Позже здесь появятся наборы для покупки и продажи.</p>
+                  {!currentUser && <p className="menu-note">Для покупки будущих DLC понадобится вход в аккаунт.</p>}
+                </section>
+              )}
 
               {lobbyError && <p className="lobby-error">{lobbyError}</p>}
             </div>

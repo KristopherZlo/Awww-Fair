@@ -676,6 +676,34 @@ describe("App layout shell", () => {
     expect(screen.getByRole("button", { name: /Об игре/i })).toBeInTheDocument();
   });
 
+  it("shows game menu tabs for profile, rating, and DLC", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          return Response.json({ user: null });
+        }
+        if (url === "/api/ranked/leaderboard") {
+          return Response.json({ leaderboard: [{ playerId: "p1", displayName: "Player One", avatarUrl: null, mmr: 1542, rankedGames: 7, wins: 5, losses: 2 }] });
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: /Играть/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Профиль/i }));
+    expect(screen.getByText(/Войдите в аккаунт/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Google/i })).toHaveAttribute("href", "/api/auth/google/start");
+    await user.click(screen.getByRole("button", { name: /Рейтинг/i }));
+    expect(await screen.findByText(/Player One/i)).toBeInTheDocument();
+    expect(screen.getByText(/1542 MMR/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /DLC/i }));
+    expect(screen.getByText(/В разработке/i)).toBeInTheDocument();
+  });
+
   it("does not show server deployment LAN hints in the main menu", async () => {
     const fetchMock = vi.fn(async () => new Response("{}", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);

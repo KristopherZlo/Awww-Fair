@@ -159,7 +159,10 @@
   }
 
   .menu-primary-grid,
-  .menu-online-row {
+  .menu-online-row,
+  .menu-tabs,
+  .oauth-actions,
+  .dev-login-row {
     grid-template-columns: 1fr;
   }
 
