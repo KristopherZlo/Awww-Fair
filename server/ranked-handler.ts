@@ -43,14 +43,19 @@ function numberField(body: Record<string, unknown>, name: string): number {
 
 export function createRankedHandler({ authStore, service }: { authStore: AuthStore; service: RankedService }) {
   return async function rankedHandler(request: IncomingMessage, response: ServerResponse) {
+    const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
+    const parts = requestUrl.pathname.split("/").filter(Boolean);
+    if (request.method === "GET" && parts[2] === "leaderboard") {
+      json(response, 200, { leaderboard: await service.leaderboard() });
+      return;
+    }
+
     const user = await currentUser(request, authStore);
     if (!user) {
       json(response, 401, { error: "Login is required for ranked." });
       return;
     }
 
-    const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
-    const parts = requestUrl.pathname.split("/").filter(Boolean);
     try {
       if (request.method === "POST" && parts[2] === "queue") {
         json(response, 200, await service.joinQueue(user.id));

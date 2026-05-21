@@ -34,6 +34,16 @@ export interface RankedMatchEvent {
   createdAt: number;
 }
 
+export interface RankedLeaderboardEntry {
+  playerId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  mmr: number;
+  rankedGames: number;
+  wins: number;
+  losses: number;
+}
+
 export interface RankedStore {
   ratingForPlayer(playerId: string): Promise<PlayerRating>;
   waitingPlayers(): Promise<RankedQueueEntry[]>;
@@ -44,6 +54,7 @@ export interface RankedStore {
   matchById(matchId: string): Promise<RankedMatch | null>;
   recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
   settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void>;
+  leaderboard(limit: number): Promise<RankedLeaderboardEntry[]>;
 }
 
 export function getAllowedMmrRange(waitSeconds: number): number {
@@ -125,6 +136,10 @@ export class RankedService {
       throw new Error("Active ranked match not found.");
     }
     return this.options.store.recordMatchEvent({ ...event, actorId, createdAt: this.options.now?.() ?? Date.now() });
+  }
+
+  async leaderboard(limit = 25): Promise<RankedLeaderboardEntry[]> {
+    return this.options.store.leaderboard(limit);
   }
 
   async settleMatch(
@@ -233,6 +248,21 @@ export class MemoryRankedStore implements RankedStore {
     if (match) {
       this.matches.set(log.matchId, { ...match, status: "settled" });
     }
+  }
+
+  async leaderboard(limit: number): Promise<RankedLeaderboardEntry[]> {
+    return Array.from(this.ratings.values())
+      .sort((left, right) => right.mmr - left.mmr)
+      .slice(0, limit)
+      .map((rating) => ({
+        playerId: rating.playerId,
+        displayName: rating.playerId,
+        avatarUrl: null,
+        mmr: rating.mmr,
+        rankedGames: rating.rankedGames,
+        wins: rating.wins,
+        losses: rating.losses
+      }));
   }
 }
 
@@ -397,5 +427,26 @@ export class MariaDbRankedStore implements RankedStore {
         log.matchId
       ]
     );
+  }
+
+  async leaderboard(limit: number): Promise<RankedLeaderboardEntry[]> {
+    const rows = await this.pool.query(
+      `SELECT r.player_id AS playerId, u.display_name AS displayName, u.avatar_url AS avatarUrl,
+        r.mmr, r.ranked_games AS rankedGames, r.wins, r.losses
+       FROM player_ratings r
+       JOIN users u ON u.id = r.player_id
+       ORDER BY r.mmr DESC, r.ranked_games DESC
+       LIMIT ?`,
+      [limit]
+    );
+    return rows.map((row: RankedLeaderboardEntry) => ({
+      playerId: row.playerId,
+      displayName: row.displayName,
+      avatarUrl: row.avatarUrl ?? null,
+      mmr: Number(row.mmr),
+      rankedGames: Number(row.rankedGames),
+      wins: Number(row.wins),
+      losses: Number(row.losses)
+    }));
   }
 }

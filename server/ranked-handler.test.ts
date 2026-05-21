@@ -49,6 +49,25 @@ describe("ranked handler", () => {
     expect(await response.json()).toEqual({ error: "Login is required for ranked." });
   });
 
+  it("serves leaderboard without requiring login", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1600, rankedGames: 2, wins: 2, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 1, wins: 0, losses: 1, lastRankedAt: null }
+    ]);
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service: new RankedService({ store }) }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/leaderboard`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      leaderboard: [
+        { playerId: "a", displayName: "a", avatarUrl: null, mmr: 1600, rankedGames: 2, wins: 2, losses: 0 },
+        { playerId: "b", displayName: "b", avatarUrl: null, mmr: 1500, rankedGames: 1, wins: 0, losses: 1 }
+      ]
+    });
+  });
+
   it("queues an authenticated player and exposes queue status", async () => {
     const store = new MemoryRankedStore([{ playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }]);
     const service = new RankedService({ store, now: () => 1_000 });
