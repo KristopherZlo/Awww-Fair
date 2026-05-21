@@ -753,6 +753,32 @@ describe("App layout shell", () => {
     expect(screen.getByText(/\+18 MMR/i)).toBeInTheDocument();
   });
 
+  it("shows and cancels the current ranked queue state for logged-in players", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "waiting" });
+      }
+      if (url === "/api/ranked/queue" && init?.method === "DELETE") {
+        return Response.json({ status: "idle" });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText(/Вы в очереди рейтинга/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Отмена/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/queue", { method: "DELETE" }));
+    expect(await screen.findByText(/Очередь рейтинга отменена/i)).toBeInTheDocument();
+  });
+
   it("does not show server deployment LAN hints in the main menu", async () => {
     const fetchMock = vi.fn(async () => new Response("{}", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);

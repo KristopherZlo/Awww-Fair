@@ -280,6 +280,7 @@
 
 .menu-tabs button,
 .ranked-action,
+.ranked-cancel,
 .oauth-actions a,
 .dev-login-row button,
 .profile-card button {
@@ -302,6 +303,16 @@
   border-color: #f7d99b;
   background: #f7d99b;
   color: #20140c;
+}
+
+.ranked-queue-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.ranked-cancel {
+  padding-inline: 14px;
 }
 
 .ranked-action:disabled {

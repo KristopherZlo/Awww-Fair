@@ -49,13 +49,16 @@ import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
 import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
 import {
+  cancelRankedQueue,
   joinRankedQueue,
   loadLeaderboard,
   loadMatchHistory,
   loadMyRating,
+  loadRankedStatus,
   type LeaderboardEntry,
   type PlayerRating,
-  type RankedMatchHistoryEntry
+  type RankedMatchHistoryEntry,
+  type RankedQueueStatus
 } from "./app/rankedClient";
 import {
   displayPlayerName,
@@ -202,6 +205,12 @@ function rankedHistoryMmrChange(match: RankedMatchHistoryEntry, playerId: string
 
 function signedMmrChange(change: number): string {
   return change > 0 ? `+${change}` : String(change);
+}
+
+function rankedStatusText(status: RankedQueueStatus["status"]): string {
+  if (status === "matched") return "Матч найден.";
+  if (status === "waiting") return "Вы в очереди рейтинга.";
+  return "";
 }
 
 const CUTSCENE_FRAMES = [
@@ -584,6 +593,7 @@ export default function App() {
   const [matchHistoryError, setMatchHistoryError] = useState("");
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardError, setLeaderboardError] = useState("");
+  const [rankedQueueState, setRankedQueueState] = useState<RankedQueueStatus["status"]>("idle");
   const [rankedStatus, setRankedStatus] = useState("");
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
@@ -633,6 +643,30 @@ export default function App() {
       disposed = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setRankedQueueState("idle");
+      setRankedStatus("");
+      return;
+    }
+    let disposed = false;
+    loadRankedStatus()
+      .then((result) => {
+        if (!disposed) {
+          setRankedQueueState(result.status);
+          setRankedStatus(rankedStatusText(result.status));
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setRankedQueueState("idle");
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (menuTab !== "rating") {
@@ -1542,6 +1576,7 @@ export default function App() {
   async function signOut() {
     await logout().catch(() => undefined);
     setCurrentUser(null);
+    setRankedQueueState("idle");
     setRankedStatus("");
   }
 
@@ -1555,7 +1590,19 @@ export default function App() {
     setRankedStatus("Ищем соперника...");
     try {
       const result = await joinRankedQueue();
-      setRankedStatus(result.status === "matched" ? "Матч найден." : "Вы в очереди рейтинга.");
+      setRankedQueueState(result.status);
+      setRankedStatus(rankedStatusText(result.status));
+    } catch (error) {
+      setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
+    }
+  }
+
+  async function cancelRanked() {
+    setRankedStatus("Отменяем очередь...");
+    try {
+      await cancelRankedQueue();
+      setRankedQueueState("idle");
+      setRankedStatus("Очередь рейтинга отменена.");
     } catch (error) {
       setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
     }
@@ -3022,9 +3069,16 @@ export default function App() {
                       <Bot size={18} /> {ui(language, "aiTraining")}
                     </button>
                   </div>
-                  <button className="ranked-action" disabled={!currentUser} onClick={() => void joinRanked()}>
-                    <Trophy size={18} /> Рейтинг 1vs1
-                  </button>
+                  <div className="ranked-queue-row">
+                    <button className="ranked-action" disabled={!currentUser || rankedQueueState === "waiting"} onClick={() => void joinRanked()}>
+                      <Trophy size={18} /> {rankedQueueState === "waiting" ? "В очереди..." : "Рейтинг 1vs1"}
+                    </button>
+                    {rankedQueueState === "waiting" && (
+                      <button className="ranked-cancel" onClick={() => void cancelRanked()}>
+                        <X size={18} /> Отмена
+                      </button>
+                    )}
+                  </div>
                   {!currentUser && <p className="menu-note">Для рейтинга нужен вход в аккаунт.</p>}
                   {rankedStatus && <p className="menu-note">{rankedStatus}</p>}
                 </section>
