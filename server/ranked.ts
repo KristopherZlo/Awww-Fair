@@ -463,8 +463,9 @@ export class RankedService {
     return publicRatingFromInternal(rating, publicPenaltyFromInternal(penalty, now));
   }
 
-  async matchHistoryForPlayer(playerId: string, limit = 10): Promise<RankedMatchLog[]> {
-    return this.options.store.matchHistoryForPlayer(playerId, Math.max(1, Math.min(50, Math.floor(limit))));
+  async matchHistoryForPlayer(playerId: string, limit = 20): Promise<RankedMatchLog[]> {
+    const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 20;
+    return this.options.store.matchHistoryForPlayer(playerId, normalizedLimit);
   }
 
   async settleMatch(

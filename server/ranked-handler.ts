@@ -95,7 +95,7 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         return;
       }
       if (request.method === "GET" && parts[2] === "history") {
-        json(response, 200, { history: await service.matchHistoryForPlayer(user.id) });
+        json(response, 200, { history: await service.matchHistoryForPlayer(user.id, Number(requestUrl.searchParams.get("limit") ?? 20)) });
         return;
       }
       if (request.method === "GET" && parts[2] === "events") {

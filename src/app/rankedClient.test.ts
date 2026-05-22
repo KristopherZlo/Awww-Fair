@@ -136,9 +136,10 @@ describe("ranked client", () => {
   });
 
   it("loads the current player match history", async () => {
-    stubFetch({ history: [{ matchId: "m1", winnerId: "a", loserId: "b", playerAId: "a", playerBId: "b", mmrChange: 18 }] });
+    const fetchMock = stubFetch({ history: [{ matchId: "m1", winnerId: "a", loserId: "b", playerAId: "a", playerBId: "b", mmrChange: 18 }] });
 
     await expect(loadMatchHistory()).resolves.toEqual([{ matchId: "m1", winnerId: "a", loserId: "b", playerAId: "a", playerBId: "b", mmrChange: 18 }]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/ranked/history?limit=20");
   });
 
   it("records ranked match events", async () => {

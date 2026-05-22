@@ -142,7 +142,7 @@ describe("ranked handler", () => {
     const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
     cleanups.push(server.close);
 
-    const response = await fetch(`${server.url}/api/ranked/history`, { headers: { Cookie: "tm_session=token" } });
+    const response = await fetch(`${server.url}/api/ranked/history?limit=20`, { headers: { Cookie: "tm_session=token" } });
     const payload = await response.json();
 
     expect(payload.history[0]).toMatchObject({ matchId: "match-1", winnerId: "a", loserId: "b", mmrChange: 26 });

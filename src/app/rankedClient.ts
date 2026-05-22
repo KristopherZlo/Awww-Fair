@@ -153,8 +153,9 @@ export async function loadMyRating(): Promise<PlayerRating> {
   return payload.rating;
 }
 
-export async function loadMatchHistory(): Promise<RankedMatchHistoryEntry[]> {
-  const payload = await parseRankedResponse<{ history: RankedMatchHistoryEntry[] }>(await fetch("/api/ranked/history"));
+export async function loadMatchHistory(limit = 20): Promise<RankedMatchHistoryEntry[]> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const payload = await parseRankedResponse<{ history: RankedMatchHistoryEntry[] }>(await fetch(`/api/ranked/history?${query}`));
   return payload.history;
 }
 

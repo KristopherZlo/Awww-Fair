@@ -315,11 +315,17 @@ describe("App layout shell", () => {
 
   it("labels local player as you and the other seat as opponent", async () => {
     const user = userEvent.setup();
-    render(<App />);
+    const hotseatRender = render(<App />);
+
+    await startHotseatGame(user);
 
     expect(screen.getAllByText("Вы").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Оппонент").length).toBeGreaterThan(0);
     expect(screen.queryByText(/Игрок A|Игрок B/i)).not.toBeInTheDocument();
+
+    hotseatRender.unmount();
+    window.localStorage.clear();
+    render(<App />);
 
     await startTrainingGame(user);
 
@@ -398,6 +404,7 @@ describe("App layout shell", () => {
   });
 
   it("hides upcoming customer and trend previews during the last round", () => {
+    saveGameState({});
     const { container } = render(<App />);
 
     expect(container.querySelector(".preview-card")).not.toBeNull();
@@ -503,9 +510,11 @@ describe("App layout shell", () => {
 
     expect(screen.getByRole("dialog", { name: /Настройки/i })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: /Громкость музыки/i })).toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: /время хода/i })).not.toBeInTheDocument();
   });
 
   it("keeps the event panel in the app grid instead of inside the table", () => {
+    saveGameState({});
     const { container } = render(<App />);
     const shell = container.querySelector(".app-shell");
     const table = container.querySelector(".table-grid");
@@ -655,6 +664,7 @@ describe("App layout shell", () => {
   });
 
   it("renders customer cards with direct image assets", () => {
+    saveGameState({});
     const { container } = render(<App />);
     const sprite = container.querySelector<HTMLImageElement>(".customer-sprite");
 
@@ -678,6 +688,10 @@ describe("App layout shell", () => {
     const playTabs = within(container.querySelector(".play-tabs") as HTMLElement).getAllByRole("tab");
 
     expect(container.querySelector(".menu-header")).not.toBeNull();
+    expect(container.querySelector(".top-bar")).toBeNull();
+    expect(container.querySelector(".trend-strip")).toBeNull();
+    expect(container.querySelector(".table-grid")).toBeNull();
+    expect(container.querySelector(".event-panel")).toBeNull();
     expect(container.querySelector(".play-tabs")).not.toBeNull();
     expect(container.querySelector(".ranked-match-card")).not.toBeNull();
     expect(screen.getByRole("tab", { name: /Рейтинг 1vs1/i })).toBeInTheDocument();
@@ -783,10 +797,11 @@ describe("App layout shell", () => {
 
     expect(leaderboardTable.querySelectorAll("tbody tr")).toHaveLength(1);
     expect(leaderboardTable.closest(".menu-panel")?.lastElementChild).toBe(leaderboardControls);
-    expect(leaderboardControls?.firstElementChild).toHaveClass("leaderboard-pagination");
+    expect(leaderboardControls?.firstElementChild).toHaveClass("leaderboard-search");
     expect(leaderboardControls?.querySelector(".leaderboard-search > span")).toBeNull();
     expect(leaderboardControls?.querySelector(".leaderboard-search-icon")).not.toBeNull();
-    expect(leaderboardControls?.lastElementChild?.querySelector("input")).toBe(screen.getByLabelText(/поиск/i));
+    expect(leaderboardControls?.lastElementChild).toHaveClass("leaderboard-pagination");
+    expect(leaderboardControls?.firstElementChild?.querySelector("input")).toBe(screen.getByLabelText(/поиск/i));
     expect((await screen.findAllByText(/Player One/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/1542 MMR/i)).toBeInTheDocument();
     await user.type(screen.getByLabelText(/поиск/i), "Player");
@@ -835,42 +850,42 @@ describe("App layout shell", () => {
 
   it("shows the logged-in player MMR in profile", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url === "/api/auth/me") {
-          return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
-        }
-        if (url === "/api/ranked/rating") {
-          return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
-        }
-        if (url === "/api/ranked/history") {
-          return Response.json({
-            history: [
-              {
-                matchId: "m1",
-                playerAId: "p1",
-                playerBId: "p2",
-                winnerId: "p1",
-                loserId: "p2",
-                playerACoins: 10,
-                playerBCoins: 5,
-                playerASales: 4,
-                playerBSales: 2,
-                playerAMmrBefore: 1500,
-                playerBMmrBefore: 1500,
-                playerAMmrAfter: 1518,
-                playerBMmrAfter: 1482,
-                mmrChange: 18,
-                firstPlayerId: "p1",
-                createdAt: "2026-05-21T00:00:00.000Z"
-              }
-            ]
-          });
-        }
-        return Response.json({});
-      })
-    );
+    const history = Array.from({ length: 21 }, (_, index) => {
+      const winnerId = index % 2 === 0 ? "p1" : `p${index + 2}`;
+      const loserId = winnerId === "p1" ? `p${index + 2}` : "p1";
+      return {
+        matchId: `m${index + 1}`,
+        playerAId: "p1",
+        playerBId: `p${index + 2}`,
+        playerBDisplayName: `Opponent ${index + 1}`,
+        winnerId,
+        loserId,
+        playerACoins: 10,
+        playerBCoins: 5,
+        playerASales: 4,
+        playerBSales: 2,
+        playerAMmrBefore: 1500,
+        playerBMmrBefore: 1500,
+        playerAMmrAfter: winnerId === "p1" ? 1518 : 1482,
+        playerBMmrAfter: winnerId === "p1" ? 1482 : 1518,
+        mmrChange: 18,
+        firstPlayerId: "p1",
+        createdAt: `2026-05-${String(21 - index).padStart(2, "0")}T00:00:00.000Z`
+      };
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/rating") {
+        return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+      }
+      if (String(url).startsWith("/api/ranked/history")) {
+        return Response.json({ history });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
 
@@ -878,8 +893,20 @@ describe("App layout shell", () => {
 
     expect((await screen.findAllByText(/Player One/i)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/MMR: 1518/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Победа/i)).toBeInTheDocument();
-    expect(screen.getByText(/\+18 MMR/i)).toBeInTheDocument();
+    expect(screen.queryByText(/\+18 MMR/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /История MMR/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/history?limit=20"));
+    const rows = await waitFor(() => {
+      const renderedRows = document.querySelectorAll(".match-history-row");
+      expect(renderedRows).toHaveLength(20);
+      return renderedRows;
+    });
+    expect(rows[0]).toHaveClass("is-win");
+    expect(rows[1]).toHaveClass("is-loss");
+    expect(screen.getByText("vs Opponent 1")).toBeInTheDocument();
+    expect(screen.queryByText("vs Opponent 21")).not.toBeInTheDocument();
   });
 
   it("shows and cancels the current ranked queue state for logged-in players", async () => {
@@ -903,7 +930,11 @@ describe("App layout shell", () => {
     expect(await screen.findByRole("button", { name: /Отмена/i })).toHaveClass("ranked-action");
     expect(screen.queryByText(/Вы в очереди рейтинга/i)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Отмена/i }));
+    await user.click(screen.getByRole("tab", { name: /Профиль/i }));
+    const queueChip = await screen.findByRole("button", { name: /00:00/i });
+    expect(queueChip).toHaveClass("menu-queue-chip");
+
+    await user.click(queueChip);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/queue", { method: "DELETE" }));
     expect(screen.queryByText(/Очередь рейтинга отменена/i)).not.toBeInTheDocument();
@@ -1709,7 +1740,7 @@ describe("App layout shell", () => {
     expect(screen.getByRole("slider", { name: /громкость музыки/i })).toHaveValue("0.3");
     expect(screen.getByRole("checkbox", { name: /звуковые эффекты/i })).toBeChecked();
     expect(screen.getByRole("slider", { name: /громкость эффектов/i })).toHaveValue("1");
-    expect(screen.getByRole("slider", { name: /время хода/i })).toHaveValue("45");
+    expect(screen.queryByRole("slider", { name: /время хода/i })).not.toBeInTheDocument();
     expect(screen.getByText(/сейчас играет: Main Menu/i)).toBeInTheDocument();
   });
 
@@ -1911,16 +1942,14 @@ describe("App layout shell", () => {
     expect(container.querySelector(".turn-cue-backdrop")).toBeNull();
   });
 
-  it("uses the configured turn time for new local games", async () => {
+  it("uses the default turn time for new local games", async () => {
     const user = userEvent.setup();
+    saveGameState({ phase: "menu" }, null, { turnTimeSeconds: 30 });
     render(<App />);
 
-    await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
-    fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
-    await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
     await startHotseatGame(user);
 
-    expect(screen.getByText(/Ход: 00:30/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
   });
 
   it("sends the lobby host turn time when creating an online table", async () => {
@@ -1979,10 +2008,8 @@ describe("App layout shell", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
 
-    await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
-    fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
-    await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
     await user.click(screen.getByRole("tab", { name: /Свой стол/i }));
+    fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
     await user.click(screen.getByRole("button", { name: /Создать стол/i }));
 
     await waitFor(() => expect(postedTurnTime).toBe(30));

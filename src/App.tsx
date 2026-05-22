@@ -201,7 +201,7 @@ const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const MATCH_FOUND_FALLBACK_MS = 3200;
 const UPGRADE_CHOICE_SECONDS = 20;
-type MainMenuTab = "play" | "profile" | "rating" | "dlc";
+type MainMenuTab = "play" | "profile" | "rating" | "history" | "dlc";
 type PlayModeTab = "ranked" | "story" | "hotseat" | "training" | "custom";
 type RankedSession = {
   matchId: string;
@@ -672,6 +672,7 @@ export default function App() {
   const [rankedStatus, setRankedStatus] = useState("");
   const [rankedSession, setRankedSession] = useState<RankedSession | null>(null);
   const [rankedResultLog, setRankedResultLog] = useState<RankedMatchHistoryEntry | null>(null);
+  const [customTurnTimeSeconds, setCustomTurnTimeSeconds] = useState(DEFAULT_TURN_TIME_SECONDS);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
@@ -929,7 +930,7 @@ export default function App() {
         setRankedStatus("Р РµР·СѓР»СЊС‚Р°С‚ СЂРµР№С‚РёРЅРіР° Р·Р°РїРёСЃР°РЅ.");
         if (currentUser) {
           void loadMyRating().then(setProfileRating).catch(() => undefined);
-          void loadMatchHistory().then(setMatchHistory).catch(() => undefined);
+          void loadMatchHistory(20).then((history) => setMatchHistory(Array.isArray(history) ? history : [])).catch(() => undefined);
         }
       })
       .catch((error) => {
@@ -979,10 +980,10 @@ export default function App() {
         }
       })
       .catch(() => undefined);
-    loadMatchHistory()
+    loadMatchHistory(20)
       .then((history) => {
         if (!disposed) {
-          setMatchHistory(history);
+          setMatchHistory(Array.isArray(history) ? history : []);
         }
       })
       .catch((error) => {
@@ -1541,17 +1542,6 @@ export default function App() {
     setAudioSettings(next);
   }
 
-  function updateTurnTimeSetting(seconds: number) {
-    const nextSeconds = clampTurnTime(seconds);
-    updateAudioSettings({ turnTimeSeconds: nextSeconds });
-
-    if (lobbyRef.current && lobbyRef.current.playerId !== "A") {
-      return;
-    }
-
-    patchState((current) => (current.turnTimeSeconds === nextSeconds ? current : { ...current, turnTimeSeconds: nextSeconds }));
-  }
-
   function playEffect(kind: SoundEffectId) {
     const audio = audioSettingsRef.current;
     try {
@@ -2039,7 +2029,7 @@ export default function App() {
     setMenuView("main");
     setMenuTab("play");
     setPlayModeTab("ranked");
-    setState((current) => buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds));
+    setState((current) => buildInitialState(current.sound, DEFAULT_TURN_TIME_SECONDS));
     playEffect("ui-click");
     await startRankedSearch();
   }
@@ -2152,7 +2142,7 @@ export default function App() {
     setLobbyError("");
     setSyncStatus("local");
     patchState((current) => {
-      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
+      const next = buildInitialState(current.sound, DEFAULT_TURN_TIME_SECONDS);
       return {
         ...next,
         phase: "planning",
@@ -2194,7 +2184,7 @@ export default function App() {
     setCutscene(null);
     setMenuView("main");
     patchState((current) => {
-      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds, campaignInitialStateOptions(level.level));
+      const next = buildInitialState(current.sound, DEFAULT_TURN_TIME_SECONDS, campaignInitialStateOptions(level.level));
       const language = audioSettingsRef.current.language;
       const opponentName = language === "en" ? level.opponentNameEn : `${level.opponentName} (${level.opponentNameEn})`;
       const players = next.players.map((player) => {
@@ -2317,7 +2307,7 @@ export default function App() {
     setRankedStatus("");
     setJoinCode("");
     setSyncStatus("local");
-    setState((current) => buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds));
+    setState((current) => buildInitialState(current.sound, DEFAULT_TURN_TIME_SECONDS));
     lobbyRef.current = null;
     rankedSessionRef.current = null;
     pendingRankedActionKeysRef.current.clear();
@@ -2336,7 +2326,7 @@ export default function App() {
         setRankedResultLog(log);
         if (currentUser) {
           void loadMyRating().then(setProfileRating).catch(() => undefined);
-          void loadMatchHistory().then(setMatchHistory).catch(() => undefined);
+          void loadMatchHistory(20).then((history) => setMatchHistory(Array.isArray(history) ? history : [])).catch(() => undefined);
         }
       } catch (error) {
         setRankedStatus(error instanceof Error ? error.message : "Не удалось сдаться.");
@@ -2369,7 +2359,7 @@ export default function App() {
     setSyncStatus("local");
     setShowAiDifficulty(false);
     patchState((current) => {
-      const next = buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds);
+      const next = buildInitialState(current.sound, DEFAULT_TURN_TIME_SECONDS);
       const language = audioSettingsRef.current.language;
       const difficultyName = difficulty ? aiDifficultyLabel(language, difficulty) : aiDifficultyLabel(language, AI_DIFFICULTIES[2]);
       const intro =
@@ -2398,7 +2388,7 @@ export default function App() {
   async function createLobby() {
     const language = audioSettingsRef.current.language;
     const next = {
-      ...buildInitialState(state.sound, audioSettingsRef.current.turnTimeSeconds),
+      ...buildInitialState(state.sound, customTurnTimeSeconds),
       phase: "planning" as const,
       logs: [
         language === "en" ? "Table created. The opponent joins with the lobby code." : "Стол создан. Оппонент входит по коду лобби.",
@@ -3543,8 +3533,7 @@ export default function App() {
   const primaryEndActionLabel = state.campaignRun ? (campaignCanAdvance && nextCampaignLevel ? ui(language, "nextLevel") : ui(language, "retryLevel")) : ui(language, "playAgain");
   const cutsceneFrame = cutscene ? CUTSCENE_FRAMES[cutscene.frameIndex] : null;
   const focusTrendTags = useMemo(() => new Set(state.activeTrends[0]?.modifiers.map((modifier) => modifier.tag) ?? []), [state.activeTrends]);
-  const canEditTurnTime = !lobby || lobby.playerId === "A";
-  const turnTimeSettingValue = lobby ? state.turnTimeSeconds : audioSettings.turnTimeSeconds;
+  const showRankedQueueChip = rankedQueueState === "waiting" && !(menuTab === "play" && playModeTab === "ranked");
   const influenceEnabled =
     state.playedInfluences.length > 0 ||
     state.players.some((player) => player.influenceHand.length > 0) ||
@@ -3653,6 +3642,11 @@ export default function App() {
                   <h1>{GAME_TITLE}</h1>
                   <p>{ui(language, "menuSubtitle")}</p>
                 </div>
+                {showRankedQueueChip && (
+                  <button className="menu-queue-chip" type="button" onClick={() => void cancelRanked()} aria-label={`Поиск рейтинга ${rankedQueueTime}`}>
+                    <Timer size={16} /> {rankedQueueTime}
+                  </button>
+                )}
                 <button className="menu-account" type="button" onClick={() => setMenuTab("profile")}>
                   <span className="menu-account-avatar">{currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={20} />}</span>
                   <span>
@@ -3671,6 +3665,9 @@ export default function App() {
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "rating"} className={menuTab === "rating" ? "active" : ""} onClick={() => setMenuTab("rating")}>
                   <Trophy size={16} /> Лидерборд
+                </button>
+                <button type="button" role="tab" aria-selected={menuTab === "history"} className={menuTab === "history" ? "active" : ""} onClick={() => setMenuTab("history")}>
+                  <ScrollText size={16} /> История MMR
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "dlc"} className={menuTab === "dlc" ? "active" : ""} onClick={() => setMenuTab("dlc")}>
                   <ShoppingBasket size={16} /> DLC
@@ -3785,6 +3782,20 @@ export default function App() {
                             <div className="custom-table-create">
                               <h3>Создать новый стол</h3>
                               <p>Код не нужен: стол создаётся сразу, а второй игрок подключится по выданному коду.</p>
+                              <label className="custom-turn-time">
+                                <span>
+                                  <Timer size={16} /> Время хода: {customTurnTimeSeconds} сек.
+                                </span>
+                                <input
+                                  aria-label="Время хода"
+                                  type="range"
+                                  min={MIN_TURN_TIME_SECONDS}
+                                  max={MAX_TURN_TIME_SECONDS}
+                                  step="5"
+                                  value={customTurnTimeSeconds}
+                                  onChange={(event) => setCustomTurnTimeSeconds(clampTurnTime(Number(event.target.value)))}
+                                />
+                              </label>
                               <button
                                 className="primary-action play-start-button"
                                 onClick={() => {
@@ -3841,31 +3852,6 @@ export default function App() {
                         </button>
                       </div>
                       <p className="menu-note">Рейтинговые матчи и будущие DLC доступны этому аккаунту.</p>
-                      <div className="match-history">
-                        <h3>История MMR</h3>
-                        {matchHistoryError && <p className="lobby-error">{matchHistoryError}</p>}
-                        <div className="match-history-list">
-                          {matchHistory.map((match) => {
-                            const change = rankedHistoryMmrChange(match, currentUser.id);
-                            const opponentId = match.playerAId === currentUser.id ? match.playerBId : match.playerAId;
-                            const opponentName =
-                              match.playerAId === currentUser.id
-                                ? match.playerBDisplayName ?? opponentId
-                                : match.playerADisplayName ?? opponentId;
-                            return (
-                              <div className="match-history-row" key={match.matchId}>
-                                <strong>{rankedHistoryResultLabel(match, currentUser.id)}</strong>
-                                <span>vs {opponentName}</span>
-                                <span>
-                                  {match.playerACoins}:{match.playerBCoins} монет
-                                </span>
-                                <span>{signedMmrChange(change)} MMR</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {!matchHistory.length && !matchHistoryError && <p className="menu-note">История рейтинга пока пуста.</p>}
-                      </div>
                     </>
                   ) : (
                     <>
@@ -3889,6 +3875,38 @@ export default function App() {
                       {authError && <p className="lobby-error">{authError}</p>}
                     </>
                   )}
+                </section>
+              )}
+
+              {menuTab === "history" && (
+                <section className="menu-panel match-history">
+                  <h2>История MMR</h2>
+                  {!currentUser && <p className="menu-note">Для истории рейтинга нужен вход в аккаунт.</p>}
+                  {currentUser && matchHistoryError && <p className="lobby-error">{matchHistoryError}</p>}
+                  {currentUser && (
+                    <div className="match-history-list">
+                      {matchHistory.slice(0, 20).map((match) => {
+                        const change = rankedHistoryMmrChange(match, currentUser.id);
+                        const opponentId = match.playerAId === currentUser.id ? match.playerBId : match.playerAId;
+                        const opponentName =
+                          match.playerAId === currentUser.id
+                            ? match.playerBDisplayName ?? opponentId
+                            : match.playerADisplayName ?? opponentId;
+                        const resultClass = change > 0 ? "is-win" : change < 0 ? "is-loss" : "is-draw";
+                        return (
+                          <div className={`match-history-row ${resultClass}`} key={match.matchId}>
+                            <strong>{rankedHistoryResultLabel(match, currentUser.id)}</strong>
+                            <span>vs {opponentName}</span>
+                            <span>
+                              {match.playerACoins}:{match.playerBCoins} монет
+                            </span>
+                            <span>{signedMmrChange(change)} MMR</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {currentUser && !matchHistory.length && !matchHistoryError && <p className="menu-note">История рейтинга пока пуста.</p>}
                 </section>
               )}
 
@@ -3927,15 +3945,6 @@ export default function App() {
                     {!leaderboard.length && !leaderboardError && <p className="menu-note menu-empty-state leaderboard-empty-state">Лидерборд пока пуст.</p>}
                   </div>
                   <div className="leaderboard-controls">
-                    <div className="leaderboard-pagination">
-                      <button type="button" aria-label="Предыдущая страница" disabled={leaderboardPage <= 1} onClick={() => setLeaderboardPage((page) => Math.max(1, page - 1))}>
-                        <ChevronLeft size={16} /> Назад
-                      </button>
-                      <span>{leaderboardPage} / {leaderboardTotalPages}</span>
-                      <button type="button" disabled={leaderboardPage >= leaderboardTotalPages} onClick={() => setLeaderboardPage((page) => Math.min(leaderboardTotalPages, page + 1))}>
-                        Далее <ChevronRight size={16} />
-                      </button>
-                    </div>
                     <label className="field-label leaderboard-search">
                       <input
                         className="menu-field"
@@ -3949,6 +3958,15 @@ export default function App() {
                       />
                       <Search className="leaderboard-search-icon" size={15} aria-hidden="true" />
                     </label>
+                    <div className="leaderboard-pagination">
+                      <button type="button" aria-label="Предыдущая страница" disabled={leaderboardPage <= 1} onClick={() => setLeaderboardPage((page) => Math.max(1, page - 1))}>
+                        <ChevronLeft size={16} /> Назад
+                      </button>
+                      <span>{leaderboardPage} / {leaderboardTotalPages}</span>
+                      <button type="button" disabled={leaderboardPage >= leaderboardTotalPages} onClick={() => setLeaderboardPage((page) => Math.min(leaderboardTotalPages, page + 1))}>
+                        Далее <ChevronRight size={16} />
+                      </button>
+                    </div>
                   </div>
                 </section>
               )}
@@ -4057,6 +4075,8 @@ export default function App() {
         </section>
       )}
 
+      {state.phase !== "menu" && (
+        <>
       {turnCue && (
         <div
           className="turn-cue-backdrop"
@@ -4078,7 +4098,7 @@ export default function App() {
         </div>
       )}
 
-      {lobby && state.phase !== "menu" && lobbyError && (
+          {lobby && lobbyError && (
         <div className="connection-notice" role="status" aria-live="polite">
           {lobbyError}
         </div>
@@ -4122,7 +4142,7 @@ export default function App() {
             </div>
           ))}
         </div>
-        {state.phase !== "menu" && state.phase !== "game_end" && (
+        {state.phase !== "game_end" && (
           <button className="settings-toggle top-pause" onClick={pauseGame}>
             <Pause size={18} /> {ui(language, "pause")}
           </button>
@@ -4346,7 +4366,7 @@ export default function App() {
       </aside>
 
       <section className="hand-panel">
-        {state.phase !== "menu" && state.partyGoals.length > 0 && (
+        {state.partyGoals.length > 0 && (
           <div className="party-goals">
             <div className="party-goals-heading">
               <h2>{ui(language, "partyGoals")}</h2>
@@ -4628,7 +4648,7 @@ export default function App() {
         </div>
       )}
 
-      {state.pause.active && state.phase !== "menu" && state.phase !== "game_end" && (
+        {state.pause.active && state.phase !== "game_end" && (
         <div className="modal-backdrop pause-backdrop">
           <section className="pause-modal" role="dialog" aria-label={ui(language, "pause")}>
             <div className="pause-heading">
@@ -4674,6 +4694,8 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+        </>
       )}
 
       {showAiDifficulty && (
@@ -4787,22 +4809,6 @@ export default function App() {
                   disabled={!audioSettings.effectsEnabled}
                   onChange={(event) => updateAudioSettings({ effectsVolume: Number(event.target.value) })}
                 />
-              </label>
-              <label className="range-row">
-                <span>
-                  <Timer size={16} /> {ui(language, "turnTimeSetting", { seconds: turnTimeSettingValue })}
-                </span>
-                <input
-                  aria-label={ui(language, "turnTime")}
-                  type="range"
-                  min={MIN_TURN_TIME_SECONDS}
-                  max={MAX_TURN_TIME_SECONDS}
-                  step="5"
-                  value={turnTimeSettingValue}
-                  disabled={!canEditTurnTime}
-                  onChange={(event) => updateTurnTimeSetting(Number(event.target.value))}
-                />
-                {lobby && !canEditTurnTime && <small>{ui(language, "onlineTurnTimeLocked")}</small>}
               </label>
             </div>
             <div className="track-status">
