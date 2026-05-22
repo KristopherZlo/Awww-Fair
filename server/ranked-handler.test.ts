@@ -16,16 +16,29 @@ async function startTestServer(handler: ReturnType<typeof createRankedHandler>) 
   };
 }
 
-function authStore(user: AuthUser): AuthStore {
+function authStore(user: Omit<AuthUser, "deactivatedAt" | "deleteAfter"> & Partial<Pick<AuthUser, "deactivatedAt" | "deleteAfter">>): AuthStore {
+  const normalizedUser: AuthUser = { ...user, deactivatedAt: user.deactivatedAt ?? null, deleteAfter: user.deleteAfter ?? null };
   return {
     async findUserBySessionHash(tokenHash) {
-      return tokenHash === sessionTokenHash("token") ? user : null;
+      return tokenHash === sessionTokenHash("token") ? normalizedUser : null;
     },
     async createDevUser() {
-      return user;
+      return normalizedUser;
     },
     async upsertOAuthUser() {
-      return user;
+      return normalizedUser;
+    },
+    async updateProfile() {
+      return normalizedUser;
+    },
+    async deactivateUser() {
+      return { ...normalizedUser, deactivatedAt: "2026-05-22T00:00:00.000Z", deleteAfter: "2026-06-05T00:00:00.000Z" };
+    },
+    async cancelDeletion() {
+      return { ...normalizedUser, deactivatedAt: null, deleteAfter: null };
+    },
+    async purgeExpiredDeactivatedUsers() {
+      return [];
     },
     async createSession() {},
     async deleteSession() {}

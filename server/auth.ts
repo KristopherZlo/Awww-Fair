@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import type { Pool } from "mariadb";
 import { DEV_PLAYER_USER_ID, isSeededDevPlayerName } from "./dev-seed";
 import { publicPath } from "./listen-config.mjs";
@@ -8,12 +10,24 @@ const SESSION_COOKIE = "tm_session";
 const OAUTH_STATE_COOKIE = "tm_oauth_state";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
+const PROFILE_DELETE_CONFIRMATION = "УДАЛИТЬ ПРОФИЛЬ";
+const PROFILE_DELETE_DELAY_MS = 14 * 24 * 60 * 60 * 1000;
+const AVATAR_ROUTE_PREFIX = "/api/auth/avatar/";
+const AVATAR_MAX_BYTES = 512 * 1024;
+const DEFAULT_AVATAR_DIR = path.resolve(process.cwd(), "uploads", "avatars");
+const AVATAR_TYPES = new Map([
+  ["image/png", { extension: "png", contentType: "image/png" }],
+  ["image/jpeg", { extension: "jpg", contentType: "image/jpeg" }],
+  ["image/webp", { extension: "webp", contentType: "image/webp" }]
+]);
 
 export interface AuthUser {
   id: string;
   displayName: string;
   avatarUrl: string | null;
   email: string | null;
+  deactivatedAt: string | null;
+  deleteAfter: string | null;
 }
 
 export interface OAuthProfile {
@@ -27,6 +41,10 @@ export interface AuthStore {
   findUserBySessionHash(tokenHash: string, now: Date): Promise<AuthUser | null>;
   createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser>;
   upsertOAuthUser(provider: "google" | "discord", profile: OAuthProfile): Promise<AuthUser>;
+  updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null }): Promise<AuthUser>;
+  deactivateUser(userId: string, deactivatedAt: Date, deleteAfter: Date): Promise<AuthUser>;
+  cancelDeletion(userId: string): Promise<AuthUser>;
+  purgeExpiredDeactivatedUsers(now: Date): Promise<string[]>;
   createSession(tokenHash: string, userId: string, expiresAt: Date): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
 }
@@ -40,12 +58,28 @@ function json(response: ServerResponse, status: number, body: unknown, headers: 
   response.end(JSON.stringify(body));
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+class AuthHttpError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
   }
-  const raw = Buffer.concat(chunks).toString("utf8");
+}
+
+async function readRawBody(request: IncomingMessage, maxBytes = 64 * 1024): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      throw new AuthHttpError(413, "Request body is too large.");
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = (await readRawBody(request)).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }
 
@@ -81,13 +115,155 @@ function safeNullableString(value: unknown, maxLength: number) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : null;
 }
 
+function dateString(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function authUserFromRow(row: Record<string, unknown>): AuthUser {
+  return {
+    id: String(row.id),
+    displayName: String(row.displayName ?? row.display_name ?? "Player"),
+    avatarUrl: safeNullableString(row.avatarUrl ?? row.avatar_url, 512),
+    email: safeNullableString(row.email, 255),
+    deactivatedAt: dateString(row.deactivatedAt ?? row.deactivated_at),
+    deleteAfter: dateString(row.deleteAfter ?? row.delete_after)
+  };
+}
+
+type ProfileAvatarUpload = {
+  data: Buffer;
+  contentType: string;
+};
+
+type ProfileUpdatePayload = {
+  displayName: string;
+  avatar?: ProfileAvatarUpload;
+};
+
+function multipartBoundary(contentType: string) {
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  return match?.[1] ?? match?.[2] ?? "";
+}
+
+async function readProfileUpdate(request: IncomingMessage): Promise<ProfileUpdatePayload> {
+  const contentType = request.headers["content-type"] ?? "";
+  if (contentType.includes("multipart/form-data")) {
+    const boundary = multipartBoundary(contentType);
+    if (!boundary) {
+      throw new AuthHttpError(400, "Invalid multipart form.");
+    }
+    const body = await readRawBody(request, AVATAR_MAX_BYTES + 64 * 1024);
+    return parseProfileMultipart(body, boundary);
+  }
+
+  const body = await readJson(request);
+  return { displayName: safeDisplayName(body.displayName) };
+}
+
+function parseProfileMultipart(body: Buffer, boundary: string): ProfileUpdatePayload {
+  const fields = new Map<string, string>();
+  let avatar: ProfileAvatarUpload | undefined;
+  const raw = body.toString("latin1");
+  for (const part of raw.split(`--${boundary}`)) {
+    if (!part || part === "--\r\n" || part === "--") {
+      continue;
+    }
+    const normalized = part.replace(/^\r\n/, "").replace(/\r\n--$/, "").replace(/\r\n$/, "");
+    const headerEnd = normalized.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      continue;
+    }
+    const headerLines = normalized.slice(0, headerEnd).split("\r\n");
+    const content = normalized.slice(headerEnd + 4);
+    const disposition = headerLines.find((line) => line.toLowerCase().startsWith("content-disposition:")) ?? "";
+    const name = /name="([^"]+)"/.exec(disposition)?.[1] ?? "";
+    if (!name) {
+      continue;
+    }
+    const filename = /filename="([^"]*)"/.exec(disposition)?.[1] ?? "";
+    if (filename) {
+      const type = headerLines.find((line) => line.toLowerCase().startsWith("content-type:"))?.split(":").slice(1).join(":").trim().toLowerCase() ?? "";
+      avatar = { data: Buffer.from(content, "latin1"), contentType: type };
+    } else {
+      fields.set(name, Buffer.from(content, "latin1").toString("utf8"));
+    }
+  }
+  return { displayName: safeDisplayName(fields.get("displayName")), avatar };
+}
+
+function avatarFileNameFromUrl(avatarUrl: string) {
+  if (!avatarUrl.startsWith(AVATAR_ROUTE_PREFIX)) {
+    return null;
+  }
+  const file = avatarUrl.slice(AVATAR_ROUTE_PREFIX.length);
+  return /^[a-z0-9-]+\.(png|jpg|webp)$/i.test(file) ? file : null;
+}
+
+function avatarPath(avatarDir: string, file: string) {
+  const resolvedDir = path.resolve(avatarDir);
+  const resolvedFile = path.resolve(resolvedDir, file);
+  if (!resolvedFile.startsWith(`${resolvedDir}${path.sep}`)) {
+    throw new AuthHttpError(400, "Invalid avatar file.");
+  }
+  return resolvedFile;
+}
+
+async function saveAvatarUpload(userId: string, upload: ProfileAvatarUpload | undefined, avatarDir: string): Promise<string | undefined> {
+  if (!upload || upload.data.length === 0) {
+    return undefined;
+  }
+  const avatarType = AVATAR_TYPES.get(upload.contentType);
+  if (!avatarType) {
+    throw new AuthHttpError(400, "Unsupported avatar type.");
+  }
+  if (upload.data.length > AVATAR_MAX_BYTES) {
+    throw new AuthHttpError(413, "Avatar file is too large.");
+  }
+  await mkdir(avatarDir, { recursive: true });
+  const file = `${userId}-${crypto.randomUUID()}.${avatarType.extension}`;
+  await writeFile(avatarPath(avatarDir, file), upload.data, { flag: "wx" });
+  return `${AVATAR_ROUTE_PREFIX}${file}`;
+}
+
+async function deleteUploadedAvatar(avatarUrl: string | null | undefined, avatarDir: string) {
+  if (!avatarUrl) {
+    return;
+  }
+  const file = avatarFileNameFromUrl(avatarUrl);
+  if (!file) {
+    return;
+  }
+  await unlink(avatarPath(avatarDir, file)).catch(() => undefined);
+}
+
+async function serveAvatar(file: string, avatarDir: string, response: ServerResponse) {
+  if (!/^[a-z0-9-]+\.(png|jpg|webp)$/i.test(file)) {
+    json(response, 404, { error: "Avatar not found." });
+    return;
+  }
+  const extension = file.split(".").pop()?.toLowerCase();
+  const contentType = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
+  try {
+    const body = await readFile(avatarPath(avatarDir, file));
+    response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "public, max-age=86400" });
+    response.end(body);
+  } catch {
+    json(response, 404, { error: "Avatar not found." });
+  }
+}
+
 export function createAuthHandler({
   env = process.env,
   store,
   now = () => new Date(),
   tokenFactory = () => crypto.randomBytes(32).toString("base64url"),
   oauthStateFactory = () => crypto.randomBytes(24).toString("base64url"),
-  fetch: fetchImpl = globalThis.fetch
+  fetch: fetchImpl = globalThis.fetch,
+  avatarDir = DEFAULT_AVATAR_DIR
 }: {
   env?: Partial<Record<string, string | undefined>>;
   store: AuthStore;
@@ -95,15 +271,25 @@ export function createAuthHandler({
   tokenFactory?: () => string;
   oauthStateFactory?: () => string;
   fetch?: typeof globalThis.fetch;
+  avatarDir?: string;
 }) {
   return async function authHandler(request: IncomingMessage, response: ServerResponse) {
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
     const parts = requestUrl.pathname.split("/").filter(Boolean);
 
     try {
+      if (request.method === "GET" && parts[2] === "avatar" && parts[3]) {
+        await serveAvatar(parts[3], avatarDir, response);
+        return;
+      }
+
+      const currentTime = now();
+      const purgedAvatarUrls = await store.purgeExpiredDeactivatedUsers(currentTime);
+      await Promise.all(purgedAvatarUrls.map((avatarUrl) => deleteUploadedAvatar(avatarUrl, avatarDir)));
+
       if (request.method === "GET" && parts[2] === "me") {
         const token = cookieValue(request, SESSION_COOKIE);
-        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), now()) : null;
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
         json(response, 200, { user });
         return;
       }
@@ -130,8 +316,57 @@ export function createAuthHandler({
           avatarUrl: safeNullableString(body.avatarUrl, 512)
         });
         const token = tokenFactory();
-        await store.createSession(sessionTokenHash(token), user.id, new Date(now().getTime() + SESSION_TTL_SECONDS * 1000));
+        await store.createSession(sessionTokenHash(token), user.id, new Date(currentTime.getTime() + SESSION_TTL_SECONDS * 1000));
         json(response, 200, { user }, { "Set-Cookie": sessionCookie(token) });
+        return;
+      }
+
+      if (request.method === "PATCH" && parts[2] === "profile") {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        const profile = await readProfileUpdate(request);
+        const avatarUrl = await saveAvatarUpload(user.id, profile.avatar, avatarDir);
+        try {
+          const updated = await store.updateProfile(user.id, { displayName: profile.displayName, avatarUrl });
+          if (avatarUrl && avatarUrl !== user.avatarUrl) {
+            await deleteUploadedAvatar(user.avatarUrl, avatarDir);
+          }
+          json(response, 200, { user: updated });
+        } catch (error) {
+          await deleteUploadedAvatar(avatarUrl, avatarDir);
+          throw error;
+        }
+        return;
+      }
+
+      if (request.method === "POST" && parts[2] === "deactivate") {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        const body = await readJson(request);
+        if (body.confirmation !== PROFILE_DELETE_CONFIRMATION) {
+          throw new AuthHttpError(400, "Type УДАЛИТЬ ПРОФИЛЬ to deactivate profile.");
+        }
+        const updated = await store.deactivateUser(user.id, currentTime, new Date(currentTime.getTime() + PROFILE_DELETE_DELAY_MS));
+        json(response, 200, { user: updated });
+        return;
+      }
+
+      if (request.method === "POST" && parts[2] === "cancel-deletion") {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        json(response, 200, { user: await store.cancelDeletion(user.id) });
         return;
       }
 
@@ -152,13 +387,17 @@ export function createAuthHandler({
         const profile = await fetchOAuthProfile(parts[2], code, env, fetchImpl);
         const user = await store.upsertOAuthUser(parts[2], profile);
         const token = tokenFactory();
-        await store.createSession(sessionTokenHash(token), user.id, new Date(now().getTime() + SESSION_TTL_SECONDS * 1000));
+        await store.createSession(sessionTokenHash(token), user.id, new Date(currentTime.getTime() + SESSION_TTL_SECONDS * 1000));
         redirect(response, appHomePath(env), { "Set-Cookie": [sessionCookie(token), oauthStateCookie("", 0)] });
         return;
       }
 
       json(response, 404, { error: "Unknown auth route." });
-    } catch {
+    } catch (error) {
+      if (error instanceof AuthHttpError) {
+        json(response, error.status, { error: error.message });
+        return;
+      }
       json(response, 500, { error: "Auth server error." });
     }
   };
@@ -261,11 +500,15 @@ export class MemoryAuthStore implements AuthStore {
 
   async createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser> {
     const seededPlayerId = isSeededDevPlayerName(profile.displayName) ? DEV_PLAYER_USER_ID : null;
+    const userId = seededPlayerId ?? crypto.randomUUID();
+    const existingUser = this.users.get(userId);
     const user: AuthUser = {
-      id: seededPlayerId ?? crypto.randomUUID(),
+      id: userId,
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
-      email: profile.email ?? null
+      email: profile.email ?? null,
+      deactivatedAt: existingUser?.deactivatedAt ?? null,
+      deleteAfter: existingUser?.deleteAfter ?? null
     };
     this.users.set(user.id, user);
     return { ...user };
@@ -274,15 +517,79 @@ export class MemoryAuthStore implements AuthStore {
   async upsertOAuthUser(provider: "google" | "discord", profile: OAuthProfile): Promise<AuthUser> {
     const accountKey = `${provider}:${profile.providerUserId}`;
     const existingId = this.oauthUsers.get(accountKey);
+    const existingUser = existingId ? this.users.get(existingId) : null;
     const user: AuthUser = {
       id: existingId ?? crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
-      email: profile.email ?? null
+      email: profile.email ?? null,
+      deactivatedAt: existingUser?.deactivatedAt ?? null,
+      deleteAfter: existingUser?.deleteAfter ?? null
     };
     this.users.set(user.id, user);
     this.oauthUsers.set(accountKey, user.id);
     return { ...user };
+  }
+
+  async updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null }): Promise<AuthUser> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    const updated = {
+      ...user,
+      displayName: profile.displayName,
+      avatarUrl: profile.avatarUrl ?? user.avatarUrl
+    };
+    this.users.set(userId, updated);
+    return { ...updated };
+  }
+
+  async deactivateUser(userId: string, deactivatedAt: Date, deleteAfter: Date): Promise<AuthUser> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    const updated = { ...user, deactivatedAt: deactivatedAt.toISOString(), deleteAfter: deleteAfter.toISOString() };
+    this.users.set(userId, updated);
+    return { ...updated };
+  }
+
+  async cancelDeletion(userId: string): Promise<AuthUser> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    const updated = { ...user, deactivatedAt: null, deleteAfter: null };
+    this.users.set(userId, updated);
+    return { ...updated };
+  }
+
+  async purgeExpiredDeactivatedUsers(now: Date): Promise<string[]> {
+    const expired = [...this.users.values()].filter((user) => user.deleteAfter && new Date(user.deleteAfter) <= now);
+    const expiredIds = new Set(expired.map((user) => user.id));
+    const avatarUrls = expired.map((user) => user.avatarUrl).filter((avatarUrl): avatarUrl is string => Boolean(avatarUrl));
+    for (const user of expired) {
+      this.users.set(user.id, {
+        ...user,
+        displayName: `Deleted profile ${user.id.slice(0, 8)}`,
+        avatarUrl: null,
+        email: null,
+        deactivatedAt: null,
+        deleteAfter: null
+      });
+    }
+    for (const [tokenHash, session] of this.sessions) {
+      if (expiredIds.has(session.userId)) {
+        this.sessions.delete(tokenHash);
+      }
+    }
+    for (const [accountKey, userId] of this.oauthUsers) {
+      if (expiredIds.has(userId)) {
+        this.oauthUsers.delete(accountKey);
+      }
+    }
+    return avatarUrls;
   }
 
   async createSession(tokenHash: string, userId: string, expiresAt: Date): Promise<void> {
@@ -299,14 +606,15 @@ export class MariaDbAuthStore implements AuthStore {
 
   async findUserBySessionHash(tokenHash: string, now: Date): Promise<AuthUser | null> {
     const rows = await this.pool.query(
-      `SELECT u.id, u.display_name AS displayName, u.avatar_url AS avatarUrl, u.email
+      `SELECT u.id, u.display_name AS displayName, u.avatar_url AS avatarUrl, u.email,
+        u.deactivated_at AS deactivatedAt, u.delete_after AS deleteAfter
        FROM user_sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ? AND s.expires_at > ?
        LIMIT 1`,
       [tokenHash, now]
     );
-    return rows[0] ?? null;
+    return rows[0] ? authUserFromRow(rows[0]) : null;
   }
 
   async createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser> {
@@ -315,7 +623,9 @@ export class MariaDbAuthStore implements AuthStore {
       id: seededPlayerId ?? crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
-      email: profile.email ?? null
+      email: profile.email ?? null,
+      deactivatedAt: null,
+      deleteAfter: null
     };
     if (seededPlayerId) {
       await this.pool.query(
@@ -330,7 +640,13 @@ export class MariaDbAuthStore implements AuthStore {
         [user.id, user.displayName, user.avatarUrl, user.email]
       );
     }
-    return user;
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [user.id]
+    );
+    return rows[0] ? authUserFromRow(rows[0]) : user;
   }
 
   async upsertOAuthUser(provider: "google" | "discord", profile: OAuthProfile): Promise<AuthUser> {
@@ -342,7 +658,9 @@ export class MariaDbAuthStore implements AuthStore {
       id: existing[0]?.userId ?? crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
-      email: profile.email ?? null
+      email: profile.email ?? null,
+      deactivatedAt: null,
+      deleteAfter: null
     };
     await this.pool.query(
       `INSERT INTO users (id, display_name, avatar_url, email)
@@ -356,7 +674,83 @@ export class MariaDbAuthStore implements AuthStore {
        ON DUPLICATE KEY UPDATE email = VALUES(email), display_name = VALUES(display_name), avatar_url = VALUES(avatar_url)`,
       [provider, profile.providerUserId, user.id, user.email, user.displayName, user.avatarUrl]
     );
-    return user;
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [user.id]
+    );
+    return rows[0] ? authUserFromRow(rows[0]) : user;
+  }
+
+  async updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null }): Promise<AuthUser> {
+    if (profile.avatarUrl) {
+      await this.pool.query("UPDATE users SET display_name = ?, avatar_url = ? WHERE id = ?", [profile.displayName, profile.avatarUrl, userId]);
+    } else {
+      await this.pool.query("UPDATE users SET display_name = ? WHERE id = ?", [profile.displayName, userId]);
+    }
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    if (!rows[0]) {
+      throw new Error("User not found.");
+    }
+    return authUserFromRow(rows[0]);
+  }
+
+  async deactivateUser(userId: string, deactivatedAt: Date, deleteAfter: Date): Promise<AuthUser> {
+    await this.pool.query("UPDATE users SET deactivated_at = ?, delete_after = ? WHERE id = ?", [deactivatedAt, deleteAfter, userId]);
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    if (!rows[0]) {
+      throw new Error("User not found.");
+    }
+    return authUserFromRow(rows[0]);
+  }
+
+  async cancelDeletion(userId: string): Promise<AuthUser> {
+    await this.pool.query("UPDATE users SET deactivated_at = NULL, delete_after = NULL WHERE id = ?", [userId]);
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    if (!rows[0]) {
+      throw new Error("User not found.");
+    }
+    return authUserFromRow(rows[0]);
+  }
+
+  async purgeExpiredDeactivatedUsers(now: Date): Promise<string[]> {
+    const rows = await this.pool.query("SELECT id, avatar_url AS avatarUrl FROM users WHERE delete_after IS NOT NULL AND delete_after <= ?", [now]);
+    const users = rows.map((row: Record<string, unknown>) => ({ id: String(row.id), avatarUrl: safeNullableString(row.avatarUrl, 512) }));
+    if (!users.length) {
+      return [];
+    }
+    const ids = users.map((user: { id: string }) => user.id);
+    const placeholders = ids.map(() => "?").join(",");
+    await this.pool.query(`DELETE FROM user_sessions WHERE user_id IN (${placeholders})`, ids);
+    await this.pool.query(`DELETE FROM oauth_accounts WHERE user_id IN (${placeholders})`, ids);
+    await this.pool.query(`DELETE FROM ranked_queue WHERE player_id IN (${placeholders})`, ids).catch(() => undefined);
+    await this.pool.query(
+      `UPDATE users
+       SET display_name = CONCAT('Deleted profile ', LEFT(id, 8)),
+         avatar_url = NULL,
+         email = NULL,
+         deactivated_at = NULL,
+         delete_after = NULL
+       WHERE id IN (${placeholders})`,
+      ids
+    );
+    return users.map((user: { avatarUrl: string | null }) => user.avatarUrl).filter((avatarUrl: string | null): avatarUrl is string => Boolean(avatarUrl));
   }
 
   async createSession(tokenHash: string, userId: string, expiresAt: Date): Promise<void> {

@@ -5,6 +5,8 @@ export interface AuthUser {
   displayName: string;
   avatarUrl: string | null;
   email: string | null;
+  deactivatedAt: string | null;
+  deleteAfter: string | null;
 }
 
 async function parseAuthResponse(response: Response): Promise<{ user: AuthUser | null }> {
@@ -28,6 +30,32 @@ export async function devLogin(profile: { displayName: string; email?: string | 
       body: JSON.stringify(profile)
     })
   );
+  return payload.user;
+}
+
+export async function updateProfile(profile: { displayName: string; avatar?: File | null }): Promise<AuthUser | null> {
+  const body = new FormData();
+  body.set("displayName", profile.displayName);
+  if (profile.avatar) {
+    body.set("avatar", profile.avatar);
+  }
+  const payload = await parseAuthResponse(await fetch("/api/auth/profile", { method: "PATCH", body }));
+  return payload.user;
+}
+
+export async function deactivateProfile(confirmation: string): Promise<AuthUser | null> {
+  const payload = await parseAuthResponse(
+    await fetch("/api/auth/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation })
+    })
+  );
+  return payload.user;
+}
+
+export async function cancelProfileDeletion(): Promise<AuthUser | null> {
+  const payload = await parseAuthResponse(await fetch("/api/auth/cancel-deletion", { method: "POST" }));
   return payload.user;
 }
 

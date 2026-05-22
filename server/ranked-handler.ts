@@ -75,6 +75,10 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
       json(response, 401, { error: "Login is required for ranked." });
       return;
     }
+    if (user.deactivatedAt) {
+      json(response, 403, { error: "Profile is scheduled for deletion." });
+      return;
+    }
 
     try {
       if (request.method === "POST" && parts[2] === "queue") {

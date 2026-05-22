@@ -22,10 +22,22 @@ function store(): AuthStore {
       return null;
     },
     async createDevUser() {
-      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null };
+      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
     },
     async upsertOAuthUser() {
-      return { id: "oauth", displayName: "OAuth", avatarUrl: null, email: null };
+      return { id: "oauth", displayName: "OAuth", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+    },
+    async updateProfile() {
+      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+    },
+    async deactivateUser() {
+      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: "2026-05-22T00:00:00.000Z", deleteAfter: "2026-06-05T00:00:00.000Z" };
+    },
+    async cancelDeletion() {
+      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+    },
+    async purgeExpiredDeactivatedUsers() {
+      return [];
     },
     async createSession() {},
     async deleteSession() {}
@@ -68,7 +80,7 @@ describe("app handler", () => {
     const rankedAuthStore: AuthStore = {
       ...store(),
       async findUserBySessionHash(tokenHash) {
-        return tokenHash === sessionTokenHash("token") ? { id: "dev", displayName: "Dev", avatarUrl: null, email: null } : null;
+        return tokenHash === sessionTokenHash("token") ? { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } : null;
       }
     };
     const server = await startTestServer(
@@ -106,7 +118,7 @@ describe("app handler", () => {
     const rating = await fetch(`${server.url}/api/ranked/rating`, { headers: { Cookie: cookie } });
 
     expect(auth.status).toBe(200);
-    expect(await auth.json()).toEqual({ user: { id: expect.any(String), displayName: "Dev", avatarUrl: null, email: null } });
+    expect(await auth.json()).toEqual({ user: { id: expect.any(String), displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } });
     expect(rating.status).toBe(200);
     expect(await rating.json()).toMatchObject({
       rating: {
@@ -138,7 +150,7 @@ describe("app handler", () => {
     const leaderboard = await fetch(`${server.url}/api/ranked/leaderboard?page=1&pageSize=10`);
     const playerSearch = await fetch(`${server.url}/api/ranked/leaderboard?page=1&pageSize=10&search=player`);
 
-    expect(await auth.json()).toEqual({ user: { id: "dev-player", displayName: "player", avatarUrl: null, email: null } });
+    expect(await auth.json()).toEqual({ user: { id: "dev-player", displayName: "player", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } });
     expect(await rating.json()).toMatchObject({ rating: { playerId: "dev-player", mmr: 1548, rankedGames: 5, wins: 3, losses: 2 } });
     expect(await history.json()).toMatchObject({
       history: [

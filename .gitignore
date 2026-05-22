@@ -13,4 +13,5 @@ xampp-api*.log
 coverage/
 .tmp/
 tmp/
+uploads/
 Ai-helper/

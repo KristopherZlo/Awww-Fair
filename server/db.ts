@@ -26,11 +26,15 @@ export function createMigrationStatements(): string[] {
       display_name VARCHAR(80) NOT NULL,
       avatar_url VARCHAR(512) NULL,
       email VARCHAR(255) NULL,
+      deactivated_at DATETIME(3) NULL,
+      delete_after DATETIME(3) NULL,
       is_bot BOOLEAN NOT NULL DEFAULT FALSE,
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
     )`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT FALSE AFTER email`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS deactivated_at DATETIME(3) NULL AFTER email`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_after DATETIME(3) NULL AFTER deactivated_at`,
     `CREATE TABLE IF NOT EXISTS oauth_accounts (
       provider VARCHAR(24) NOT NULL,
       provider_user_id VARCHAR(128) NOT NULL,

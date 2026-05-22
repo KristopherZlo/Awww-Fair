@@ -40,6 +40,8 @@ describe("MariaDB server database setup", () => {
     expect(sql).toContain("ranked_clean_games_since_leave INT NOT NULL DEFAULT 0");
     expect(sql).toContain("ranked_cooldown_until DATETIME(3) NULL");
     expect(sql).toContain("is_bot BOOLEAN NOT NULL DEFAULT FALSE");
+    expect(sql).toContain("deactivated_at DATETIME(3) NULL");
+    expect(sql).toContain("delete_after DATETIME(3) NULL");
     expect(sql).toContain("rating_games INT NOT NULL DEFAULT 0");
     expect(sql).toContain("calibration_games INT NOT NULL DEFAULT 0");
     expect(sql).toContain("bot_match_at DATETIME(3) NULL");
