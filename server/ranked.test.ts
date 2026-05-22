@@ -224,14 +224,17 @@ describe("ranked matchmaking", () => {
     ]);
     const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
     await service.joinQueue("a");
-    await service.joinQueue("b");
-    await service.recordEvent("a", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "A" } });
-    await service.recordEvent("b", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "B" } });
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    const firstActorId = matched.match.firstPlayerId;
+    const secondActorId = firstActorId === "a" ? "b" : "a";
+    await service.recordEvent(firstActorId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: firstActorId } });
+    await service.recordEvent(secondActorId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: secondActorId } });
 
     const events = await service.eventsForPlayer("a", "match-1", 1);
 
     expect(events).toEqual([
-      { matchId: "match-1", sequence: 2, actorId: "b", round: 1, phase: "planning", eventType: "ready", payload: { seat: "B" }, createdAt: 1_000 }
+      { matchId: "match-1", sequence: 2, actorId: secondActorId, round: 1, phase: "planning", eventType: "ready", payload: { seat: secondActorId }, createdAt: 1_000 }
     ]);
     await expect(service.eventsForPlayer("c", "match-1", 0)).rejects.toThrow("Active ranked match not found.");
   });
@@ -323,6 +326,25 @@ describe("ranked matchmaking", () => {
     now = 91_001;
     await expect(service.statusForPlayer("b")).resolves.toEqual({ status: "idle" });
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
+  });
+
+  it("rejects out-of-turn ranked events before they corrupt replay history", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    const firstActorId = matched.match.firstPlayerId;
+
+    await service.recordEvent(firstActorId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: {} });
+
+    await expect(
+      service.recordEvent(firstActorId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: {} })
+    ).rejects.toThrow("Invalid ranked event.");
+    await expect(store.eventsForMatch("match-1")).resolves.toHaveLength(1);
   });
 
   it("warns twice before blocking ranked queue on the third leave", async () => {

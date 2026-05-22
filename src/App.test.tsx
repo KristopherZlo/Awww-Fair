@@ -1270,6 +1270,60 @@ describe("App layout shell", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/settle", expect.objectContaining({ method: "POST" })));
   });
 
+  it("shows a ranked sync error instead of crashing on invalid stored event history", async () => {
+    const rankedInitialState = {
+      ...buildInitialState(true, 45),
+      phase: "planning" as const,
+      round: 1,
+      activePlayer: "A" as PlayerId,
+      firstPlayer: "A" as PlayerId,
+      players: [
+        { ...testPlayer("A"), productHand: [], influenceHand: [] },
+        { ...testPlayer("B"), productHand: [], influenceHand: [] }
+      ]
+    };
+    const match = {
+      id: "match-1",
+      playerAId: "p1",
+      playerBId: "p2",
+      playerAMmrBefore: 1500,
+      playerBMmrBefore: 1500,
+      firstPlayerId: "p1",
+      seed: "seed-1",
+      initialState: rankedInitialState,
+      status: "active",
+      createdAt: 1_000,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null,
+      isCalibration: false,
+      isBotMatch: false,
+      botDifficulty: null
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "matched", match });
+      }
+      if (String(url).startsWith("/api/ranked/events?")) {
+        return Response.json({
+          events: [
+            { matchId: "match-1", sequence: 1, actorId: "p1", round: 1, phase: "planning", eventType: "ready", payload: {}, createdAt: 1_500 },
+            { matchId: "match-1", sequence: 2, actorId: "p1", round: 1, phase: "planning", eventType: "ready", payload: {}, createdAt: 1_600 }
+          ]
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText("Invalid ranked ready action.")).toBeInTheDocument();
+    expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull();
+  });
+
   it("does not show server deployment LAN hints in the main menu", async () => {
     const fetchMock = vi.fn(async () => new Response("{}", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);

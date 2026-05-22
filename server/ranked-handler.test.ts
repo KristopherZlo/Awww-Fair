@@ -185,9 +185,12 @@ describe("ranked handler", () => {
     ]);
     const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
     await service.joinQueue("a");
-    await service.joinQueue("b");
-    await service.recordEvent("a", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "A" } });
-    await service.recordEvent("b", { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: "B" } });
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    const firstActorId = matched.match.firstPlayerId;
+    const secondActorId = firstActorId === "a" ? "b" : "a";
+    await service.recordEvent(firstActorId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: firstActorId } });
+    await service.recordEvent(secondActorId, { matchId: "match-1", round: 1, phase: "planning", eventType: "ready", payload: { seat: secondActorId } });
     const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
     cleanups.push(server.close);
 
@@ -195,7 +198,7 @@ describe("ranked handler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      events: [{ matchId: "match-1", sequence: 2, actorId: "b", eventType: "ready", payload: { seat: "B" } }]
+      events: [{ matchId: "match-1", sequence: 2, actorId: secondActorId, eventType: "ready", payload: { seat: secondActorId } }]
     });
   });
 

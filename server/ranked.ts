@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { Pool, PoolConnection } from "mariadb";
 import type { GameState } from "../src/app/types";
 import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
-import { replayRankedEvents, type RankedReplayOutcome } from "../src/game/rankedReplay";
+import { applyRankedReplayEvent, replayRankedEvents, type RankedReplayOutcome } from "../src/game/rankedReplay";
 import { buildInitialState, seededRandom } from "../src/game/session";
 import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 import type { PlayerRating } from "../src/game/rating";
@@ -420,6 +420,7 @@ export class RankedService {
     if (!match || match.status !== "active" || (match.playerAId !== actorId && match.playerBId !== actorId)) {
       throw new Error("Active ranked match not found.");
     }
+    await this.assertRankedEventCanReplay(match, { actorId, eventType: event.eventType, payload: event.payload });
     return this.options.store.recordMatchEvent({ ...event, actorId, createdAt: this.options.now?.() ?? Date.now() });
   }
 
@@ -587,6 +588,18 @@ export class RankedService {
     );
     if (!sameRankedOutcome(replayOutcome, result)) {
       throw new Error("Ranked replay result mismatch.");
+    }
+  }
+
+  private async assertRankedEventCanReplay(match: RankedMatch, event: { actorId: string; eventType: string; payload: unknown }): Promise<void> {
+    const events = await this.options.store.eventsForMatch(match.id);
+    try {
+      [...events.map((recorded) => ({ actorId: recorded.actorId, eventType: recorded.eventType, payload: recorded.payload })), event].reduce(
+        (current, replayEvent) => applyRankedReplayEvent(current, replayEvent, { playerAId: match.playerAId, playerBId: match.playerBId }),
+        match.initialState
+      );
+    } catch {
+      throw new Error("Invalid ranked event.");
     }
   }
 

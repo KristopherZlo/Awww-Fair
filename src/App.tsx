@@ -702,6 +702,7 @@ export default function App() {
   const turnCueTimerRef = useRef<number | null>(null);
   const lastTurnCueKeyRef = useRef<string | null>(null);
   const skipNextSessionSaveRef = useRef(false);
+  const stateRef = useRef<GameState>(state);
   const language = audioSettings.language;
   const salePanelId = useId();
   const rankedSessionRef = useRef<RankedSession | null>(null);
@@ -858,6 +859,10 @@ export default function App() {
   useEffect(() => {
     rankedSessionRef.current = rankedSession;
   }, [rankedSession]);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     const session = rankedSession;
@@ -1849,6 +1854,7 @@ export default function App() {
       }
       const effect = typeof tone === "function" ? tone(current, next) : tone;
       playStateTransitionSounds(current, next, effect);
+      stateRef.current = next;
       return next;
     });
   }
@@ -1861,15 +1867,21 @@ export default function App() {
 
   function applyRemoteRankedEvents(session: RankedSession, events: RankedMatchEvent[]) {
     const orderedEvents = [...events].sort((left, right) => left.sequence - right.sequence);
-    setState((current) => {
-      const next = orderedEvents.reduce(
+    const current = stateRef.current;
+    let next: GameState;
+    try {
+      next = orderedEvents.reduce(
         (updated, event) =>
           applyRankedReplayEvent(updated, { actorId: event.actorId, eventType: event.eventType, payload: event.payload }, { playerAId: session.playerAId, playerBId: session.playerBId }),
         current
       );
-      playStateTransitionSounds(current, next);
-      return next;
-    });
+    } catch (error) {
+      setRankedStatus(error instanceof Error ? error.message : "Не удалось синхронизировать рейтинговый матч.");
+      return;
+    }
+    playStateTransitionSounds(current, next);
+    stateRef.current = next;
+    setState(next);
   }
 
   async function submitDevLogin() {
@@ -4040,6 +4052,7 @@ export default function App() {
           <div className={`sync-pill sync-${syncStatus}`}>
             {lobby ? `${ui(language, "lobbyCode").toLowerCase()} ${lobby.code} · ${ui(language, "you").toLowerCase()} ${lobby.playerId}` : ui(language, "localTable")} · {syncStatus}
           </div>
+          {rankedSession && rankedStatus && <div className="sync-pill sync-offline">{rankedStatus}</div>}
           {aiPlayer && !rankedSession && (
             <div className="ai-score">
               <b>
