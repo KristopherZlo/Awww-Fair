@@ -3942,7 +3942,7 @@ export default function App() {
               )}
 
               {menuTab === "profile" && (
-                <section className="menu-panel profile-panel">
+                <section className={`menu-panel profile-panel ${currentUser ? "is-signed-in" : "is-signed-out"}`}>
                   {currentUser ? (
                     <>
                       <div className="profile-card">
@@ -4026,7 +4026,7 @@ export default function App() {
                   <h2>История MMR</h2>
                   {!currentUser && <p className="menu-note">Для истории рейтинга нужен вход в аккаунт.</p>}
                   {currentUser && matchHistoryError && <p className="lobby-error">{matchHistoryError}</p>}
-                  {currentUser && (
+                  {currentUser && matchHistory.length > 0 && (
                     <div className="match-history-list">
                       {matchHistory.slice(0, 20).map((match) => {
                         const change = rankedHistoryMmrChange(match, currentUser.id);

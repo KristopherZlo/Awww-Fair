@@ -122,6 +122,8 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.menu-header\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/);
     expect(css).toMatch(/\.menu-header\s*\{[\s\S]*height:\s*78px;/);
     expect(css).toMatch(/\.menu-tabs\s*\{[\s\S]*align-self:\s*start;/);
+    expect(css).toMatch(/\.menu-tabs\s*\{[\s\S]*flex-wrap:\s*nowrap;/);
+    expect(css).toMatch(/\.menu-tabs button\s*\{[\s\S]*white-space:\s*nowrap;/);
     expect(css).toMatch(/\.play-tabs\s*\{[\s\S]*align-self:\s*start;/);
     expect(css).toMatch(/\.play-layout\s*\{[\s\S]*align-items:\s*stretch;/);
     expect(css).toMatch(/\.ranked-match-card\s*\{[\s\S]*grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/);
@@ -135,7 +137,9 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.leaderboard-table\s*\{[\s\S]*width:\s*100%;/);
     expect(css).toMatch(/\.leaderboard-controls\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(220px,\s*320px\);/);
     expect(css).toMatch(/\.menu-utility-actions\s*\{[\s\S]*display:\s*flex;/);
-    expect(css).toMatch(/\.profile-panel\s*\{[\s\S]*align-content:\s*start;/);
+    expect(css).toMatch(/\.match-history\s*\{[\s\S]*align-content:\s*start;/);
+    expect(css).toMatch(/\.match-history h2\s*\{[\s\S]*font-size:\s*1rem;/);
+    expect(css).toMatch(/\.profile-panel\.is-signed-in\s*\{[\s\S]*grid-template-columns:\s*minmax\(240px,\s*0\.75fr\)\s+minmax\(0,\s*1\.25fr\);/);
   });
 
   it("lets the story level road use the full available play panel height", () => {

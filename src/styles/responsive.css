@@ -165,7 +165,6 @@
   .menu-header,
   .menu-primary-grid,
   .menu-online-row,
-  .menu-tabs,
   .play-mode-tabs,
   .ranked-card-top,
   .ranked-search-panel,
@@ -186,6 +185,24 @@
 
   .menu-header {
     height: auto;
+  }
+
+  .profile-panel.is-signed-in {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-panel.is-signed-in .profile-card,
+  .profile-panel.is-signed-in .profile-edit,
+  .profile-panel.is-signed-in .profile-danger,
+  .profile-panel.is-signed-in .profile-status,
+  .profile-panel.is-signed-in .lobby-error,
+  .profile-panel.is-signed-in .menu-note {
+    grid-column: 1;
+  }
+
+  .profile-panel.is-signed-in .profile-card {
+    grid-row: auto;
+    min-height: 0;
   }
 
   .play-tabs {
