@@ -38,9 +38,11 @@ describe("ranked matchmaking", () => {
     expect(repeatMatchMultiplier(3)).toBe(1);
     expect(repeatMatchMultiplier(4)).toBe(0.5);
     expect(leaveCooldownSeconds(1)).toBe(0);
-    expect(leaveCooldownSeconds(2)).toBe(5 * 60);
-    expect(leaveCooldownSeconds(3)).toBe(30 * 60);
-    expect(leaveCooldownSeconds(4)).toBe(60 * 60);
+    expect(leaveCooldownSeconds(2)).toBe(0);
+    expect(leaveCooldownSeconds(3)).toBe(3 * 60);
+    expect(leaveCooldownSeconds(4)).toBe(10 * 60);
+    expect(leaveCooldownSeconds(5)).toBe(15 * 60);
+    expect(leaveCooldownSeconds(6)).toBe(60 * 60);
   });
 
   it("matches nearby queued players and leaves distant players waiting", async () => {
@@ -58,6 +60,114 @@ describe("ranked matchmaking", () => {
       match: { id: "match-1", playerAId: "a", playerBId: "b", seed: "seed-1", status: "active" }
     });
     expect(await store.currentMatchForPlayer("c")).toBeNull();
+  });
+
+  it("keeps a new player in hidden calibration and starts a bot match only after the calibration delay", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore();
+    const service = new RankedService({
+      store,
+      now: () => now,
+      idFactory: () => "match-1",
+      seedFactory: () => "seed-1",
+      botDelayFactory: () => 5_000
+    });
+
+    await expect(service.publicRatingForPlayer("new-player")).resolves.toMatchObject({
+      playerId: "new-player",
+      mmr: null,
+      rankedGames: 0,
+      wins: 0,
+      losses: 0,
+      isCalibrating: true,
+      calibrationGamesRemaining: 5
+    });
+    await expect(service.joinQueue("new-player")).resolves.toEqual({ status: "waiting" });
+
+    now = 5_999;
+    await expect(service.statusForPlayer("new-player")).resolves.toEqual({ status: "waiting" });
+
+    now = 6_000;
+    const matched = await service.statusForPlayer("new-player");
+
+    expect(matched).toMatchObject({
+      status: "matched",
+      match: {
+        id: "match-1",
+        playerAId: "new-player",
+        isCalibration: true,
+        isBotMatch: true,
+        botDifficulty: 3
+      }
+    });
+    if (matched.status !== "matched") throw new Error("Expected bot match.");
+    expect(matched.match.playerBId).toMatch(/^00000000-0000-4000-8000-/);
+    expect(matched.match.initialState.aiPlayerId).toBe("B");
+  });
+
+  it("records calibration bot matches in history without exposing public MMR until five calibration games finish", async () => {
+    const store = new MemoryRankedStore();
+    const service = new RankedService({
+      store,
+      now: () => 10_000,
+      idFactory: () => "match-1",
+      seedFactory: () => "seed-1",
+      botDelayFactory: () => 0
+    });
+    await service.joinQueue("new-player");
+    const matched = await service.statusForPlayer("new-player");
+    if (matched.status !== "matched") throw new Error("Expected bot match.");
+
+    await service.settleMatch("new-player", {
+      matchId: "match-1",
+      playerACoins: 20,
+      playerBCoins: 8,
+      playerASales: 5,
+      playerBSales: 2
+    });
+
+    await expect(store.ratingForPlayer("new-player")).resolves.toMatchObject({ rankedGames: 0, wins: 0, losses: 0, calibrationGames: 1 });
+    await expect(service.publicRatingForPlayer("new-player")).resolves.toMatchObject({
+      mmr: null,
+      rankedGames: 0,
+      wins: 0,
+      losses: 0,
+      isCalibrating: true,
+      calibrationGamesRemaining: 4
+    });
+    await expect(service.matchHistoryForPlayer("new-player")).resolves.toMatchObject([
+      {
+        matchId: "match-1",
+        isCalibration: true,
+        playerADisplayName: "new-player"
+      }
+    ]);
+  });
+
+  it("matches calibrated human players immediately before scheduling a later fallback bot", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 5, wins: 3, losses: 2, lastRankedAt: null, calibrationGames: 5, ratingGames: 5 },
+      { playerId: "b", mmr: 1520, rankedGames: 5, wins: 2, losses: 3, lastRankedAt: null, calibrationGames: 5, ratingGames: 5 },
+      { playerId: "solo", mmr: 1490, rankedGames: 5, wins: 3, losses: 2, lastRankedAt: null, calibrationGames: 5, ratingGames: 5 }
+    ]);
+    const service = new RankedService({
+      store,
+      now: () => now,
+      idFactory: () => "match-1",
+      seedFactory: () => "seed-1",
+      botDelayFactory: () => 7_000
+    });
+
+    await expect(service.joinQueue("a")).resolves.toEqual({ status: "waiting" });
+    await expect(service.joinQueue("b")).resolves.toMatchObject({ status: "matched", match: { playerAId: "a", playerBId: "b", isBotMatch: false } });
+    await expect(service.joinQueue("solo")).resolves.toEqual({ status: "waiting" });
+
+    now = 37_999;
+    await expect(service.statusForPlayer("solo")).resolves.toEqual({ status: "waiting" });
+
+    now = 38_000;
+    await expect(service.statusForPlayer("solo")).resolves.toMatchObject({ status: "matched", match: { playerAId: "solo", isBotMatch: true, isCalibration: false } });
   });
 
   it("creates deterministic ranked initial state from the match seed", async () => {
@@ -164,11 +274,11 @@ describe("ranked matchmaking", () => {
     await service.joinQueue("b");
 
     const disconnect = await service.disconnectFromMatch("a", "match-1");
-    now = 90_000;
+    now = 60_000;
     const reconnect = await service.reconnectToMatch("a", "match-1");
     const match = await store.matchById("match-1");
 
-    expect(disconnect).toEqual({ status: "reconnect_window", reconnectUntil: 91_000 });
+    expect(disconnect).toEqual({ status: "reconnect_window", reconnectUntil: 61_000 });
     expect(reconnect).toMatchObject({ status: "matched", match: { id: "match-1", status: "active" } });
     expect(match?.playerADisconnectedAt).toBeNull();
     expect(await service.statusForPlayer("a")).toMatchObject({ status: "matched", match: { id: "match-1" } });
@@ -185,7 +295,7 @@ describe("ranked matchmaking", () => {
     await service.joinQueue("b");
     await service.disconnectFromMatch("a", "match-1");
 
-    now = 91_001;
+    now = 61_001;
     const status = await service.statusForPlayer("b");
     const match = await store.matchById("match-1");
     const history = await store.matchHistoryForPlayer("a", 1);
@@ -215,7 +325,7 @@ describe("ranked matchmaking", () => {
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
   });
 
-  it("blocks ranked queue while a repeated leaver is on cooldown", async () => {
+  it("warns twice before blocking ranked queue on the third leave", async () => {
     let now = 1_000;
     let matchIndex = 0;
     const store = new MemoryRankedStore([
@@ -233,13 +343,68 @@ describe("ranked matchmaking", () => {
       await service.joinQueue("a");
       await service.joinQueue("b");
       await service.disconnectFromMatch("a", `match-${leave + 1}`);
-      now += 91_000;
+      now += 61_000;
       await service.statusForPlayer("b");
+      await expect(store.leavePenaltyForPlayer("a")).resolves.toMatchObject({ leaveCount: leave + 1, cooldownUntil: null, cleanGamesSinceLeave: 0 });
+      await expect(service.joinQueue("a")).resolves.toEqual({ status: "waiting" });
+      await service.cancelQueue("a");
     }
 
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.disconnectFromMatch("a", "match-3");
+    now += 61_000;
+    await service.statusForPlayer("b");
+
     await expect(service.joinQueue("a")).rejects.toThrow("Ranked cooldown is active.");
-    now += 5 * 60 * 1000 + 1;
+    await expect(store.leavePenaltyForPlayer("a")).resolves.toMatchObject({ leaveCount: 3, cooldownUntil: now + 3 * 60 * 1000, cleanGamesSinceLeave: 0 });
+    now += 3 * 60 * 1000 + 1;
     await expect(service.joinQueue("a")).resolves.toEqual({ status: "waiting" });
+  });
+
+  it("records a leave warning when an expired player tries to reconnect late", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => now, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.disconnectFromMatch("a", "match-1");
+
+    now = 61_001;
+
+    await expect(service.reconnectToMatch("a", "match-1")).rejects.toThrow("Reconnect window expired.");
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
+    await expect(store.leavePenaltyForPlayer("a")).resolves.toMatchObject({ leaveCount: 1, cooldownUntil: null, cleanGamesSinceLeave: 0 });
+  });
+
+  it("forgives one leave warning after five clean ranked completions", async () => {
+    let matchIndex = 0;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    await store.recordLeavePenalty("a", { leaveCount: 2, cooldownUntil: null, cleanGamesSinceLeave: 4 });
+    const service = new RankedService({
+      store,
+      now: () => 1_000,
+      idFactory: () => `match-${++matchIndex}`,
+      seedFactory: () => `seed-${matchIndex}`
+    });
+
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    await service.settleMatch("a", {
+      matchId: "match-1",
+      playerACoins: 10,
+      playerBCoins: 5,
+      playerASales: 4,
+      playerBSales: 2
+    });
+
+    await expect(store.leavePenaltyForPlayer("a")).resolves.toMatchObject({ leaveCount: 1, cooldownUntil: null, cleanGamesSinceLeave: 0 });
   });
 
   it("halves MMR change after repeated pair matches in one hour", async () => {
@@ -338,11 +503,77 @@ describe("ranked matchmaking", () => {
       query: vi.fn(),
       getConnection: vi.fn(async () => connection)
     };
-    const store = new MariaDbRankedStore(pool);
+    const store = new MariaDbRankedStore(pool as unknown as ConstructorParameters<typeof MariaDbRankedStore>[0]);
 
     await store.settleMatch(log, playerA, playerB);
 
     expect(pool.query).not.toHaveBeenCalled();
     expect(operations).toEqual(["begin", "query", "query", "query", "commit", "release"]);
+  });
+
+  it("qualifies MariaDB match history columns after joining player users", async () => {
+    const pool = {
+      query: vi.fn(async <T = unknown>(...args: unknown[]): Promise<T> => {
+        const sql = String(args[0]);
+        const values = args[1];
+        expect(sql).toContain("ranked_matches.id AS matchId");
+        expect(sql).toContain("ranked_matches.player_a_id AS playerAId");
+        expect(sql).toContain("ranked_matches.player_b_id AS playerBId");
+        expect(sql).toContain("ranked_matches.created_at AS createdAt");
+        expect(sql).toContain("ORDER BY ranked_matches.created_at DESC");
+        expect(values).toEqual(["dev-player", "dev-player", 10]);
+        return [
+          {
+            matchId: "match-1",
+            playerAId: "dev-player",
+            playerBId: "seed-mira",
+            playerADisplayName: "player",
+            playerBDisplayName: "Mira",
+            winnerId: "dev-player",
+            loserId: "seed-mira",
+            playerACoins: 42,
+            playerBCoins: 36,
+            playerASales: 7,
+            playerBSales: 6,
+            playerAMmrBefore: 1524,
+            playerBMmrBefore: 1606,
+            playerAMmrAfter: 1548,
+            playerBMmrAfter: 1582,
+            mmrChange: 24,
+            firstPlayerId: "dev-player",
+            isCalibration: false,
+            createdAt: new Date("2026-05-20T09:00:00.000Z")
+          }
+        ] as T;
+      }),
+      getConnection: vi.fn()
+    };
+    const store = new MariaDbRankedStore(pool as unknown as ConstructorParameters<typeof MariaDbRankedStore>[0]);
+
+    const history = await store.matchHistoryForPlayer("dev-player", 10);
+
+    expect(history).toEqual([
+      {
+        matchId: "match-1",
+        playerAId: "dev-player",
+        playerBId: "seed-mira",
+        playerADisplayName: "player",
+        playerBDisplayName: "Mira",
+        winnerId: "dev-player",
+        loserId: "seed-mira",
+        playerACoins: 42,
+        playerBCoins: 36,
+        playerASales: 7,
+        playerBSales: 6,
+        playerAMmrBefore: 1524,
+        playerBMmrBefore: 1606,
+        playerAMmrAfter: 1548,
+        playerBMmrAfter: 1582,
+        mmrChange: 24,
+        firstPlayerId: "dev-player",
+        isCalibration: false,
+        createdAt: "2026-05-20T09:00:00.000Z"
+      }
+    ]);
   });
 });

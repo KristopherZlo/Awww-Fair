@@ -148,4 +148,41 @@ describe("auth handler", () => {
     expect(callback.headers.get("location")).toBe("/");
     expect(fetchCalls).toEqual(["https://oauth2.googleapis.com/token", "https://www.googleapis.com/oauth2/v2/userinfo"]);
   });
+
+  it("redirects OAuth callbacks back to the Apache public path", async () => {
+    const server = await startTestServer(
+      createAuthHandler({
+        env: {
+          APP_BASE_URL: "http://192.168.1.24",
+          GOOGLE_CLIENT_ID: "google-client",
+          GOOGLE_CLIENT_SECRET: "google-secret",
+          PUBLIC_PATH: "trendmarket"
+        },
+        store: memoryStore(),
+        oauthStateFactory: () => "oauth-state",
+        tokenFactory: () => "session-token",
+        fetch: async (url) => {
+          if (String(url).includes("oauth2.googleapis.com/token")) {
+            return Response.json({ access_token: "access-token" });
+          }
+          return Response.json({
+            id: "google-user",
+            name: "Google Player",
+            picture: "https://avatar.example/p.png",
+            email: "google@example.test"
+          });
+        }
+      })
+    );
+    cleanups.push(server.close);
+
+    const start = await fetch(`${server.url}/api/auth/google/start`, { redirect: "manual" });
+    const callback = await fetch(`${server.url}/api/auth/google/callback?code=abc&state=oauth-state`, {
+      redirect: "manual",
+      headers: { Cookie: start.headers.get("set-cookie") ?? "" }
+    });
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("location")).toBe("/trendmarket/");
+  });
 });

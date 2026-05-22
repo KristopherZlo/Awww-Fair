@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { appAssetUrl } from "./assetUrl";
 
 describe("appAssetUrl", () => {
-  it("uses root-relative asset URLs when Vite builds with relative base", () => {
-    expect(appAssetUrl("product-atlas.png", "./")).toBe("/assets/product-atlas.png");
+  it("uses document-relative asset URLs when Vite builds with relative base", () => {
+    expect(appAssetUrl("product-atlas.png", "./")).toBe("assets/product-atlas.png");
+    expect(appAssetUrl("sounds/money.wav", ".")).toBe("assets/sounds/money.wav");
   });
 
   it("keeps configured absolute base paths for subdirectory deployments", () => {

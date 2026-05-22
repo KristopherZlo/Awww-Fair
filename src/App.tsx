@@ -2,6 +2,7 @@ import {
   BadgeHelp,
   Bot,
   ChevronLeft,
+  ChevronRight,
   Check,
   Coins,
   Coffee,
@@ -22,6 +23,7 @@ import {
   Play,
   RefreshCw,
   ScrollText,
+  Search,
   ShoppingBasket,
   Settings,
   SkipForward,
@@ -50,12 +52,14 @@ import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClie
 import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
 import {
   cancelRankedQueue,
+  disconnectRankedMatch,
   joinRankedQueue,
   loadLeaderboard,
   loadRankedEvents,
   loadMatchHistory,
   loadMyRating,
   loadRankedStatus,
+  reconnectRankedMatch,
   settleRankedMatch,
   type LeaderboardEntry,
   type PlayerRating,
@@ -189,6 +193,7 @@ const MUSIC_FADE_MS = 1000;
 const MUSIC_VOLUME_DUCK_MS = 1000;
 const SOUND_ASSETS = {
   defeat: assetUrl("sounds/defeat.wav"),
+  matchFound: assetUrl("sounds/matchfound.mp3"),
   money: assetUrl("sounds/money.wav"),
   victory: assetUrl("sounds/victory.wav")
 } as const;
@@ -197,8 +202,10 @@ const RANKED_POLL_MS = 900;
 const LOBBY_SILENT_RETRY_DELAYS_MS = [1000, 2000, 5000] as const;
 const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
+const MATCH_FOUND_FALLBACK_MS = 3200;
 const UPGRADE_CHOICE_SECONDS = 20;
 type MainMenuTab = "play" | "profile" | "rating" | "dlc";
+type PlayModeTab = "ranked" | "story" | "hotseat" | "training" | "custom";
 type RankedSession = {
   matchId: string;
   playerAId: string;
@@ -207,6 +214,8 @@ type RankedSession = {
   lastEventSequence: number;
   settled: boolean;
 };
+const MATCH_FOUND_LICENSE =
+  "Piano Notification 5b by FoolBoyMedia -- https://freesound.org/s/352654/ -- License: Attribution NonCommercial 4.0 used as match-found sound";
 
 function rankedHistoryResultLabel(match: RankedMatchHistoryEntry, playerId: string): string {
   if (!match.winnerId) return "Ничья";
@@ -226,6 +235,12 @@ function rankedStatusText(status: RankedQueueStatus["status"]): string {
   if (status === "matched") return "Матч найден.";
   if (status === "waiting") return "Вы в очереди рейтинга.";
   return "";
+}
+
+function formatRankedQueueTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
 const CUTSCENE_FRAMES = [
@@ -303,6 +318,10 @@ function viewerIdFor(lobby: LobbySession | null, aiPlayerId: PlayerId | null): P
 
 function rankedSeatFor(match: Pick<RankedMatch, "playerAId" | "playerBId">, userId: string | undefined): PlayerId {
   return match.playerBId === userId ? "B" : "A";
+}
+
+function localRankedDisconnectedAt(match: Pick<RankedMatch, "playerAId" | "playerBId" | "playerADisconnectedAt" | "playerBDisconnectedAt">, userId: string | undefined): number | null {
+  return rankedSeatFor(match, userId) === "A" ? match.playerADisconnectedAt : match.playerBDisconnectedAt;
 }
 
 function rankedSequenceOf(event: unknown): number | null {
@@ -593,6 +612,32 @@ function resetPlayerForPlanning(player: PlayerState): PlayerState {
   };
 }
 
+function GoogleGIcon() {
+  return (
+    <span className="oauth-brand-icon oauth-google-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path fill="#4285F4" d="M22.6 12.23c0-.78-.07-1.53-.2-2.23H12v4.26h5.94c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.58c2.09-1.93 3.29-4.78 3.29-8.11z" />
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.58-2.77c-.99.66-2.26 1.06-3.7 1.06-2.86 0-5.29-1.93-6.16-4.53H2.15v2.86C3.96 20.55 7.68 23 12 23z" />
+        <path fill="#FBBC05" d="M5.84 14.1A6.61 6.61 0 0 1 5.5 12c0-.73.12-1.44.34-2.1V7.04H2.15A10.96 10.96 0 0 0 1 12c0 1.77.42 3.45 1.15 4.96l3.69-2.86z" />
+        <path fill="#EA4335" d="M12 5.37c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.68 1 3.96 3.45 2.15 7.04L5.84 9.9C6.71 7.3 9.14 5.37 12 5.37z" />
+      </svg>
+    </span>
+  );
+}
+
+function DiscordIcon() {
+  return (
+    <span className="oauth-brand-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path
+          fill="currentColor"
+          d="M19.73 5.09A18.1 18.1 0 0 0 15.19 3.7c-.2.35-.42.82-.58 1.2a16.8 16.8 0 0 0-5.04 0c-.16-.38-.39-.85-.59-1.2a18.05 18.05 0 0 0-4.54 1.39C1.56 9.36.78 13.52 1.17 17.62a18.2 18.2 0 0 0 5.57 2.81c.45-.61.85-1.26 1.19-1.96-.65-.24-1.27-.54-1.85-.89.16-.12.31-.24.46-.37a13 13 0 0 0 10.92 0c.15.13.3.25.46.37-.59.35-1.21.65-1.86.89.34.7.74 1.35 1.19 1.96a18.16 18.16 0 0 0 5.58-2.81c.46-4.75-.78-8.88-3.1-12.53zM8.68 15.1c-1.08 0-1.96-.99-1.96-2.2s.86-2.2 1.96-2.2c1.1 0 1.98.99 1.96 2.2 0 1.21-.87 2.2-1.96 2.2zm6.64 0c-1.08 0-1.96-.99-1.96-2.2s.86-2.2 1.96-2.2c1.1 0 1.98.99 1.96 2.2 0 1.21-.86 2.2-1.96 2.2z"
+        />
+      </svg>
+    </span>
+  );
+}
+
 export default function App() {
   const [initialSession] = useState<SavedSession | null>(() => loadSavedSession());
   const [state, setState] = useState<GameState>(() => initialSession?.state ?? buildInitialState(true, initialSession?.audioSettings.turnTimeSeconds ?? DEFAULT_TURN_TIME_SECONDS));
@@ -603,6 +648,7 @@ export default function App() {
   const [showRules, setShowRules] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showLicenses, setShowLicenses] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [showAiDifficulty, setShowAiDifficulty] = useState(false);
   const [lobby, setLobby] = useState<LobbySession | null>(() => initialSession?.lobby ?? null);
@@ -610,14 +656,22 @@ export default function App() {
   const [lobbyError, setLobbyError] = useState("");
   const [syncStatus, setSyncStatus] = useState<"local" | "online" | "syncing" | "offline">(() => (initialSession?.lobby ? "online" : "local"));
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [playModeTab, setPlayModeTab] = useState<PlayModeTab>("ranked");
   const [authError, setAuthError] = useState("");
-  const [devLoginName, setDevLoginName] = useState("Player");
+  const [devLoginName, setDevLoginName] = useState("player");
   const [profileRating, setProfileRating] = useState<PlayerRating | null>(null);
   const [matchHistory, setMatchHistory] = useState<RankedMatchHistoryEntry[]>([]);
   const [matchHistoryError, setMatchHistoryError] = useState("");
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardPage, setLeaderboardPage] = useState(1);
+  const [leaderboardSearch, setLeaderboardSearch] = useState("");
+  const [leaderboardTotal, setLeaderboardTotal] = useState(0);
+  const [leaderboardTotalPages, setLeaderboardTotalPages] = useState(1);
   const [leaderboardError, setLeaderboardError] = useState("");
   const [rankedQueueState, setRankedQueueState] = useState<RankedQueueStatus["status"]>("idle");
+  const [rankedQueueStartedAt, setRankedQueueStartedAt] = useState<number | null>(null);
+  const [rankedQueueSeconds, setRankedQueueSeconds] = useState(0);
+  const [rankedCooldownSeconds, setRankedCooldownSeconds] = useState(0);
   const [rankedStatus, setRankedStatus] = useState("");
   const [rankedSession, setRankedSession] = useState<RankedSession | null>(null);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
@@ -652,9 +706,29 @@ export default function App() {
   const salePanelId = useId();
   const rankedSessionRef = useRef<RankedSession | null>(null);
   const pendingRankedActionKeysRef = useRef<Set<string>>(new Set());
+  const pendingRankedMatchIdRef = useRef<string | null>(null);
+  const matchFoundTimerRef = useRef<number | null>(null);
+
+  function setRankedQueue(status: RankedQueueStatus["status"]) {
+    setRankedQueueState(status);
+    if (status === "waiting") {
+      setRankedQueueStartedAt((current) => current ?? Date.now());
+      return;
+    }
+    setRankedQueueStartedAt(null);
+    setRankedQueueSeconds(0);
+  }
 
   useEffect(() => {
     preloadImages(CARD_PRELOAD_IMAGES);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (matchFoundTimerRef.current !== null) {
+        window.clearTimeout(matchFoundTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -673,7 +747,7 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) {
-      setRankedQueueState("idle");
+      setRankedQueue("idle");
       setRankedStatus("");
       return;
     }
@@ -682,22 +756,104 @@ export default function App() {
       .then((result) => {
         if (!disposed) {
           if (result.status === "matched") {
-            startRankedMatch(result.match);
+            if (localRankedDisconnectedAt(result.match, currentUser.id) !== null) {
+              void reconnectRankedMatch(result.match.id)
+                .then((reconnected) => {
+                  if (!disposed) {
+                    startRankedMatch(reconnected.match);
+                  }
+                })
+                .catch((error) => {
+                  if (!disposed) {
+                    setRankedQueue("idle");
+                    setRankedStatus(error instanceof Error ? error.message : "Р РµР№С‚РёРЅРі РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ.");
+                  }
+                });
+            } else {
+              startRankedMatch(result.match);
+            }
           } else {
-            setRankedQueueState(result.status);
-            setRankedStatus(rankedStatusText(result.status));
+            setRankedQueue(result.status);
+            setRankedStatus("");
           }
         }
       })
       .catch(() => {
         if (!disposed) {
-          setRankedQueueState("idle");
+          setRankedQueue("idle");
         }
       });
     return () => {
       disposed = true;
     };
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    const cooldownUntil = profileRating?.penalty?.cooldownUntil;
+    if (!cooldownUntil) {
+      setRankedCooldownSeconds(0);
+      return;
+    }
+
+    const updateCooldown = () => {
+      setRankedCooldownSeconds(Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000)));
+    };
+
+    updateCooldown();
+    const timer = window.setInterval(updateCooldown, 1000);
+    return () => window.clearInterval(timer);
+  }, [profileRating?.penalty?.cooldownUntil]);
+
+  useEffect(() => {
+    if (rankedQueueState !== "waiting" || rankedQueueStartedAt === null) {
+      return;
+    }
+
+    const updateElapsed = () => {
+      setRankedQueueSeconds(Math.max(0, Math.floor((Date.now() - rankedQueueStartedAt) / 1000)));
+    };
+
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [rankedQueueState, rankedQueueStartedAt]);
+
+  useEffect(() => {
+    if (!currentUser || rankedQueueState !== "waiting") {
+      return;
+    }
+    let disposed = false;
+    let timer: number | null = null;
+
+    async function pollRankedStatus() {
+      try {
+        const result = await loadRankedStatus();
+        if (disposed) {
+          return;
+        }
+        if (result.status === "matched") {
+          prepareRankedMatch(result.match);
+          return;
+        }
+        setRankedQueue(result.status);
+      } catch (error) {
+        if (!disposed) {
+          setRankedStatus(error instanceof Error ? error.message : "Р РµР№С‚РёРЅРі РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ.");
+        }
+      }
+      if (!disposed) {
+        timer = window.setTimeout(() => void pollRankedStatus(), RANKED_POLL_MS);
+      }
+    }
+
+    timer = window.setTimeout(() => void pollRankedStatus(), RANKED_POLL_MS);
+    return () => {
+      disposed = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [currentUser?.id, rankedQueueState]);
 
   useEffect(() => {
     rankedSessionRef.current = rankedSession;
@@ -785,10 +941,12 @@ export default function App() {
       return;
     }
     let disposed = false;
-    loadLeaderboard()
-      .then((entries) => {
+    loadLeaderboard({ page: leaderboardPage, pageSize: 10, search: leaderboardSearch })
+      .then((result) => {
         if (!disposed) {
-          setLeaderboard(entries);
+          setLeaderboard(result.leaderboard);
+          setLeaderboardTotal(result.total);
+          setLeaderboardTotalPages(result.totalPages);
           setLeaderboardError("");
         }
       })
@@ -800,7 +958,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [menuTab]);
+  }, [leaderboardPage, leaderboardSearch, menuTab]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -837,10 +995,10 @@ export default function App() {
   }, [currentUser?.id]);
 
   useEffect(() => {
-    if (state.phase === "menu" && menuView === "levels" && campaignProgress.highestUnlockedLevel === 1) {
+    if (state.phase === "menu" && playModeTab === "story" && campaignProgress.highestUnlockedLevel === 1) {
       preloadImage(CUTSCENE_FRAMES[0]?.image);
     }
-  }, [campaignProgress.highestUnlockedLevel, menuView, state.phase]);
+  }, [campaignProgress.highestUnlockedLevel, playModeTab, state.phase]);
 
   useEffect(() => {
     if (!cutscene) {
@@ -1135,6 +1293,10 @@ export default function App() {
       if (session) {
         sendLobbyLeave(session);
         clearSavedSession();
+      }
+      const activeRankedSession = rankedSessionRef.current;
+      if (activeRankedSession) {
+        sendRankedDisconnect(activeRankedSession, true);
       }
     };
 
@@ -1582,6 +1744,20 @@ export default function App() {
     }).catch(() => undefined);
   }
 
+  function sendRankedDisconnect(session: RankedSession, keepalive = false) {
+    if (keepalive) {
+      void fetch("/api/ranked/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId: session.matchId }),
+        keepalive: true
+      }).catch(() => undefined);
+      return;
+    }
+
+    void disconnectRankedMatch(session.matchId).catch(() => undefined);
+  }
+
   useEffect(() => {
     if (!lobby) {
       return;
@@ -1705,43 +1881,129 @@ export default function App() {
     }
   }
 
+  function playSoundAssetUntilDone(src: string, boost = 1, fallback?: SoundEffectId): Promise<void> {
+    const settings = audioSettingsRef.current;
+    if (!settings.effectsEnabled || typeof Audio === "undefined") {
+      if (fallback) {
+        playEffect(fallback);
+      }
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      const audio = new Audio(src);
+      audio.preload = "auto";
+      audio.volume = clampVolume(settings.effectsVolume);
+      let settled = false;
+      let context: AudioContext | null = null;
+      const cleanup = () => {
+        audio.removeEventListener("ended", finish);
+        audio.removeEventListener("error", finish);
+        if (matchFoundTimerRef.current !== null) {
+          window.clearTimeout(matchFoundTimerRef.current);
+          matchFoundTimerRef.current = null;
+        }
+        if (context) {
+          void context.close().catch(() => undefined);
+        }
+      };
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      audio.addEventListener("ended", finish);
+      audio.addEventListener("error", finish);
+
+      if (typeof window !== "undefined" && audio instanceof HTMLMediaElement) {
+        const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
+        if (AudioContextClass) {
+          try {
+            context = new AudioContextClass();
+            const source = context.createMediaElementSource(audio);
+            const gain = context.createGain();
+            gain.gain.value = Math.max(0, settings.effectsVolume * boost);
+            source.connect(gain);
+            gain.connect(context.destination);
+            audio.volume = 1;
+          } catch {
+            context = null;
+            audio.volume = clampVolume(settings.effectsVolume);
+          }
+        }
+      }
+
+      matchFoundTimerRef.current = window.setTimeout(finish, MATCH_FOUND_FALLBACK_MS);
+      try {
+        const playback = audio.play();
+        if (playback && typeof playback.catch === "function") {
+          void playback.catch(() => {
+            if (fallback) {
+              playEffect(fallback);
+            }
+            finish();
+          });
+        }
+      } catch {
+        if (fallback) {
+          playEffect(fallback);
+        }
+        finish();
+      }
+    });
+  }
+
   async function signOut() {
     await logout().catch(() => undefined);
     setCurrentUser(null);
-    setRankedQueueState("idle");
+    setRankedQueue("idle");
     setRankedStatus("");
     rankedSessionRef.current = null;
+    pendingRankedMatchIdRef.current = null;
     pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
   }
 
   async function joinRanked() {
+    if (rankedQueueState === "waiting") {
+      await cancelRanked();
+      return;
+    }
+    if (rankedQueueState === "matched") {
+      return;
+    }
     if (!currentUser) {
       setMenuTab("profile");
       setAuthError("Для рейтинга нужен аккаунт.");
       return;
     }
 
-    setRankedStatus("Ищем соперника...");
+    setRankedStatus("");
     try {
       const result = await joinRankedQueue();
       if (result.status === "matched") {
-        startRankedMatch(result.match);
+        prepareRankedMatch(result.match);
       } else {
-        setRankedQueueState(result.status);
-        setRankedStatus(rankedStatusText(result.status));
+        setRankedQueue(result.status);
+        setRankedStatus("");
       }
     } catch (error) {
       setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
+      void loadMyRating().then(setProfileRating).catch(() => undefined);
     }
   }
 
   async function cancelRanked() {
-    setRankedStatus("Отменяем очередь...");
+    setRankedStatus("");
     try {
       await cancelRankedQueue();
-      setRankedQueueState("idle");
-      setRankedStatus("Очередь рейтинга отменена.");
+      setRankedQueue("idle");
+      setRankedStatus("");
+      pendingRankedMatchIdRef.current = null;
     } catch (error) {
       setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
     }
@@ -1782,6 +2044,22 @@ export default function App() {
     recordRankedActionAt(state, eventType, payload);
   }
 
+  function prepareRankedMatch(match: RankedMatch) {
+    if (pendingRankedMatchIdRef.current === match.id || rankedSessionRef.current?.matchId === match.id) {
+      return;
+    }
+    pendingRankedMatchIdRef.current = match.id;
+    setRankedQueue("matched");
+    setRankedStatus("");
+    void playSoundAssetUntilDone(SOUND_ASSETS.matchFound, 1.35, "ready-confirm").then(() => {
+      if (pendingRankedMatchIdRef.current !== match.id) {
+        return;
+      }
+      pendingRankedMatchIdRef.current = null;
+      startRankedMatch(match);
+    });
+  }
+
   function startRankedMatch(match: RankedMatch) {
     const session: RankedSession = {
       matchId: match.id,
@@ -1796,8 +2074,8 @@ export default function App() {
     setLobby(null);
     setLobbyError("");
     setSyncStatus("online");
-    setRankedQueueState("matched");
-    setRankedStatus("Матч найден.");
+    setRankedQueue("matched");
+    setRankedStatus("");
     pendingRankedActionKeysRef.current.clear();
     rankedSessionRef.current = session;
     setRankedSession(session);
@@ -1989,6 +2267,10 @@ export default function App() {
     if (session) {
       sendLobbyLeave(session);
     }
+    const activeRankedSession = rankedSessionRef.current;
+    if (activeRankedSession) {
+      sendRankedDisconnect(activeRankedSession);
+    }
     skipNextSessionSaveRef.current = true;
     clearSavedSession();
     setShowSettings(false);
@@ -2002,7 +2284,10 @@ export default function App() {
     setSyncStatus("local");
     setState((current) => buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds));
     lobbyRef.current = null;
+    rankedSessionRef.current = null;
+    pendingRankedActionKeysRef.current.clear();
     setLobby(null);
+    setRankedSession(null);
     playEffect("ui-click");
   }
 
@@ -3212,6 +3497,30 @@ export default function App() {
   const showUpgradeTimer = state.phase === "upgrade" && showTurnTimer;
   const planningTimerText = ui(language, opponentPlanningTurn ? "opponentTurnTimeShort" : "turnTimeShort", { time: formatTurnTime(turnSecondsLeft) });
   const upgradeTimerText = ui(language, localUpgradeTurn ? "upgradeTimeShort" : "opponentTurnTimeShort", { time: formatTurnTime(turnSecondsLeft) });
+  const rankedQueueTime = formatRankedQueueTime(rankedQueueSeconds);
+  const rankedPenalty = profileRating?.penalty;
+  const rankedQueueBlocked = Boolean(rankedPenalty?.queueBlocked && rankedCooldownSeconds > 0);
+  const rankedCooldownTime = formatRankedQueueTime(rankedCooldownSeconds);
+  const rankedWarningText =
+    rankedPenalty && rankedPenalty.leaveWarnings > 0
+      ? "Вы покинули рейтинговый матч. Повторные выходы приведут к временной блокировке ranked."
+      : "";
+  const rankedMmrText = currentUser ? (profileRating ? profileRating.mmr ?? "?" : "...") : "-";
+  const rankedGamesText = profileRating ? (profileRating.isCalibrating ? "?" : String(profileRating.rankedGames)) : currentUser ? "..." : "0";
+  const rankedRecordText = profileRating ? (profileRating.isCalibrating ? "?-?" : `${profileRating.wins}-${profileRating.losses}`) : currentUser ? "...-..." : "0-0";
+  const rankedWinRateText =
+    profileRating && !profileRating.isCalibrating && profileRating.rankedGames > 0 ? `${Math.round((profileRating.wins / profileRating.rankedGames) * 100)}%` : "-";
+  const menuUserMmrText = currentUser ? (profileRating ? `${profileRating.mmr ?? "?"} MMR` : "MMR ...") : "Войти";
+  const rankedActionLabel = rankedQueueBlocked ? "Доступно через" : rankedQueueState === "waiting" ? "Отмена" : rankedQueueState === "matched" ? "Матч найден" : "Играть";
+  const rankedButtonTime = rankedQueueBlocked ? rankedCooldownTime : rankedQueueState === "waiting" ? rankedQueueTime : "";
+  const leaderboardStartIndex = (leaderboardPage - 1) * 10;
+  const playTabs: Array<{ id: PlayModeTab; label: string }> = [
+    { id: "ranked", label: "Рейтинг 1vs1" },
+    { id: "story", label: ui(language, "campaignMode") },
+    { id: "hotseat", label: ui(language, "twoPlayers") },
+    { id: "training", label: ui(language, "aiTraining") },
+    { id: "custom", label: ui(language, "onlineGame") }
+  ];
 
   function toggleSaleResultKey(key: string) {
     setExpandedSaleResultKeys((current) => {
@@ -3240,6 +3549,35 @@ export default function App() {
     );
   }
 
+  function renderCampaignLevelRoad(className = "level-road") {
+    return (
+      <div className={className} aria-label={language === "en" ? "Level selection" : "Выбор уровня"}>
+        {CAMPAIGN_LEVELS.map((level) => {
+          const unlocked = isLevelUnlocked(campaignProgress, level.level);
+          const completed = campaignProgress.completedLevels.includes(level.level);
+          return (
+            <button
+              key={level.level}
+              className={`level-node ${unlocked ? "unlocked" : "locked"} ${completed ? "completed" : ""}`}
+              aria-label={`${ui(language, "level")} ${level.level}`}
+              disabled={!unlocked}
+              onClick={() => requestCampaignLevel(level)}
+            >
+              <span className="level-node-icon">{completed ? <Check size={16} /> : unlocked ? <Flag size={16} /> : <Lock size={16} />}</span>
+              <strong>
+                {ui(language, "level")} {level.level}
+              </strong>
+              <span>
+                {language === "en" ? level.opponentNameEn : level.opponentName} · {campaignLevelTitle(language, level)}
+              </span>
+              <small>{campaignLevelDistrict(language, level)}</small>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <main
       className={`app-shell phase-${state.phase}`}
@@ -3252,138 +3590,194 @@ export default function App() {
       {state.phase === "menu" && (
         <section className="menu-screen">
           {menuView === "main" ? (
-            <div className="menu-box">
-              <div className="menu-intro">
-                <h1>{GAME_TITLE}</h1>
-                <p>{ui(language, "menuSubtitle")}</p>
-              </div>
+            <div className="menu-box menu-shell">
+              <header className="menu-header">
+                <div className="menu-brand">
+                  <h1>{GAME_TITLE}</h1>
+                  <p>{ui(language, "menuSubtitle")}</p>
+                </div>
+                <button className="menu-account" type="button" onClick={() => setMenuTab("profile")}>
+                  <span className="menu-account-avatar">{currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={20} />}</span>
+                  <span>
+                    <strong>{currentUser?.displayName ?? "Гость"}</strong>
+                    <small>{menuUserMmrText}</small>
+                  </span>
+                </button>
+              </header>
 
               <div className="menu-tabs" role="tablist" aria-label="Главное меню">
-                <button className={menuTab === "play" ? "active" : ""} onClick={() => setMenuTab("play")}>
+                <button type="button" role="tab" aria-selected={menuTab === "play"} className={menuTab === "play" ? "active" : ""} onClick={() => setMenuTab("play")}>
                   <Play size={16} /> Играть
                 </button>
-                <button className={menuTab === "profile" ? "active" : ""} onClick={() => setMenuTab("profile")}>
+                <button type="button" role="tab" aria-selected={menuTab === "profile"} className={menuTab === "profile" ? "active" : ""} onClick={() => setMenuTab("profile")}>
                   <User size={16} /> Профиль
                 </button>
-                <button className={menuTab === "rating" ? "active" : ""} onClick={() => setMenuTab("rating")}>
-                  <Trophy size={16} /> Рейтинг
+                <button type="button" role="tab" aria-selected={menuTab === "rating"} className={menuTab === "rating" ? "active" : ""} onClick={() => setMenuTab("rating")}>
+                  <Trophy size={16} /> Лидерборд
                 </button>
-                <button className={menuTab === "dlc" ? "active" : ""} onClick={() => setMenuTab("dlc")}>
+                <button type="button" role="tab" aria-selected={menuTab === "dlc"} className={menuTab === "dlc" ? "active" : ""} onClick={() => setMenuTab("dlc")}>
                   <ShoppingBasket size={16} /> DLC
                 </button>
               </div>
 
               {menuTab === "play" && (
-              <div className="menu-sections">
-                <section className="menu-section" aria-labelledby="play-mode-title">
-                  <h2 id="play-mode-title">{ui(language, "chooseMode")}</h2>
-                  <div className="menu-primary-grid">
-                    <button className="primary-action" onClick={() => setMenuView("levels")}>
-                      <MapIcon size={18} /> {ui(language, "campaignMode")}
-                    </button>
-                    <button className="primary-action" onClick={startGame}>
-                      <Play size={18} /> {ui(language, "twoPlayers")}
-                    </button>
-                    <button
-                      className="primary-action"
-                      onClick={() => {
-                        playEffect("ui-click");
-                        setShowAiDifficulty(true);
-                      }}
-                    >
-                      <Bot size={18} /> {ui(language, "versusAi")}
-                    </button>
-                    <button className="primary-action" onClick={() => startAiGame("training")}>
-                      <Bot size={18} /> {ui(language, "aiTraining")}
-                    </button>
-                  </div>
-                  <div className="ranked-queue-row">
-                    <button className="ranked-action" disabled={!currentUser || rankedQueueState === "waiting"} onClick={() => void joinRanked()}>
-                      <Trophy size={18} /> {rankedQueueState === "waiting" ? "В очереди..." : "Рейтинг 1vs1"}
-                    </button>
-                    {rankedQueueState === "waiting" && (
-                      <button className="ranked-cancel" onClick={() => void cancelRanked()}>
-                        <X size={18} /> Отмена
+                <>
+                  <div className="play-tabs" role="tablist" aria-label={language === "en" ? "Play modes" : "Режимы игры"}>
+                    {playTabs.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={playModeTab === tab.id}
+                        className={playModeTab === tab.id ? "active" : ""}
+                        onClick={() => setPlayModeTab(tab.id)}
+                      >
+                        {tab.label}
                       </button>
+                    ))}
+                  </div>
+
+                  <div className="play-layout">
+                    {playModeTab === "ranked" && (
+                      <section className={`ranked-match-card${rankedQueueState === "waiting" ? " is-searching" : ""}`} aria-labelledby="ranked-title">
+                        <div className="ranked-card-top">
+                          <div>
+                            <h2 id="ranked-title">Рейтинг 1vs1</h2>
+                            <p>Матч против живого соперника с записью результата в MMR.</p>
+                          </div>
+                          <div className="ranked-mmr-card">
+                            <span>MMR</span>
+                            <strong>{rankedMmrText}</strong>
+                          </div>
+                        </div>
+
+                        <div className="ranked-stats">
+                          <div>
+                            <span>Матчи</span>
+                            <strong>{rankedGamesText}</strong>
+                          </div>
+                          <div>
+                            <span>Счет</span>
+                            <strong>{rankedRecordText}</strong>
+                          </div>
+                          <div>
+                            <span>Победы</span>
+                            <strong>{rankedWinRateText}</strong>
+                          </div>
+                        </div>
+
+                        <div className="play-start-action">
+                          {!currentUser && <p className="menu-note">Для рейтинга нужен вход в аккаунт.</p>}
+                          {rankedWarningText && <p className="menu-note ranked-warning">{rankedWarningText}</p>}
+                          {rankedStatus && <p className="menu-note">{rankedStatus}</p>}
+                          <button className="ranked-action ranked-play-button play-start-button" disabled={rankedQueueState === "matched" || rankedQueueBlocked} onClick={() => void joinRanked()}>
+                            <span className="ranked-button-label">
+                              {rankedQueueBlocked ? <Lock size={18} /> : rankedQueueState === "waiting" ? <X size={18} /> : <Play size={18} />} {rankedActionLabel}
+                            </span>
+                            {rankedButtonTime && <span className="ranked-button-time">{rankedButtonTime}</span>}
+                          </button>
+                        </div>
+                      </section>
+                    )}
+
+                    {playModeTab === "story" && (
+                      <section className="menu-panel play-mode-card story-mode-card" aria-labelledby="story-mode-title">
+                        <div className="play-mode-copy">
+                          <h2 id="story-mode-title">{ui(language, "campaignMode")}</h2>
+                          <p>Проходите уровни ярмарки, открывайте новых соперников и постепенно собирайте полный набор правил.</p>
+                          <span>Открыто уровней: {campaignProgress.highestUnlockedLevel} / {CAMPAIGN_LEVELS.length}</span>
+                        </div>
+                        {renderCampaignLevelRoad("level-road play-level-road")}
+                      </section>
+                    )}
+
+                    {playModeTab === "hotseat" && (
+                      <section className="menu-panel play-mode-card" aria-labelledby="hotseat-mode-title">
+                        <div className="play-mode-copy">
+                          <h2 id="hotseat-mode-title">{ui(language, "twoPlayers")}</h2>
+                          <p>Локальная партия на одном устройстве: игроки ходят по очереди и видят общий стол.</p>
+                        </div>
+                        <div className="play-start-action">
+                          <button className="primary-action play-start-button" onClick={startGame}>
+                            <Play size={18} /> Играть
+                          </button>
+                        </div>
+                      </section>
+                    )}
+
+                    {playModeTab === "training" && (
+                      <section className="menu-panel play-mode-card" aria-labelledby="training-mode-title">
+                        <div className="play-mode-copy">
+                          <h2 id="training-mode-title">{ui(language, "aiTraining")}</h2>
+                          <p>Партия против слабого ИИ с подсказками тренера и скрытой проверкой правильных ходов.</p>
+                        </div>
+                        <div className="play-start-action">
+                          <button className="primary-action play-start-button" onClick={() => startAiGame("training")}>
+                            <Bot size={18} /> Играть
+                          </button>
+                        </div>
+                      </section>
+                    )}
+
+                    {playModeTab === "custom" && (
+                      <section className="menu-panel play-mode-card" aria-labelledby="custom-mode-title">
+                        <div className="play-mode-copy">
+                          <h2 id="custom-mode-title">{ui(language, "onlineGame")}</h2>
+                          <p>Для новой онлайн-партии создайте стол. Код появится после создания, и его можно будет отправить второму игроку.</p>
+                          <div className="custom-table-actions">
+                            <div className="custom-table-create">
+                              <h3>Создать новый стол</h3>
+                              <p>Код не нужен: стол создаётся сразу, а второй игрок подключится по выданному коду.</p>
+                              <button
+                                className="primary-action play-start-button"
+                                onClick={() => {
+                                  playEffect("ui-click");
+                                  void createLobby();
+                                }}
+                              >
+                                <PackagePlus size={18} /> Создать стол
+                              </button>
+                            </div>
+                            <div className="custom-table-join">
+                              <h3>Войти по коду</h3>
+                              <div className="join-lobby">
+                                <label className="field-label">
+                                  <span>{ui(language, "lobbyCodePlaceholder")}</span>
+                                  <input
+                                    className="menu-field"
+                                    value={joinCode}
+                                    onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
+                                    placeholder="ABCD12"
+                                    maxLength={6}
+                                  />
+                                </label>
+                                <button
+                                  onClick={() => {
+                                    playEffect("ui-click");
+                                    void joinLobby();
+                                  }}
+                                >
+                                  <LogIn size={16} /> {ui(language, "joinTable")}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </section>
                     )}
                   </div>
-                  {!currentUser && <p className="menu-note">Для рейтинга нужен вход в аккаунт.</p>}
-                  {rankedStatus && <p className="menu-note">{rankedStatus}</p>}
-                </section>
-
-                <section className="menu-section" aria-labelledby="online-mode-title">
-                  <h2 id="online-mode-title">{ui(language, "onlineGame")}</h2>
-                  <div className="menu-online-row">
-                    <button
-                      className="primary-action"
-                      onClick={() => {
-                        playEffect("ui-click");
-                        void createLobby();
-                      }}
-                    >
-                      <PackagePlus size={18} /> {ui(language, "createTable")}
-                    </button>
-                    <div className="join-lobby">
-                      <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder={ui(language, "lobbyCodePlaceholder")} maxLength={6} />
-                      <button
-                        onClick={() => {
-                          playEffect("ui-click");
-                          void joinLobby();
-                        }}
-                      >
-                        {ui(language, "joinTable")}
-                      </button>
-                    </div>
-                  </div>
-                </section>
-
-                <div className="menu-footer-actions">
-                  <button
-                    onClick={() => {
-                      playEffect("ui-click");
-                      setShowRules(true);
-                    }}
-                  >
-                    <BadgeHelp size={18} /> {ui(language, "rules")}
-                  </button>
-                  <button
-                    onClick={() => {
-                      playEffect("ui-click");
-                      setShowSettings(true);
-                    }}
-                  >
-                    <Settings size={18} /> {ui(language, "settings")}
-                  </button>
-                  <button
-                    onClick={() => {
-                      playEffect("ui-click");
-                      setShowAbout(true);
-                    }}
-                  >
-                    <Info size={18} /> {ui(language, "about")}
-                  </button>
-                </div>
-
-                <div className="menu-support-actions" aria-label={ui(language, "supportProject")}>
-                  <a href="https://buymeacoffee.com/zl0yxp" target="_blank" rel="noreferrer">
-                    <Coffee size={18} /> Buy Me a Coffee
-                  </a>
-                  <a href="https://www.paypal.com/donate/?hosted_button_id=CY7A2U64JWY4W" target="_blank" rel="noreferrer">
-                    <HandCoins size={18} /> PayPal
-                  </a>
-                </div>
-              </div>
+                </>
               )}
 
               {menuTab === "profile" && (
-                <section className="menu-panel">
+                <section className="menu-panel profile-panel">
                   {currentUser ? (
                     <>
                       <div className="profile-card">
                         <div className="profile-avatar">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={24} />}</div>
                         <div>
                           <strong>{currentUser.displayName}</strong>
-                          <span>MMR: {profileRating?.mmr ?? "..."}</span>
+                          <span>MMR: {profileRating ? profileRating.mmr ?? "?" : "..."}</span>
                         </div>
                         <button onClick={() => void signOut()}>
                           <LogOut size={16} /> Выйти
@@ -3397,10 +3791,14 @@ export default function App() {
                           {matchHistory.map((match) => {
                             const change = rankedHistoryMmrChange(match, currentUser.id);
                             const opponentId = match.playerAId === currentUser.id ? match.playerBId : match.playerAId;
+                            const opponentName =
+                              match.playerAId === currentUser.id
+                                ? match.playerBDisplayName ?? opponentId
+                                : match.playerADisplayName ?? opponentId;
                             return (
                               <div className="match-history-row" key={match.matchId}>
                                 <strong>{rankedHistoryResultLabel(match, currentUser.id)}</strong>
-                                <span>vs {opponentId}</span>
+                                <span>vs {opponentName}</span>
                                 <span>
                                   {match.playerACoins}:{match.playerBCoins} монет
                                 </span>
@@ -3418,14 +3816,17 @@ export default function App() {
                       <p>Без входа нельзя играть в рейтинг и покупать будущие DLC.</p>
                       <div className="oauth-actions">
                         <a href="/api/auth/google/start">
-                          <LogIn size={16} /> Google
+                          <GoogleGIcon /> Google
                         </a>
                         <a href="/api/auth/discord/start">
-                          <LogIn size={16} /> Discord
+                          <DiscordIcon /> Discord
                         </a>
                       </div>
                       <div className="dev-login-row">
-                        <input value={devLoginName} onChange={(event) => setDevLoginName(event.target.value)} aria-label="Имя dev-login" />
+                        <label className="field-label">
+                          <span>Имя для тестового входа</span>
+                          <input className="menu-field" value={devLoginName} onChange={(event) => setDevLoginName(event.target.value)} />
+                        </label>
                         <button onClick={() => void submitDevLogin()}>Тестовый вход</button>
                       </div>
                       {authError && <p className="lobby-error">{authError}</p>}
@@ -3435,30 +3836,124 @@ export default function App() {
               )}
 
               {menuTab === "rating" && (
-                <section className="menu-panel">
-                  <h2>Рейтинг игроков</h2>
+                <section className="menu-panel leaderboard-panel" aria-labelledby="leaderboard-title">
+                  <div className="leaderboard-heading">
+                    <h2 id="leaderboard-title">Лидерборд</h2>
+                    <span>{leaderboardTotal} игроков</span>
+                  </div>
                   {leaderboardError && <p className="lobby-error">{leaderboardError}</p>}
-                  <div className="leaderboard-list">
-                    {leaderboard.map((entry, index) => (
-                      <div className="leaderboard-row" key={entry.playerId}>
-                        <span>{index + 1}</span>
-                        <strong>{entry.displayName}</strong>
-                        <span>{entry.mmr} MMR</span>
-                        <span>{entry.wins}-{entry.losses}</span>
-                      </div>
-                    ))}
-                    {!leaderboard.length && !leaderboardError && <p className="menu-note">Рейтинг пока пуст.</p>}
+                  <div className={`leaderboard-list${!leaderboard.length && !leaderboardError ? " is-empty" : ""}`}>
+                    {leaderboard.length > 0 && (
+                      <table className="leaderboard-table" aria-label="Лидерборд игроков">
+                        <thead>
+                          <tr>
+                            <th scope="col">#</th>
+                            <th scope="col">Игрок</th>
+                            <th scope="col">MMR</th>
+                            <th scope="col">Счет</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {leaderboard.map((entry, index) => (
+                            <tr key={entry.playerId}>
+                              <td>{leaderboardStartIndex + index + 1}</td>
+                              <td>
+                                <strong>{entry.displayName}</strong>
+                              </td>
+                              <td>{entry.mmr} MMR</td>
+                              <td>{entry.wins}-{entry.losses}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {!leaderboard.length && !leaderboardError && <p className="menu-note menu-empty-state leaderboard-empty-state">Лидерборд пока пуст.</p>}
+                  </div>
+                  <div className="leaderboard-controls">
+                    <div className="leaderboard-pagination">
+                      <button type="button" aria-label="Предыдущая страница" disabled={leaderboardPage <= 1} onClick={() => setLeaderboardPage((page) => Math.max(1, page - 1))}>
+                        <ChevronLeft size={16} /> Назад
+                      </button>
+                      <span>{leaderboardPage} / {leaderboardTotalPages}</span>
+                      <button type="button" disabled={leaderboardPage >= leaderboardTotalPages} onClick={() => setLeaderboardPage((page) => Math.min(leaderboardTotalPages, page + 1))}>
+                        Далее <ChevronRight size={16} />
+                      </button>
+                    </div>
+                    <label className="field-label leaderboard-search">
+                      <input
+                        className="menu-field"
+                        aria-label="Поиск"
+                        value={leaderboardSearch}
+                        onChange={(event) => {
+                          setLeaderboardSearch(event.target.value);
+                          setLeaderboardPage(1);
+                        }}
+                        placeholder="Player"
+                      />
+                      <Search className="leaderboard-search-icon" size={15} aria-hidden="true" />
+                    </label>
                   </div>
                 </section>
               )}
 
               {menuTab === "dlc" && (
-                <section className="menu-panel">
-                  <h2>DLC</h2>
-                  <p>В разработке. Позже здесь появятся наборы для покупки и продажи.</p>
-                  {!currentUser && <p className="menu-note">Для покупки будущих DLC понадобится вход в аккаунт.</p>}
+                <section className="menu-panel menu-empty-panel">
+                  <div className="menu-empty-state">
+                    <h2>DLC</h2>
+                    <p>В разработке. Позже здесь появятся DLC-наборы для покупки.</p>
+                    {!currentUser && <p className="menu-note">Для покупки будущих DLC понадобится вход в аккаунт.</p>}
+                  </div>
                 </section>
               )}
+
+              <div className="menu-utility-actions" aria-label="Дополнительно">
+                <div className="menu-utility-buttons">
+                  <button
+                    title={ui(language, "rules")}
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowRules(true);
+                    }}
+                  >
+                    <BadgeHelp size={17} /> {ui(language, "rules")}
+                  </button>
+                  <button
+                    title={ui(language, "settings")}
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowSettings(true);
+                    }}
+                  >
+                    <Settings size={17} /> {ui(language, "settings")}
+                  </button>
+                  <button
+                    title={ui(language, "about")}
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowAbout(true);
+                    }}
+                  >
+                    <Info size={17} /> {ui(language, "about")}
+                  </button>
+                  <button
+                    title="Лицензии"
+                    onClick={() => {
+                      playEffect("ui-click");
+                      setShowLicenses(true);
+                    }}
+                  >
+                    <ScrollText size={17} /> Лицензии
+                  </button>
+                </div>
+                <div className="menu-support-links" aria-label={ui(language, "supportProject")}>
+                  <a href="https://buymeacoffee.com/zl0yxp" target="_blank" rel="noreferrer">
+                    <Coffee size={17} /> Buy Me a Coffee
+                  </a>
+                  <a href="https://www.paypal.com/donate/?hosted_button_id=CY7A2U64JWY4W" target="_blank" rel="noreferrer">
+                    <HandCoins size={17} /> PayPal
+                  </a>
+                </div>
+              </div>
 
               {lobbyError && <p className="lobby-error">{lobbyError}</p>}
             </div>
@@ -3479,26 +3974,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="level-road" aria-label={language === "en" ? "Level selection" : "Выбор уровня"}>
-                {CAMPAIGN_LEVELS.map((level) => {
-                  const unlocked = isLevelUnlocked(campaignProgress, level.level);
-                  const completed = campaignProgress.completedLevels.includes(level.level);
-                  return (
-                    <button
-                      key={level.level}
-                      className={`level-node ${unlocked ? "unlocked" : "locked"} ${completed ? "completed" : ""}`}
-                      aria-label={`${ui(language, "level")} ${level.level}`}
-                      disabled={!unlocked}
-                      onClick={() => requestCampaignLevel(level)}
-                    >
-                      <span className="level-node-icon">{completed ? <Check size={16} /> : unlocked ? <Flag size={16} /> : <Lock size={16} />}</span>
-                      <strong>{ui(language, "level")} {level.level}</strong>
-                      <span>{language === "en" ? level.opponentNameEn : level.opponentName} · {campaignLevelTitle(language, level)}</span>
-                      <small>{campaignLevelDistrict(language, level)}</small>
-                    </button>
-                  );
-                })}
-              </div>
+              {renderCampaignLevelRoad()}
             </div>
           )}
         </section>
@@ -3564,7 +4040,7 @@ export default function App() {
           <div className={`sync-pill sync-${syncStatus}`}>
             {lobby ? `${ui(language, "lobbyCode").toLowerCase()} ${lobby.code} · ${ui(language, "you").toLowerCase()} ${lobby.playerId}` : ui(language, "localTable")} · {syncStatus}
           </div>
-          {aiPlayer && (
+          {aiPlayer && !rankedSession && (
             <div className="ai-score">
               <b>
                 <Bot size={16} /> {ui(language, "ai")}: {displayPlayerNameFor(aiPlayer, localPlayerId, language)}
@@ -4022,7 +4498,9 @@ export default function App() {
                 <button
                   onClick={() => {
                     exitToMenu();
-                    setMenuView("levels");
+                    setMenuView("main");
+                    setMenuTab("play");
+                    setPlayModeTab("story");
                   }}
                 >
                   <MapIcon size={18} /> {ui(language, "levelMap")}
@@ -4290,6 +4768,18 @@ export default function App() {
                 <Github size={18} /> KristopherZlo/Awww-Fair <ExternalLink size={14} />
               </a>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showLicenses && (
+        <div className="modal-backdrop">
+          <div className="about-modal license-modal" role="dialog" aria-label="Лицензии">
+            <button className="modal-close" aria-label={ui(language, "close")} onClick={() => setShowLicenses(false)}>
+              <X size={18} />
+            </button>
+            <h2>Лицензии</h2>
+            <p>{MATCH_FOUND_LICENSE}</p>
           </div>
         </div>
       )}

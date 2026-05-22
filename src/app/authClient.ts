@@ -1,3 +1,5 @@
+import { apiErrorMessage } from "./apiErrors";
+
 export interface AuthUser {
   id: string;
   displayName: string;
@@ -8,7 +10,7 @@ export interface AuthUser {
 async function parseAuthResponse(response: Response): Promise<{ user: AuthUser | null }> {
   const payload = (await response.json().catch(() => null)) as { user?: AuthUser | null; error?: string } | null;
   if (!response.ok) {
-    throw new Error(payload?.error ?? "Auth request failed.");
+    throw new Error(apiErrorMessage(response, payload?.error ?? "Auth request failed."));
   }
   return { user: payload?.user ?? null };
 }

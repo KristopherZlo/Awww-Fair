@@ -222,7 +222,7 @@ describe("App layout shell", () => {
   });
 
   async function playUntilGameEnd(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     for (let step = 0; step < 80; step += 1) {
       if (screen.queryByText(/Вы победили|Вы проиграли|Ничья/i)) {
@@ -249,6 +249,29 @@ describe("App layout shell", () => {
     }
 
     throw new Error("Game did not reach end screen");
+  }
+
+  async function startHotseatGame(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("tab", { name: /^2 игрока$/i }));
+    await user.click(screen.getByRole("button", { name: /^Играть$/i }));
+  }
+
+  async function startTrainingGame(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("tab", { name: /Обучение с ИИ/i }));
+    await user.click(screen.getByRole("button", { name: /^Играть$/i }));
+  }
+
+  function startHotseatGameWithFireEvent() {
+    fireEvent.click(screen.getByRole("tab", { name: /^2 игрока$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Играть$/i }));
+  }
+
+  async function openStoryLevelMap(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("tab", { name: /Сюжетный режим/i }));
+  }
+
+  function openStoryLevelMapWithFireEvent() {
+    fireEvent.click(screen.getByRole("tab", { name: /Сюжетный режим/i }));
   }
 
   it("marks the current game phase on the shell for responsive layout rules", () => {
@@ -298,8 +321,7 @@ describe("App layout shell", () => {
     expect(screen.getAllByText("Оппонент").length).toBeGreaterThan(0);
     expect(screen.queryByText(/Игрок A|Игрок B/i)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Против ИИ/i }));
-    await user.click(screen.getByRole("button", { name: /Зазывала/i }));
+    await startTrainingGame(user);
 
     expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
     expect(screen.queryByText(/ИИ игрок B/i)).not.toBeInTheDocument();
@@ -309,7 +331,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     expect(container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
   });
@@ -318,7 +340,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     expect(screen.getByRole("heading", { name: /Ход игрока [AB]/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Ваш ход!/i })).not.toBeInTheDocument();
@@ -336,7 +358,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const firstRender = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     await waitFor(() => {
       const savedSession = window.localStorage.getItem("trend-market-session-v1");
@@ -357,7 +379,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     expect(screen.getByText(/прогноз продаж/i)).toBeInTheDocument();
     expect(screen.getByText(/если считать сейчас/i)).toBeInTheDocument();
@@ -368,7 +390,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     expect(screen.getByText(/Цели партии/i)).toBeInTheDocument();
     expect(container.querySelectorAll(".party-goal")).toHaveLength(3);
@@ -410,9 +432,7 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     render(<App />);
 
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
-    });
+    startHotseatGameWithFireEvent();
 
     expect(screen.getByLabelText(/Таймер хода/i)).toHaveTextContent(/Ход: 00:45/i);
 
@@ -443,7 +463,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
     await waitFor(() => expect(window.localStorage.getItem("trend-market-session-v1")).toContain('"phase":"planning"'));
 
     await user.click(screen.getByRole("button", { name: /Пауза/i }));
@@ -457,7 +477,7 @@ describe("App layout shell", () => {
     await user.click(screen.getByRole("button", { name: /Выйти в меню/i }));
     await user.click(screen.getByRole("button", { name: /^Выйти$/i }));
 
-    expect(screen.getByRole("button", { name: /2 игрока/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^2 игрока$/i })).toBeInTheDocument();
     await waitFor(() => expect(window.localStorage.getItem("trend-market-session-v1")).toBeNull());
   });
 
@@ -465,7 +485,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     const topBar = container.querySelector(".top-bar");
     expect(topBar).not.toBeNull();
@@ -580,7 +600,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     expect(screen.getByText(/Главный тренд/i)).toBeInTheDocument();
     expect(container.querySelector(".trend-card.focus-trend")).not.toBeNull();
@@ -660,24 +680,83 @@ describe("App layout shell", () => {
     expectImagePreloaded("product-atlas.webp");
   });
 
-  it("presents menu actions in clear play and online sections", () => {
+  it("presents the play menu with text tabs, ranked matchmaking, story mode, and custom table", () => {
     const { container } = render(<App />);
-    const menuButtons = within(container.querySelector(".menu-primary-grid") as HTMLElement).getAllByRole("button");
+    const playTabs = within(container.querySelector(".play-tabs") as HTMLElement).getAllByRole("tab");
 
-    expect(screen.getByText(/выберите режим/i)).toBeInTheDocument();
-    expect(screen.getByText(/игра по сети/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Ярмарка мира Ааах/i })).toBeInTheDocument();
-    expect(menuButtons.map((button) => button.textContent?.trim())).toEqual(["Ярмарка мира Ааах", "2 игрока", "Против ИИ", "Обучение с ИИ"]);
+    expect(container.querySelector(".menu-header")).not.toBeNull();
+    expect(container.querySelector(".play-tabs")).not.toBeNull();
+    expect(container.querySelector(".ranked-match-card")).not.toBeNull();
+    expect(screen.getByRole("tab", { name: /Рейтинг 1vs1/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Играть$/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Поиск соперника/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Готов$/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/код лобби/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/выберите режим/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /свой стол/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Сюжетный режим/i })).toBeInTheDocument();
+    expect(playTabs.map((button) => button.textContent?.trim())).toEqual(["Рейтинг 1vs1", "Сюжетный режим", "2 игрока", "Обучение с ИИ", "Свой стол"]);
     expect(screen.queryByRole("button", { name: /^Уровни$/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /против ии/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /обучение/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /против ии/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /обучение/i })).not.toBeInTheDocument();
     expect(container.querySelector(".menu-secondary-actions")).toBeNull();
-    expect(container.querySelector(".menu-footer-actions")).not.toBeNull();
-    expect(container.querySelector(".menu-support-actions")).not.toBeNull();
+    expect(container.querySelector(".play-menu-actions")).toBeNull();
+    expect(container.querySelector(".menu-utility-actions")).not.toBeNull();
     expect(screen.getByRole("button", { name: /Об игре/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Лицензии/i })).toBeInTheDocument();
   });
 
-  it("shows game menu tabs for profile, rating, and DLC", async () => {
+  it("changes play tab content without starting a mode until the Play button is pressed", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /^2 игрока$/i }));
+
+    expect(container.querySelector(".app-shell")?.classList.contains("phase-menu")).toBe(true);
+    expect(container.querySelector(".ranked-match-card")).toBeNull();
+    expect(screen.getByRole("heading", { name: /^2 игрока$/i })).toBeInTheDocument();
+    expect(screen.getByText(/локальная партия/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /Обучение с ИИ/i }));
+
+    expect(container.querySelector(".app-shell")?.classList.contains("phase-menu")).toBe(true);
+    expect(screen.getByRole("heading", { name: /Обучение с ИИ/i })).toBeInTheDocument();
+    expect(screen.getByText(/подсказками тренера/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Играть$/i })).toHaveClass("play-start-button");
+
+    await user.click(screen.getByRole("button", { name: /^Играть$/i }));
+
+    expect(container.querySelector(".app-shell")?.classList.contains("phase-planning")).toBe(true);
+    expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
+  });
+
+  it("shows story levels immediately inside the story play tab", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /Сюжетный режим/i }));
+
+    expect(container.querySelector(".play-level-road")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /^Уровень 1$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Уровень 2$/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^Играть$/i })).not.toBeInTheDocument();
+  });
+
+  it("separates custom table creation from joining by lobby code", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /Свой стол/i }));
+
+    expect(screen.getByRole("heading", { name: /Создать новый стол/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Создать стол/i })).toHaveClass("play-start-button");
+    expect(screen.getByRole("heading", { name: /Войти по коду/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Код лобби/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Войти за стол/i })).toBeInTheDocument();
+    expect(container.querySelector(".custom-table-actions")).not.toBeNull();
+  });
+
+  it("shows game menu tabs for profile, leaderboard search, and DLC", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
@@ -685,8 +764,14 @@ describe("App layout shell", () => {
         if (url === "/api/auth/me") {
           return Response.json({ user: null });
         }
-        if (url === "/api/ranked/leaderboard") {
-          return Response.json({ leaderboard: [{ playerId: "p1", displayName: "Player One", avatarUrl: null, mmr: 1542, rankedGames: 7, wins: 5, losses: 2 }] });
+        if (String(url).startsWith("/api/ranked/leaderboard")) {
+          return Response.json({
+            leaderboard: [{ playerId: "p1", displayName: "Player One", avatarUrl: null, mmr: 1542, rankedGames: 7, wins: 5, losses: 2 }],
+            page: 1,
+            pageSize: 10,
+            total: 1,
+            totalPages: 1
+          });
         }
         return Response.json({});
       })
@@ -694,15 +779,65 @@ describe("App layout shell", () => {
 
     render(<App />);
 
-    expect(screen.getByRole("button", { name: /Играть/i })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Профиль/i }));
+    expect(screen.getByRole("tab", { name: /Играть/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Профиль/i }));
     expect(screen.getByText(/Войдите в аккаунт/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/имя для тестового входа/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Google/i })).toHaveAttribute("href", "/api/auth/google/start");
-    await user.click(screen.getByRole("button", { name: /Рейтинг/i }));
-    expect(await screen.findByText(/Player One/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Лидерборд/i }));
+    const leaderboardTable = await screen.findByRole("table", { name: /Лидерборд/i });
+    const leaderboardControls = document.querySelector(".leaderboard-controls");
+
+    expect(leaderboardTable.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(leaderboardTable.closest(".menu-panel")?.lastElementChild).toBe(leaderboardControls);
+    expect(leaderboardControls?.firstElementChild).toHaveClass("leaderboard-pagination");
+    expect(leaderboardControls?.querySelector(".leaderboard-search > span")).toBeNull();
+    expect(leaderboardControls?.querySelector(".leaderboard-search-icon")).not.toBeNull();
+    expect(leaderboardControls?.lastElementChild?.querySelector("input")).toBe(screen.getByLabelText(/поиск/i));
+    expect((await screen.findAllByText(/Player One/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/1542 MMR/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /DLC/i }));
+    await user.type(screen.getByLabelText(/поиск/i), "Player");
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/ranked/leaderboard?page=1&pageSize=10&search=Player"));
+    await user.click(screen.getByRole("tab", { name: /DLC/i }));
     expect(screen.getByText(/В разработке/i)).toBeInTheDocument();
+    expect(screen.getByText(/покупки будущих DLC/i)).toBeInTheDocument();
+    expect(document.querySelector(".menu-empty-state")).not.toBeNull();
+  });
+
+  it("centers the empty leaderboard state while keeping controls at the bottom", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          return Response.json({ user: null });
+        }
+        if (String(url).startsWith("/api/ranked/leaderboard")) {
+          return Response.json({ leaderboard: [], page: 1, pageSize: 10, total: 0, totalPages: 1 });
+        }
+        return Response.json({});
+      })
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /Лидерборд/i }));
+
+    expect(await screen.findByText(/Лидерборд пока пуст/i)).toHaveClass("leaderboard-empty-state");
+    expect(screen.queryByRole("table", { name: /Лидерборд/i })).not.toBeInTheDocument();
+    expect(document.querySelector(".leaderboard-panel")?.lastElementChild).toBe(document.querySelector(".leaderboard-controls"));
+  });
+
+  it("shows the match-found sound license from the menu", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Лицензии/i }));
+
+    expect(
+      screen.getByText(
+        "Piano Notification 5b by FoolBoyMedia -- https://freesound.org/s/352654/ -- License: Attribution NonCommercial 4.0 used as match-found sound"
+      )
+    ).toBeInTheDocument();
   });
 
   it("shows the logged-in player MMR in profile", async () => {
@@ -746,9 +881,9 @@ describe("App layout shell", () => {
 
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Профиль/i }));
+    await user.click(screen.getByRole("tab", { name: /Профиль/i }));
 
-    expect(await screen.findByText(/Player One/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/Player One/i)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/MMR: 1518/i)).toBeInTheDocument();
     expect(await screen.findByText(/Победа/i)).toBeInTheDocument();
     expect(screen.getByText(/\+18 MMR/i)).toBeInTheDocument();
@@ -772,12 +907,112 @@ describe("App layout shell", () => {
 
     render(<App />);
 
-    expect(await screen.findByText(/Вы в очереди рейтинга/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Отмена/i })).toHaveClass("ranked-action");
+    expect(screen.queryByText(/Вы в очереди рейтинга/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Отмена/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ranked/queue", { method: "DELETE" }));
-    expect(await screen.findByText(/Очередь рейтинга отменена/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Очередь рейтинга отменена/i)).not.toBeInTheDocument();
+  });
+
+  it("shows ranked leave warnings and cooldown countdown on the ranked button", async () => {
+    const cooldownUntil = Date.now() + 181_000;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+        }
+        if (url === "/api/ranked/status") {
+          return Response.json({ status: "idle" });
+        }
+        if (url === "/api/ranked/rating") {
+          return Response.json({
+            rating: {
+              playerId: "p1",
+              mmr: 1518,
+              rankedGames: 4,
+              wins: 2,
+              losses: 2,
+              lastRankedAt: null,
+              isCalibrating: false,
+              calibrationGamesRemaining: 0,
+              penalty: {
+                leaveWarnings: 3,
+                cleanGamesUntilForgiven: 5,
+                cooldownUntil,
+                queueBlocked: true
+              }
+            }
+          });
+        }
+        if (url === "/api/ranked/history") {
+          return Response.json({ history: [] });
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<App />);
+
+    const rankedButton = await waitFor(() => document.querySelector<HTMLButtonElement>(".ranked-action")!);
+
+    await waitFor(() => expect(rankedButton).toBeDisabled());
+    expect(rankedButton.textContent).toContain("Доступно через");
+    expect(rankedButton.textContent).toMatch(/0?3:0[01]/);
+    expect(screen.getByText("Вы покинули рейтинговый матч. Повторные выходы приведут к временной блокировке ranked.")).toBeInTheDocument();
+  });
+
+  it("reconnects a restored active ranked match when the local player is marked disconnected", async () => {
+    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const, activePlayer: "A" as PlayerId, firstPlayer: "A" as PlayerId };
+    const disconnectedMatch = {
+      id: "match-1",
+      playerAId: "p1",
+      playerBId: "p2",
+      playerAMmrBefore: 1500,
+      playerBMmrBefore: 1500,
+      firstPlayerId: "p1",
+      seed: "seed-1",
+      initialState: rankedInitialState,
+      status: "active",
+      createdAt: 1_000,
+      playerADisconnectedAt: 1_000,
+      playerBDisconnectedAt: null,
+      isCalibration: false,
+      isBotMatch: false,
+      botDifficulty: null
+    };
+    const reconnectedMatch = { ...disconnectedMatch, playerADisconnectedAt: null };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "matched", match: disconnectedMatch });
+      }
+      if (url === "/api/ranked/reconnect" && init?.method === "POST") {
+        return Response.json({ status: "matched", match: reconnectedMatch });
+      }
+      if (String(url).startsWith("/api/ranked/events?")) {
+        return Response.json({ events: [] });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/ranked/reconnect",
+        expect.objectContaining({
+          body: JSON.stringify({ matchId: "match-1" }),
+          method: "POST"
+        })
+      )
+    );
+    await waitFor(() => expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull());
   });
 
   it("starts a ranked match from a matched queue response", async () => {
@@ -818,8 +1053,15 @@ describe("App layout shell", () => {
 
     render(<App />);
 
-    const rankedButton = await screen.findByRole("button", { name: /Рейтинг 1vs1/i });
+    const rankedButton = await screen.findByRole("button", { name: /^Играть$/i });
     await user.click(rankedButton);
+
+    expect(await screen.findByRole("button", { name: /Матч найден/i })).toBeInTheDocument();
+    const matchFoundAudio = mockAudioInstances.find((audio) => /matchfound\.mp3/.test(audio.src));
+    expect(matchFoundAudio).toBeDefined();
+    act(() => {
+      matchFoundAudio?.emit("ended");
+    });
 
     expect(await screen.findByText(/Рейтинговый матч начался/i)).toBeInTheDocument();
     expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull();
@@ -872,6 +1114,10 @@ describe("App layout shell", () => {
     const { container } = render(<App />);
 
     await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".ranked-action")!));
+    act(() => {
+      mockAudioInstances.find((audio) => /matchfound\.mp3/.test(audio.src))?.emit("ended");
+    });
+    await waitFor(() => expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull());
     await user.click(container.querySelector<HTMLButtonElement>(`.hand-panel [data-correct-product-id="${productId}"]`)!);
     await user.click(container.querySelector<HTMLButtonElement>(".seat-local .empty-slot")!);
 
@@ -948,6 +1194,10 @@ describe("App layout shell", () => {
     const { container } = render(<App />);
 
     await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".ranked-action")!));
+    act(() => {
+      mockAudioInstances.find((audio) => /matchfound\.mp3/.test(audio.src))?.emit("ended");
+    });
+    await waitFor(() => expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull());
     await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".hand-heading .primary-action")!));
 
     await waitFor(() => expect(document.querySelector(".app-shell.phase-game_end")).not.toBeNull());
@@ -1039,7 +1289,11 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Против ИИ/i }));
+    expect(screen.queryByRole("button", { name: /Против ИИ/i })).not.toBeInTheDocument();
+    await startTrainingGame(user);
+    expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
+    expect(screen.getByText(/совет тренера/i)).toBeInTheDocument();
+    return;
 
     const dialog = screen.getByRole("dialog", { name: /Сложность ИИ/i });
     expect(dialog).toBeInTheDocument();
@@ -1083,9 +1337,9 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Ярмарка мира Ааах/i }));
+    await openStoryLevelMap(user);
 
-    expect(screen.getByText(/Ярмарка мира Ааах/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Сюжетный режим/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Уровень 1$/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Уровень 2$/i })).toBeDisabled();
 
@@ -1106,7 +1360,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(buttonFromSelector(container, ".menu-primary-grid .primary-action"));
+    await openStoryLevelMap(user);
 
     expect(buttonFromSelector(container, ".level-node:nth-child(1)")).toBeEnabled();
     expect(buttonFromSelector(container, ".level-node:nth-child(2)")).toBeDisabled();
@@ -1117,7 +1371,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(buttonFromSelector(container, ".menu-primary-grid .primary-action"));
+    await openStoryLevelMap(user);
     await user.click(buttonFromSelector(container, ".level-node:nth-child(1)"));
 
     expectImagePreloaded("cutscene/aaakh-02.webp");
@@ -1131,7 +1385,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /Ярмарка мира Ааах/i }));
+    await openStoryLevelMap(user);
     await user.click(screen.getByRole("button", { name: /^Уровень 1$/i }));
     await user.click(screen.getByRole("button", { name: /Пропустить/i }));
 
@@ -1145,7 +1399,7 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Ярмарка мира Ааах/i }));
+    openStoryLevelMapWithFireEvent();
     fireEvent.click(screen.getByRole("button", { name: /^Уровень 1$/i }));
     act(() => {
       vi.advanceTimersByTime(1000);
@@ -1308,13 +1562,13 @@ describe("App layout shell", () => {
     expect(screen.getByRole("combobox", { name: /Language/i })).toHaveValue("en");
 
     await user.click(screen.getByRole("button", { name: /Close settings/i }));
-    expect(screen.getByRole("heading", { name: /Choose mode/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Versus AI/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Story mode/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Versus AI/i })).not.toBeInTheDocument();
 
     firstRender.unmount();
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: /Choose mode/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Story mode/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Выберите режим/i })).not.toBeInTheDocument();
   });
 
@@ -1362,9 +1616,7 @@ describe("App layout shell", () => {
 
     expect(mockAudioInstances[0].src).toContain("main-menu.mp3");
 
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
-    });
+    startHotseatGameWithFireEvent();
     act(() => {
       vi.advanceTimersByTime(1000);
     });
@@ -1396,8 +1648,8 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     render(<App />);
 
+    startHotseatGameWithFireEvent();
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
       vi.advanceTimersByTime(1000);
     });
     expect(mockAudioInstances[0].src).toContain("stroll.mp3");
@@ -1432,9 +1684,7 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     render(<App />);
 
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
-    });
+    startHotseatGameWithFireEvent();
 
     expect(screen.getByText(/Ход: 00:45/i)).toBeInTheDocument();
 
@@ -1449,7 +1699,7 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     const { container } = render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
+    startHotseatGameWithFireEvent();
 
     const cue = container.querySelector(".turn-cue-backdrop");
     expect(cue).not.toBeNull();
@@ -1466,7 +1716,7 @@ describe("App layout shell", () => {
     vi.useFakeTimers();
     const { container } = render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: /2 игрока/i }));
+    startHotseatGameWithFireEvent();
 
     const cue = container.querySelector(".turn-cue-backdrop");
     expect(cue).not.toBeNull();
@@ -1506,7 +1756,7 @@ describe("App layout shell", () => {
     await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
     fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
     await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
 
     expect(screen.getByText(/Ход: 00:30/i)).toBeInTheDocument();
   });
@@ -1570,6 +1820,7 @@ describe("App layout shell", () => {
     await user.click(screen.getAllByRole("button", { name: /Настройки/i })[0]);
     fireEvent.change(screen.getByRole("slider", { name: /время хода/i }), { target: { value: "30" } });
     await user.click(screen.getByRole("button", { name: /Закрыть настройки/i }));
+    await user.click(screen.getByRole("tab", { name: /Свой стол/i }));
     await user.click(screen.getByRole("button", { name: /Создать стол/i }));
 
     await waitFor(() => expect(postedTurnTime).toBe(30));
@@ -1578,7 +1829,7 @@ describe("App layout shell", () => {
 
     await user.click(screen.getByRole("button", { name: /^Выйти$/i }));
 
-    expect(screen.getByRole("button", { name: /2 игрока/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^2 игрока$/i })).toBeInTheDocument();
   });
 
   it("does not reopen the lobby code waiting dialog when both lobby seats are still occupied", () => {
@@ -1875,7 +2126,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
     await user.click(screen.getByRole("button", { name: /Готов/i }));
     await user.click(screen.getByRole("button", { name: /Готов/i }));
 
@@ -1889,7 +2140,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /2 игрока/i }));
+    await startHotseatGame(user);
     const unavailableSlot = screen.getAllByRole("button", { name: /слот товара/i })[0];
 
     expect(unavailableSlot).toHaveAttribute("aria-disabled", "true");
@@ -1904,7 +2155,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /обучение/i }));
+    await startTrainingGame(user);
     await user.click(screen.getByRole("button", { name: /Готов/i }));
 
     await waitFor(
@@ -1923,7 +2174,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /обучение/i }));
+    await startTrainingGame(user);
 
     const topBar = container.querySelector(".top-bar");
     const topActions = container.querySelector(".top-actions");
@@ -1938,7 +2189,10 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /против ии/i }));
+    expect(screen.queryByRole("button", { name: /против ии/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Обучение с ИИ/i })).toBeInTheDocument();
+    randomSpy.mockRestore();
+    return;
     await user.click(screen.getByRole("button", { name: /Зазывала/i }));
 
     expect(screen.getByText(/ИИ: Оппонент/i)).toBeInTheDocument();
@@ -2001,7 +2255,7 @@ describe("App layout shell", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /обучение/i }));
+    await startTrainingGame(user);
 
     expect(screen.getByText(/совет тренера/i)).toBeInTheDocument();
     expect(screen.getAllByText(/лучше/i).length).toBeGreaterThan(0);

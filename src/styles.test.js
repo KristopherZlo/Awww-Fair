@@ -115,14 +115,73 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/::\-webkit-scrollbar-thumb\s*\{[\s\S]*background:\s*linear-gradient\(180deg,\s*#f7d99b,\s*#c89443\);/);
   });
 
-  it("keeps the main menu mode buttons vertical", () => {
+  it("lays out the main menu like a game lobby", () => {
     const css = readAppCss();
 
-    expect(css).toMatch(/\.menu-primary-grid\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
-    expect(css).toMatch(/\.menu-online-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
-    expect(css).toMatch(/\.join-lobby\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*1fr;/);
-    expect(css).toMatch(/\.menu-footer-actions\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*1fr;/);
-    expect(css).toMatch(/\.menu-support-actions\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+    expect(css).toMatch(/\.menu-box\s*\{[\s\S]*grid-template-rows:\s*auto\s+auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/);
+    expect(css).toMatch(/\.menu-header\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/);
+    expect(css).toMatch(/\.menu-header\s*\{[\s\S]*height:\s*78px;/);
+    expect(css).toMatch(/\.menu-tabs\s*\{[\s\S]*align-self:\s*start;/);
+    expect(css).toMatch(/\.play-tabs\s*\{[\s\S]*align-self:\s*start;/);
+    expect(css).toMatch(/\.play-layout\s*\{[\s\S]*align-items:\s*stretch;/);
+    expect(css).toMatch(/\.ranked-match-card\s*\{[\s\S]*grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/);
+    expect(css).toMatch(/\.ranked-button-time\s*\{[\s\S]*font-variant-numeric:\s*tabular-nums;/);
+    expect(css).toMatch(/\.field-label\s*\{[\s\S]*display:\s*grid;/);
+    expect(css).toMatch(/\.menu-field\s*\{[\s\S]*min-height:\s*44px;/);
+    expect(css).toMatch(/\.custom-table-actions\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(260px,\s*340px\);/);
+    expect(css).toMatch(/\.play-start-action\s*\{[\s\S]*align-self:\s*end;/);
+    expect(css).toMatch(/\.play-start-button\s*\{[\s\S]*width:\s*min\(280px,\s*100%\);/);
+    expect(css).toMatch(/\.menu-empty-state\s*\{[\s\S]*place-items:\s*center;/);
+    expect(css).toMatch(/\.leaderboard-table\s*\{[\s\S]*width:\s*100%;/);
+    expect(css).toMatch(/\.leaderboard-controls\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(220px,\s*320px\);/);
+    expect(css).toMatch(/\.menu-utility-actions\s*\{[\s\S]*display:\s*flex;/);
+    expect(css).toMatch(/\.profile-panel\s*\{[\s\S]*align-content:\s*start;/);
+  });
+
+  it("lets the story level road use the full available play panel height", () => {
+    const css = readAppCss();
+    const playLevelRoad = ruleBody(css, ".play-level-road");
+
+    expect(playLevelRoad).toMatch(/height:\s*100%;/);
+    expect(playLevelRoad).toMatch(/align-self:\s*stretch;/);
+    expect(playLevelRoad).toMatch(/max-height:\s*none;/);
+  });
+
+  it("removes bottom padding from the story play mode card", () => {
+    const css = readAppCss();
+    const storyModeCard = ruleBody(css, ".menu-panel.play-mode-card.story-mode-card");
+
+    expect(storyModeCard).toMatch(/padding-bottom:\s*0;/);
+  });
+
+  it("uses one shared size and style for play start buttons", () => {
+    const css = readAppCss();
+    const playStartButton = ruleBody(css, ".play-start-button");
+
+    expect(playStartButton).toMatch(/display:\s*inline-flex;/);
+    expect(playStartButton).toMatch(/justify-content:\s*center;/);
+    expect(playStartButton).toMatch(/width:\s*min\(280px,\s*100%\);/);
+    expect(playStartButton).toMatch(/min-height:\s*48px;/);
+    expect(playStartButton).toMatch(/padding:\s*11px\s+16px;/);
+    expect(playStartButton).toMatch(/background:\s*#f7d99b;/);
+    expect(playStartButton).toMatch(/color:\s*#20140c;/);
+    expect(playStartButton).toMatch(/font-size:\s*1\.02rem;/);
+    expect(css).not.toMatch(/\.ranked-play-button\s*\{[\s\S]*?(width|min-height|padding|background|color|font-size):/);
+  });
+
+  it("stacks logged-out profile sign-in actions vertically", () => {
+    const css = readAppCss();
+
+    expect(css).toMatch(/\.oauth-actions,\s*\.dev-login-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+  });
+
+  it("caps leaderboard pagination buttons and embeds search icon in the field", () => {
+    const css = readAppCss();
+
+    expect(css).toMatch(/\.leaderboard-pagination button\s*\{[\s\S]*max-width:\s*124px;/);
+    expect(css).toMatch(/\.leaderboard-search\s*\{[\s\S]*position:\s*relative;/);
+    expect(css).toMatch(/\.leaderboard-search \.menu-field\s*\{[\s\S]*padding-right:\s*36px;/);
+    expect(css).toMatch(/\.leaderboard-search-icon\s*\{[\s\S]*right:\s*11px;/);
   });
 
   it("keeps the game-end actions on one row on desktop widths", () => {

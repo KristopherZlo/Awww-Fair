@@ -1,4 +1,5 @@
 import type { GameState } from "./types";
+import { apiErrorMessage } from "./apiErrors";
 
 export interface LeaderboardEntry {
   playerId: string;
@@ -12,17 +13,43 @@ export interface LeaderboardEntry {
 
 export interface PlayerRating {
   playerId: string;
-  mmr: number;
+  mmr: number | null;
   rankedGames: number;
   wins: number;
   losses: number;
   lastRankedAt: string | null;
+  isCalibrating: boolean;
+  calibrationGamesRemaining: number;
+  penalty: RankedPenalty;
+}
+
+export interface RankedPenalty {
+  leaveWarnings: number;
+  cleanGamesUntilForgiven: number | null;
+  cooldownUntil: number | null;
+  queueBlocked: boolean;
+}
+
+export interface LeaderboardResult {
+  leaderboard: LeaderboardEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface LeaderboardQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
 }
 
 export interface RankedMatchHistoryEntry {
   matchId: string;
   playerAId: string;
   playerBId: string;
+  playerADisplayName?: string;
+  playerBDisplayName?: string;
   winnerId: string | null;
   loserId: string | null;
   playerACoins: number;
@@ -35,6 +62,7 @@ export interface RankedMatchHistoryEntry {
   playerBMmrAfter: number;
   mmrChange: number;
   firstPlayerId: string;
+  isCalibration?: boolean;
   createdAt: string;
 }
 
@@ -51,10 +79,14 @@ export interface RankedMatch {
   createdAt: number;
   playerADisconnectedAt: number | null;
   playerBDisconnectedAt: number | null;
+  isCalibration: boolean;
+  isBotMatch: boolean;
+  botDifficulty: number | null;
 }
 
 export type RankedQueueJoinResult = { status: "waiting" } | { status: "matched"; match: RankedMatch };
 export type RankedQueueStatus = { status: "idle" } | RankedQueueJoinResult;
+export type RankedClientError = Error & { penalty?: RankedPenalty };
 
 export interface RankedEventInput {
   matchId: string;
@@ -84,9 +116,13 @@ export interface RankedMatchEvent {
 }
 
 async function parseRankedResponse<T>(response: Response): Promise<T> {
-  const payload = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
+  const payload = (await response.json().catch(() => null)) as (T & { error?: string; penalty?: RankedPenalty }) | null;
   if (!response.ok) {
-    throw new Error(payload?.error ?? "Ranked request failed.");
+    const error = new Error(apiErrorMessage(response, payload?.error ?? "Ranked request failed.")) as RankedClientError;
+    if (payload?.penalty) {
+      error.penalty = payload.penalty;
+    }
+    throw error;
   }
   return payload as T;
 }
@@ -101,9 +137,13 @@ async function postRankedJson<T>(path: string, body: unknown): Promise<T> {
   );
 }
 
-export async function loadLeaderboard(): Promise<LeaderboardEntry[]> {
-  const payload = await parseRankedResponse<{ leaderboard: LeaderboardEntry[] }>(await fetch("/api/ranked/leaderboard"));
-  return payload.leaderboard;
+export async function loadLeaderboard(query: LeaderboardQuery = {}): Promise<LeaderboardResult> {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set("page", String(query.page));
+  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
+  if (query.search) params.set("search", query.search);
+  const suffix = params.toString();
+  return parseRankedResponse<LeaderboardResult>(await fetch(`/api/ranked/leaderboard${suffix ? `?${suffix}` : ""}`));
 }
 
 export async function loadMyRating(): Promise<PlayerRating> {
@@ -146,6 +186,6 @@ export async function disconnectRankedMatch(matchId: string): Promise<{ status: 
   return postRankedJson("/api/ranked/disconnect", { matchId });
 }
 
-export async function reconnectRankedMatch(matchId: string): Promise<{ status: "matched"; match: unknown }> {
+export async function reconnectRankedMatch(matchId: string): Promise<{ status: "matched"; match: RankedMatch }> {
   return postRankedJson("/api/ranked/reconnect", { matchId });
 }

@@ -1,12 +1,15 @@
 node_modules/
 dist/
 test-results/
+.env
+.env.xampp
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
 npm-debug.log*
 vite-*.log
 vite-*.err.log
+xampp-api*.log
 coverage/
 .tmp/
 tmp/

@@ -28,6 +28,8 @@ export interface RankedMatchLog {
   matchId: string;
   playerAId: string;
   playerBId: string;
+  playerADisplayName?: string;
+  playerBDisplayName?: string;
   winnerId: string | null;
   loserId: string | null;
   playerACoins: number;
@@ -40,6 +42,7 @@ export interface RankedMatchLog {
   playerBMmrAfter: number;
   mmrChange: number;
   firstPlayerId: string;
+  isCalibration?: boolean;
   createdAt: string;
 }
 

@@ -24,10 +24,29 @@ describe("ranked client", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads leaderboard entries", async () => {
-    stubFetch({ leaderboard: [{ playerId: "a", displayName: "A", avatarUrl: null, mmr: 1500, rankedGames: 1, wins: 1, losses: 0 }] });
+  it("loads paginated leaderboard entries with search", async () => {
+    const fetchMock = stubFetch({
+      leaderboard: [{ playerId: "a", displayName: "A", avatarUrl: null, mmr: 1500, rankedGames: 1, wins: 1, losses: 0 }],
+      page: 2,
+      pageSize: 10,
+      total: 12,
+      totalPages: 2
+    });
 
-    await expect(loadLeaderboard()).resolves.toEqual([{ playerId: "a", displayName: "A", avatarUrl: null, mmr: 1500, rankedGames: 1, wins: 1, losses: 0 }]);
+    await expect(loadLeaderboard({ page: 2, pageSize: 10, search: "A" })).resolves.toEqual({
+      leaderboard: [{ playerId: "a", displayName: "A", avatarUrl: null, mmr: 1500, rankedGames: 1, wins: 1, losses: 0 }],
+      page: 2,
+      pageSize: 10,
+      total: 12,
+      totalPages: 2
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/ranked/leaderboard?page=2&pageSize=10&search=A");
+  });
+
+  it("explains when the ranked API proxy is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Bad Gateway", { status: 502 })));
+
+    await expect(loadLeaderboard()).rejects.toThrow(/API server unavailable.*npm run dev:lan/i);
   });
 
   it("joins ranked queue", async () => {
@@ -52,9 +71,67 @@ describe("ranked client", () => {
   });
 
   it("loads the current player rating", async () => {
-    stubFetch({ rating: { playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+    stubFetch({
+      rating: {
+        playerId: "a",
+        mmr: null,
+        rankedGames: 0,
+        wins: 0,
+        losses: 0,
+        lastRankedAt: null,
+        isCalibrating: true,
+        calibrationGamesRemaining: 3,
+        penalty: {
+          leaveWarnings: 2,
+          cleanGamesUntilForgiven: 4,
+          cooldownUntil: null,
+          queueBlocked: false
+        }
+      }
+    });
 
-    await expect(loadMyRating()).resolves.toEqual({ playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null });
+    await expect(loadMyRating()).resolves.toEqual({
+      playerId: "a",
+      mmr: null,
+      rankedGames: 0,
+      wins: 0,
+      losses: 0,
+      lastRankedAt: null,
+      isCalibrating: true,
+      calibrationGamesRemaining: 3,
+      penalty: {
+        leaveWarnings: 2,
+        cleanGamesUntilForgiven: 4,
+        cooldownUntil: null,
+        queueBlocked: false
+      }
+    });
+  });
+
+  it("exposes ranked cooldown penalty details on queue errors", async () => {
+    const penalty = {
+      leaveWarnings: 3,
+      cleanGamesUntilForgiven: 5,
+      cooldownUntil: 181_000,
+      queueBlocked: true
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            error: "Ranked cooldown is active.",
+            penalty
+          },
+          { status: 429 }
+        )
+      )
+    );
+
+    await expect(joinRankedQueue()).rejects.toMatchObject({
+      message: "Ranked cooldown is active.",
+      penalty
+    });
   });
 
   it("loads the current player match history", async () => {

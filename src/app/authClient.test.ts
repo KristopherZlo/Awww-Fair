@@ -19,6 +19,12 @@ describe("auth client", () => {
     });
   });
 
+  it("explains when the auth API proxy is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Bad Gateway", { status: 502 })));
+
+    await expect(devLogin({ displayName: "Dev" })).rejects.toThrow(/API server unavailable.*npm run dev:lan/i);
+  });
+
   it("posts logout to clear the session", async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);

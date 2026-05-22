@@ -1,4 +1,6 @@
 import { createPool, type Pool, type PoolConfig } from "mariadb";
+import { createDevSeedMigrationStatements } from "./dev-seed";
+import { CALIBRATION_MATCH_COUNT, RANKED_BOTS } from "./ranked-bots";
 
 export type DbEnv = Partial<Record<string, string | undefined>>;
 
@@ -24,9 +26,11 @@ export function createMigrationStatements(): string[] {
       display_name VARCHAR(80) NOT NULL,
       avatar_url VARCHAR(512) NULL,
       email VARCHAR(255) NULL,
+      is_bot BOOLEAN NOT NULL DEFAULT FALSE,
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
     )`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT FALSE AFTER email`,
     `CREATE TABLE IF NOT EXISTS oauth_accounts (
       provider VARCHAR(24) NOT NULL,
       provider_user_id VARCHAR(128) NOT NULL,
@@ -50,15 +54,21 @@ export function createMigrationStatements(): string[] {
       player_id CHAR(36) PRIMARY KEY,
       mmr INT NOT NULL DEFAULT 1500,
       ranked_games INT NOT NULL DEFAULT 0,
+      rating_games INT NOT NULL DEFAULT 0,
+      calibration_games INT NOT NULL DEFAULT 0,
       wins INT NOT NULL DEFAULT 0,
       losses INT NOT NULL DEFAULT 0,
       last_ranked_at DATETIME(3) NULL,
       ranked_leave_count INT NOT NULL DEFAULT 0,
+      ranked_clean_games_since_leave INT NOT NULL DEFAULT 0,
       ranked_cooldown_until DATETIME(3) NULL,
       CONSTRAINT fk_player_ratings_user FOREIGN KEY (player_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
+    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS rating_games INT NOT NULL DEFAULT 0 AFTER ranked_games`,
+    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS calibration_games INT NOT NULL DEFAULT 0 AFTER rating_games`,
     `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS ranked_leave_count INT NOT NULL DEFAULT 0 AFTER last_ranked_at`,
-    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS ranked_cooldown_until DATETIME(3) NULL AFTER ranked_leave_count`,
+    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS ranked_clean_games_since_leave INT NOT NULL DEFAULT 0 AFTER ranked_leave_count`,
+    `ALTER TABLE player_ratings ADD COLUMN IF NOT EXISTS ranked_cooldown_until DATETIME(3) NULL AFTER ranked_clean_games_since_leave`,
     `CREATE TABLE IF NOT EXISTS ranked_matches (
       id CHAR(36) PRIMARY KEY,
       player_a_id CHAR(36) NOT NULL,
@@ -81,6 +91,9 @@ export function createMigrationStatements(): string[] {
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       player_a_disconnected_at DATETIME(3) NULL,
       player_b_disconnected_at DATETIME(3) NULL,
+      is_calibration BOOLEAN NOT NULL DEFAULT FALSE,
+      is_bot_match BOOLEAN NOT NULL DEFAULT FALSE,
+      bot_difficulty INT NULL,
       settled_at DATETIME(3) NULL,
       CONSTRAINT fk_ranked_matches_player_a FOREIGN KEY (player_a_id) REFERENCES users(id),
       CONSTRAINT fk_ranked_matches_player_b FOREIGN KEY (player_b_id) REFERENCES users(id)
@@ -88,12 +101,19 @@ export function createMigrationStatements(): string[] {
     `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS initial_state JSON NULL AFTER seed`,
     `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS player_a_disconnected_at DATETIME(3) NULL AFTER created_at`,
     `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS player_b_disconnected_at DATETIME(3) NULL AFTER player_a_disconnected_at`,
+    `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS is_calibration BOOLEAN NOT NULL DEFAULT FALSE AFTER player_b_disconnected_at`,
+    `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS is_bot_match BOOLEAN NOT NULL DEFAULT FALSE AFTER is_calibration`,
+    `ALTER TABLE ranked_matches ADD COLUMN IF NOT EXISTS bot_difficulty INT NULL AFTER is_bot_match`,
     `CREATE TABLE IF NOT EXISTS ranked_queue (
       player_id CHAR(36) PRIMARY KEY,
       mmr INT NOT NULL,
       joined_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      allow_human BOOLEAN NOT NULL DEFAULT TRUE,
+      bot_match_at DATETIME(3) NULL,
       CONSTRAINT fk_ranked_queue_user FOREIGN KEY (player_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
+    `ALTER TABLE ranked_queue ADD COLUMN IF NOT EXISTS allow_human BOOLEAN NOT NULL DEFAULT TRUE AFTER joined_at`,
+    `ALTER TABLE ranked_queue ADD COLUMN IF NOT EXISTS bot_match_at DATETIME(3) NULL AFTER allow_human`,
     `CREATE TABLE IF NOT EXISTS ranked_match_events (
       match_id CHAR(36) NOT NULL,
       sequence INT NOT NULL,
@@ -105,7 +125,18 @@ export function createMigrationStatements(): string[] {
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       PRIMARY KEY (match_id, sequence),
       CONSTRAINT fk_ranked_match_events_match FOREIGN KEY (match_id) REFERENCES ranked_matches(id) ON DELETE CASCADE
-    )`
+    )`,
+    ...RANKED_BOTS.map(
+      (bot) => `INSERT INTO users (id, display_name, is_bot)
+       VALUES ('${bot.id}', '${bot.displayName}', TRUE)
+       ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), is_bot = TRUE`
+    ),
+    ...RANKED_BOTS.map(
+      (bot) => `INSERT INTO player_ratings (player_id, mmr, rating_games, calibration_games)
+       VALUES ('${bot.id}', ${bot.mmr}, 0, ${CALIBRATION_MATCH_COUNT})
+       ON DUPLICATE KEY UPDATE player_id = player_id`
+    ),
+    ...createDevSeedMigrationStatements()
   ];
 }
 

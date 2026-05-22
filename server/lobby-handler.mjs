@@ -2,8 +2,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { advertisedUrls } from "./listen-config.mjs";
-import { lanUrls } from "./network-info.mjs";
+import { advertisedLanUrls } from "./listen-config.mjs";
 
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_MAX_ROOMS = 100;
@@ -279,7 +278,7 @@ export function createLobbyHandler(options = {}) {
     if (request.method === "GET" && parts[0] === "api" && parts[1] === "network") {
       json(response, request, env, 200, {
         port: publicPort,
-        urls: advertisedUrls(env, lanUrls(publicPort))
+        urls: advertisedLanUrls(env, publicPort)
       });
       return;
     }

@@ -6,6 +6,14 @@ import { replayRankedEvents, type RankedReplayOutcome } from "../src/game/ranked
 import { buildInitialState, seededRandom } from "../src/game/session";
 import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 import type { PlayerRating } from "../src/game/rating";
+import {
+  CALIBRATION_MATCH_COUNT,
+  RANKED_BOTS,
+  botForCalibrationGame,
+  botForFallback,
+  isRankedBotId,
+  type RankedBotProfile
+} from "./ranked-bots";
 
 export type RankedMatchStatus = "active" | "settled" | "abandoned";
 
@@ -22,12 +30,17 @@ export interface RankedMatch {
   createdAt: number;
   playerADisconnectedAt: number | null;
   playerBDisconnectedAt: number | null;
+  isCalibration: boolean;
+  isBotMatch: boolean;
+  botDifficulty: number | null;
 }
 
 export interface RankedQueueEntry {
   playerId: string;
   mmr: number;
   joinedAt: number;
+  allowHuman: boolean;
+  botMatchAt: number | null;
 }
 
 export interface RankedMatchEvent {
@@ -51,9 +64,51 @@ export interface RankedLeaderboardEntry {
   losses: number;
 }
 
+export interface RankedLeaderboardQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+}
+
+export interface RankedLeaderboardPage {
+  leaderboard: RankedLeaderboardEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface RankedPlayerRating extends PlayerRating {
+  ratingGames: number;
+  calibrationGames: number;
+  displayName: string;
+  avatarUrl: string | null;
+  isBot: boolean;
+}
+
+export interface PublicPlayerRating {
+  playerId: string;
+  mmr: number | null;
+  rankedGames: number;
+  wins: number;
+  losses: number;
+  lastRankedAt: string | null;
+  isCalibrating: boolean;
+  calibrationGamesRemaining: number;
+  penalty: PublicRankedPenalty;
+}
+
 export interface RankedLeavePenalty {
   leaveCount: number;
   cooldownUntil: number | null;
+  cleanGamesSinceLeave: number;
+}
+
+export interface PublicRankedPenalty {
+  leaveWarnings: number;
+  cleanGamesUntilForgiven: number | null;
+  cooldownUntil: number | null;
+  queueBlocked: boolean;
 }
 
 type RankedMatchHistoryRow = Omit<RankedMatchLog, "createdAt"> & {
@@ -66,7 +121,116 @@ type MariaDbRankedPool = Pick<Pool, "query"> & {
   getConnection(): Promise<MariaDbRankedConnection>;
 };
 
-const RECONNECT_WINDOW_MS = 90 * 1000;
+const RECONNECT_WINDOW_MS = 60 * 1000;
+const FALLBACK_BOT_SEARCH_MS = 30 * 1000;
+const CLEAN_GAMES_FOR_FORGIVENESS = 5;
+
+export class RankedCooldownError extends Error {
+  constructor(readonly penalty: PublicRankedPenalty) {
+    super("Ranked cooldown is active.");
+    this.name = "RankedCooldownError";
+  }
+}
+
+type RankedBotDelayFactory = (params: { isCalibration: boolean; playerId: string; now: number }) => number;
+
+function randomDelay(minMs: number, maxMs: number): number {
+  return minMs + Math.floor(Math.random() * (maxMs - minMs + 1));
+}
+
+function defaultBotDelay({ isCalibration }: { isCalibration: boolean }): number {
+  return isCalibration ? randomDelay(5_000, 20_000) : randomDelay(5_000, 30_000);
+}
+
+function defaultRankedRating(playerId: string, overrides: Partial<RankedPlayerRating> = {}): RankedPlayerRating {
+  const bot = RANKED_BOTS.find((candidate) => candidate.id === playerId);
+  return {
+    playerId,
+    ...DEFAULT_PLAYER_RATING,
+    mmr: bot?.mmr ?? DEFAULT_PLAYER_RATING.mmr,
+    ratingGames: 0,
+    calibrationGames: bot ? CALIBRATION_MATCH_COUNT : 0,
+    displayName: bot?.displayName ?? playerId,
+    avatarUrl: null,
+    isBot: Boolean(bot),
+    ...overrides
+  };
+}
+
+function normalizeRankedRating(rating: PlayerRating & Partial<RankedPlayerRating>, calibrateByDefault: boolean): RankedPlayerRating {
+  const bot = RANKED_BOTS.find((candidate) => candidate.id === rating.playerId);
+  return defaultRankedRating(rating.playerId, {
+    ...rating,
+    mmr: rating.mmr ?? bot?.mmr ?? DEFAULT_PLAYER_RATING.mmr,
+    rankedGames: rating.rankedGames ?? DEFAULT_PLAYER_RATING.rankedGames,
+    wins: rating.wins ?? DEFAULT_PLAYER_RATING.wins,
+    losses: rating.losses ?? DEFAULT_PLAYER_RATING.losses,
+    lastRankedAt: rating.lastRankedAt ?? null,
+    ratingGames: rating.ratingGames ?? rating.rankedGames ?? 0,
+    calibrationGames: rating.calibrationGames ?? (bot || calibrateByDefault ? CALIBRATION_MATCH_COUNT : 0),
+    displayName: rating.displayName ?? bot?.displayName ?? rating.playerId,
+    avatarUrl: rating.avatarUrl ?? null,
+    isBot: rating.isBot ?? Boolean(bot)
+  });
+}
+
+function publicPenaltyFromInternal(penalty: RankedLeavePenalty, now: number): PublicRankedPenalty {
+  const leaveWarnings = Math.max(0, penalty.leaveCount);
+  const cooldownUntil = penalty.cooldownUntil !== null && penalty.cooldownUntil > now ? penalty.cooldownUntil : null;
+  return {
+    leaveWarnings,
+    cleanGamesUntilForgiven: leaveWarnings > 0 ? Math.max(0, CLEAN_GAMES_FOR_FORGIVENESS - penalty.cleanGamesSinceLeave) : null,
+    cooldownUntil,
+    queueBlocked: cooldownUntil !== null
+  };
+}
+
+function publicRatingFromInternal(rating: RankedPlayerRating, penalty: PublicRankedPenalty): PublicPlayerRating {
+  const calibrationGamesRemaining = Math.max(0, CALIBRATION_MATCH_COUNT - rating.calibrationGames);
+  const isCalibrating = !rating.isBot && calibrationGamesRemaining > 0;
+  return {
+    playerId: rating.playerId,
+    mmr: isCalibrating ? null : rating.mmr,
+    rankedGames: isCalibrating ? 0 : rating.rankedGames,
+    wins: isCalibrating ? 0 : rating.wins,
+    losses: isCalibrating ? 0 : rating.losses,
+    lastRankedAt: rating.lastRankedAt,
+    isCalibrating,
+    calibrationGamesRemaining,
+    penalty
+  };
+}
+
+function normalizeLeaderboardQuery(query: RankedLeaderboardQuery = {}): Required<RankedLeaderboardQuery> {
+  const page = Number.isFinite(query.page) ? Math.max(1, Math.floor(query.page ?? 1)) : 1;
+  const pageSize = Number.isFinite(query.pageSize) ? Math.max(1, Math.min(100, Math.floor(query.pageSize ?? 25))) : 25;
+  return { page, pageSize, search: query.search?.trim() ?? "" };
+}
+
+function withRankedMatchDefaults(match: RankedMatch): RankedMatch {
+  return {
+    ...match,
+    isCalibration: match.isCalibration ?? false,
+    isBotMatch: match.isBotMatch ?? false,
+    botDifficulty: match.botDifficulty ?? null
+  };
+}
+
+function withRankedQueueDefaults(entry: RankedQueueEntry): RankedQueueEntry {
+  return {
+    ...entry,
+    allowHuman: entry.allowHuman ?? true,
+    botMatchAt: entry.botMatchAt ?? null
+  };
+}
+
+function withRankedLeavePenaltyDefaults(penalty: Partial<RankedLeavePenalty> = {}): RankedLeavePenalty {
+  return {
+    leaveCount: penalty.leaveCount ?? 0,
+    cooldownUntil: penalty.cooldownUntil ?? null,
+    cleanGamesSinceLeave: penalty.cleanGamesSinceLeave ?? 0
+  };
+}
 
 function createRankedInitialState(seed: string): GameState {
   return {
@@ -108,7 +272,7 @@ function sameRankedOutcome(
 }
 
 export interface RankedStore {
-  ratingForPlayer(playerId: string): Promise<PlayerRating>;
+  ratingForPlayer(playerId: string): Promise<RankedPlayerRating>;
   leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty>;
   recordLeavePenalty(playerId: string, penalty: RankedLeavePenalty): Promise<void>;
   waitingPlayers(): Promise<RankedQueueEntry[]>;
@@ -122,8 +286,12 @@ export interface RankedStore {
   eventsForMatch(matchId: string): Promise<RankedMatchEvent[]>;
   recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number>;
   matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]>;
-  settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void>;
-  leaderboard(limit: number): Promise<RankedLeaderboardEntry[]>;
+  settleMatch(
+    log: RankedMatchLog,
+    playerA: PlayerRating & Partial<RankedPlayerRating>,
+    playerB: PlayerRating & Partial<RankedPlayerRating>
+  ): Promise<void>;
+  leaderboard(query?: RankedLeaderboardQuery): Promise<RankedLeaderboardPage>;
 }
 
 export function getAllowedMmrRange(waitSeconds: number): number {
@@ -138,9 +306,10 @@ export function repeatMatchMultiplier(recentPairMatchCount: number): number {
 }
 
 export function leaveCooldownSeconds(leaveCount: number): number {
-  if (leaveCount <= 1) return 0;
-  if (leaveCount === 2) return 5 * 60;
-  if (leaveCount === 3) return 30 * 60;
+  if (leaveCount <= 2) return 0;
+  if (leaveCount === 3) return 3 * 60;
+  if (leaveCount === 4) return 10 * 60;
+  if (leaveCount === 5) return 15 * 60;
   return 60 * 60;
 }
 
@@ -151,41 +320,41 @@ export class RankedService {
       now?: () => number;
       idFactory?: () => string;
       seedFactory?: () => string;
+      botDelayFactory?: RankedBotDelayFactory;
     }
   ) {}
 
   async joinQueue(playerId: string): Promise<{ status: "waiting" } | { status: "matched"; match: RankedMatch }> {
     const now = this.options.now?.() ?? Date.now();
     await this.ensureCanJoinQueue(playerId, now);
+    const activeMatch = await this.options.store.currentMatchForPlayer(playerId);
+    if (activeMatch) {
+      return { status: "matched", match: activeMatch };
+    }
     const rating = await this.options.store.ratingForPlayer(playerId);
+    const isCalibration = !rating.isBot && rating.calibrationGames < CALIBRATION_MATCH_COUNT;
+    const waitingEntry: RankedQueueEntry = {
+      playerId,
+      mmr: rating.mmr,
+      joinedAt: now,
+      allowHuman: !isCalibration,
+      botMatchAt: isCalibration ? now + this.botDelay({ isCalibration: true, playerId, now }) : now + FALLBACK_BOT_SEARCH_MS + this.botDelay({ isCalibration: false, playerId, now })
+    };
     const waiting = await this.options.store.waitingPlayers();
-    const opponent = waiting.find((entry) => this.canMatch({ playerId, mmr: rating.mmr, joinedAt: now }, entry, now));
+    const existing = waiting.find((entry) => entry.playerId === playerId);
+    if (existing) {
+      return this.statusForPlayer(playerId).then((status) => (status.status === "idle" ? { status: "waiting" } : status));
+    }
+    const opponent = isCalibration
+      ? null
+      : waiting.map(withRankedQueueDefaults).find((entry) => entry.allowHuman && this.canMatch(waitingEntry, entry, now));
 
     if (!opponent) {
-      await this.options.store.addWaitingPlayer({ playerId, mmr: rating.mmr, joinedAt: now });
+      await this.options.store.addWaitingPlayer(waitingEntry);
       return { status: "waiting" };
     }
 
-    const opponentRating = await this.options.store.ratingForPlayer(opponent.playerId);
-    const seed = this.options.seedFactory?.() ?? crypto.randomUUID();
-    const initialState = createRankedInitialState(seed);
-    const match: RankedMatch = {
-      id: this.options.idFactory?.() ?? crypto.randomUUID(),
-      playerAId: opponent.playerId,
-      playerBId: playerId,
-      playerAMmrBefore: opponentRating.mmr,
-      playerBMmrBefore: rating.mmr,
-      firstPlayerId: initialState.firstPlayer === "A" ? opponent.playerId : playerId,
-      seed,
-      initialState,
-      status: "active",
-      createdAt: now,
-      playerADisconnectedAt: null,
-      playerBDisconnectedAt: null
-    };
-    await this.options.store.removeWaitingPlayer(opponent.playerId);
-    await this.options.store.removeWaitingPlayer(playerId);
-    await this.options.store.createMatch(match);
+    const match = await this.createHumanMatch(opponent.playerId, playerId, now);
     return { status: "matched", match };
   }
 
@@ -202,7 +371,23 @@ export class RankedService {
       return { status: "matched", match };
     }
     const waiting = await this.options.store.waitingPlayers();
-    return waiting.some((entry) => entry.playerId === playerId) ? { status: "waiting" } : { status: "idle" };
+    const ownEntry = waiting.map(withRankedQueueDefaults).find((entry) => entry.playerId === playerId);
+    if (!ownEntry) {
+      return { status: "idle" };
+    }
+    const now = this.options.now?.() ?? Date.now();
+    if (ownEntry.allowHuman) {
+      const opponent = waiting
+        .map(withRankedQueueDefaults)
+        .find((entry) => entry.playerId !== playerId && entry.allowHuman && this.canMatch(ownEntry, entry, now));
+      if (opponent) {
+        return { status: "matched", match: await this.createHumanMatch(opponent.playerId, playerId, now) };
+      }
+    }
+    if (ownEntry.botMatchAt !== null && now >= ownEntry.botMatchAt) {
+      return { status: "matched", match: await this.createBotMatch(playerId, now) };
+    }
+    return { status: "waiting" };
   }
 
   async disconnectFromMatch(actorId: string, matchId: string): Promise<{ status: "reconnect_window"; reconnectUntil: number }> {
@@ -244,12 +429,21 @@ export class RankedService {
     return events.filter((event) => event.sequence > afterSequence);
   }
 
-  async leaderboard(limit = 25): Promise<RankedLeaderboardEntry[]> {
-    return this.options.store.leaderboard(limit);
+  async leaderboard(query: RankedLeaderboardQuery = {}): Promise<RankedLeaderboardPage> {
+    return this.options.store.leaderboard(query);
   }
 
-  async ratingForPlayer(playerId: string): Promise<PlayerRating> {
+  async ratingForPlayer(playerId: string): Promise<RankedPlayerRating> {
     return this.options.store.ratingForPlayer(playerId);
+  }
+
+  async publicRatingForPlayer(playerId: string): Promise<PublicPlayerRating> {
+    const now = this.options.now?.() ?? Date.now();
+    const [rating, penalty] = await Promise.all([
+      this.options.store.ratingForPlayer(playerId),
+      this.options.store.leavePenaltyForPlayer(playerId)
+    ]);
+    return publicRatingFromInternal(rating, publicPenaltyFromInternal(penalty, now));
   }
 
   async matchHistoryForPlayer(playerId: string, limit = 10): Promise<RankedMatchLog[]> {
@@ -269,7 +463,7 @@ export class RankedService {
     result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number },
     forcedWinnerId?: string
   ): Promise<{ log: RankedMatchLog }> {
-    if (!forcedWinnerId) {
+    if (!forcedWinnerId && !match.isBotMatch) {
       await this.assertReplayMatchesSubmittedResult(match, result);
     }
     const playerA = await this.options.store.ratingForPlayer(match.playerAId);
@@ -286,18 +480,11 @@ export class RankedService {
         { playerId: match.playerAId, coins: result.playerACoins, sales: result.playerASales },
         { playerId: match.playerBId, coins: result.playerBCoins, sales: result.playerBSales }
       ]);
-    const rankedResult = winnerId
-      ? applyRankedResult({
-          winner: winnerId === match.playerAId ? playerA : playerB,
-          loser: winnerId === match.playerAId ? playerB : playerA,
-          winnerCoins: winnerId === match.playerAId ? result.playerACoins : result.playerBCoins,
-          loserCoins: winnerId === match.playerAId ? result.playerBCoins : result.playerACoins,
-          winnerSales: winnerId === match.playerAId ? result.playerASales : result.playerBSales,
-          loserSales: winnerId === match.playerAId ? result.playerBSales : result.playerASales,
-          now: new Date(now).toISOString(),
-          multiplier: repeatMatchMultiplier(recentPairMatches)
-        })
-      : null;
+    const rankedAt = new Date(now).toISOString();
+    const rankedResult = winnerId ? this.applyRankedSettlement(match, playerA, playerB, result, winnerId, rankedAt, repeatMatchMultiplier(recentPairMatches)) : null;
+    if (!winnerId) {
+      this.recordDrawSettlement(match, playerA, playerB, rankedAt);
+    }
     const log = buildRankedMatchLog({
       matchId: match.id,
       playerA,
@@ -310,8 +497,79 @@ export class RankedService {
       createdAt: new Date(match.createdAt).toISOString(),
       result: rankedResult
     });
+    log.playerADisplayName = playerA.displayName;
+    log.playerBDisplayName = playerB.displayName;
+    log.isCalibration = match.isCalibration;
     await this.options.store.settleMatch(log, playerA, playerB);
+    if (!forcedWinnerId) {
+      await this.recordCleanRankedCompletion(playerA);
+      await this.recordCleanRankedCompletion(playerB);
+    }
     return { log };
+  }
+
+  private applyRankedSettlement(
+    match: RankedMatch,
+    playerA: RankedPlayerRating,
+    playerB: RankedPlayerRating,
+    result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number },
+    winnerId: string,
+    rankedAt: string,
+    multiplier: number
+  ) {
+    const winner = winnerId === match.playerAId ? playerA : playerB;
+    const loser = winnerId === match.playerAId ? playerB : playerA;
+    const winnerPublicBefore = { rankedGames: winner.rankedGames, wins: winner.wins, losses: winner.losses };
+    const loserPublicBefore = { rankedGames: loser.rankedGames, wins: loser.wins, losses: loser.losses };
+    const winnerForMmr: PlayerRating = { ...winner, rankedGames: winner.ratingGames };
+    const loserForMmr: PlayerRating = { ...loser, rankedGames: loser.ratingGames };
+    const rankedResult = applyRankedResult({
+      winner: winnerForMmr,
+      loser: loserForMmr,
+      winnerCoins: winnerId === match.playerAId ? result.playerACoins : result.playerBCoins,
+      loserCoins: winnerId === match.playerAId ? result.playerBCoins : result.playerACoins,
+      winnerSales: winnerId === match.playerAId ? result.playerASales : result.playerBSales,
+      loserSales: winnerId === match.playerAId ? result.playerBSales : result.playerASales,
+      now: rankedAt,
+      multiplier
+    });
+
+    this.applyInternalMmr(winner, winnerForMmr, rankedAt);
+    this.applyInternalMmr(loser, loserForMmr, rankedAt);
+
+    if (match.isCalibration && !winner.isBot) {
+      winner.calibrationGames = Math.min(CALIBRATION_MATCH_COUNT, winner.calibrationGames + 1);
+    } else if (!winner.isBot) {
+      winner.rankedGames = winnerPublicBefore.rankedGames + 1;
+      winner.wins = winnerPublicBefore.wins + 1;
+      winner.losses = winnerPublicBefore.losses;
+    }
+    if (match.isCalibration && !loser.isBot) {
+      loser.calibrationGames = Math.min(CALIBRATION_MATCH_COUNT, loser.calibrationGames + 1);
+    } else if (!loser.isBot) {
+      loser.rankedGames = loserPublicBefore.rankedGames + 1;
+      loser.wins = loserPublicBefore.wins;
+      loser.losses = loserPublicBefore.losses + 1;
+    }
+    return rankedResult;
+  }
+
+  private applyInternalMmr(target: RankedPlayerRating, updated: PlayerRating, rankedAt: string) {
+    target.mmr = updated.mmr;
+    target.ratingGames += 1;
+    target.lastRankedAt = rankedAt;
+  }
+
+  private recordDrawSettlement(match: RankedMatch, playerA: RankedPlayerRating, playerB: RankedPlayerRating, rankedAt: string) {
+    for (const player of [playerA, playerB]) {
+      player.ratingGames += 1;
+      player.lastRankedAt = rankedAt;
+      if (match.isCalibration && !player.isBot) {
+        player.calibrationGames = Math.min(CALIBRATION_MATCH_COUNT, player.calibrationGames + 1);
+      } else if (!player.isBot) {
+        player.rankedGames += 1;
+      }
+    }
   }
 
   private async assertReplayMatchesSubmittedResult(
@@ -332,6 +590,87 @@ export class RankedService {
     }
   }
 
+  private botDelay(params: { isCalibration: boolean; playerId: string; now: number }): number {
+    return this.options.botDelayFactory?.(params) ?? defaultBotDelay(params);
+  }
+
+  private async createHumanMatch(playerAId: string, playerBId: string, now: number): Promise<RankedMatch> {
+    const playerA = await this.options.store.ratingForPlayer(playerAId);
+    const playerB = await this.options.store.ratingForPlayer(playerBId);
+    const seed = this.options.seedFactory?.() ?? crypto.randomUUID();
+    const initialState = createRankedInitialState(seed);
+    const match: RankedMatch = {
+      id: this.options.idFactory?.() ?? crypto.randomUUID(),
+      playerAId,
+      playerBId,
+      playerAMmrBefore: playerA.mmr,
+      playerBMmrBefore: playerB.mmr,
+      firstPlayerId: initialState.firstPlayer === "A" ? playerAId : playerBId,
+      seed,
+      initialState,
+      status: "active",
+      createdAt: now,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null,
+      isCalibration: false,
+      isBotMatch: false,
+      botDifficulty: null
+    };
+    await this.options.store.removeWaitingPlayer(playerAId);
+    await this.options.store.removeWaitingPlayer(playerBId);
+    await this.options.store.createMatch(match);
+    return match;
+  }
+
+  private async createBotMatch(playerId: string, now: number): Promise<RankedMatch> {
+    const player = await this.options.store.ratingForPlayer(playerId);
+    const calibration = !player.isBot && player.calibrationGames < CALIBRATION_MATCH_COUNT;
+    const botSelection = calibration ? botForCalibrationGame(player.calibrationGames) : botForFallback(playerId, now);
+    const botRating = await this.ratingForBot(botSelection.bot);
+    const seed = this.options.seedFactory?.() ?? crypto.randomUUID();
+    const initialState = {
+      ...createRankedInitialState(seed),
+      aiPlayerId: "B" as const,
+      aiMode: null,
+      aiDifficulty: botSelection.difficulty,
+      aiIntent: null
+    };
+    const match: RankedMatch = {
+      id: this.options.idFactory?.() ?? crypto.randomUUID(),
+      playerAId: player.playerId,
+      playerBId: botRating.playerId,
+      playerAMmrBefore: player.mmr,
+      playerBMmrBefore: botRating.mmr,
+      firstPlayerId: initialState.firstPlayer === "A" ? player.playerId : botRating.playerId,
+      seed,
+      initialState: this.initialStateWithNames(initialState, player, botRating),
+      status: "active",
+      createdAt: now,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null,
+      isCalibration: calibration,
+      isBotMatch: true,
+      botDifficulty: botSelection.difficulty
+    };
+    await this.options.store.removeWaitingPlayer(playerId);
+    await this.options.store.createMatch(match);
+    return match;
+  }
+
+  private async ratingForBot(bot: RankedBotProfile): Promise<RankedPlayerRating> {
+    const stored = await this.options.store.ratingForPlayer(bot.id);
+    return { ...stored, displayName: bot.displayName, isBot: true, calibrationGames: CALIBRATION_MATCH_COUNT };
+  }
+
+  private initialStateWithNames(initialState: GameState, playerA: RankedPlayerRating, playerB: RankedPlayerRating): GameState {
+    return {
+      ...initialState,
+      players: initialState.players.map((player) =>
+        player.id === "A" ? { ...player, name: playerA.displayName } : player.id === "B" ? { ...player, name: playerB.displayName } : player
+      )
+    };
+  }
+
   private async settleExpiredDisconnect(match: RankedMatch): Promise<boolean> {
     const disconnectedPlayerId =
       match.playerADisconnectedAt !== null && this.reconnectExpired(match.playerADisconnectedAt)
@@ -343,17 +682,18 @@ export class RankedService {
       return false;
     }
     await this.settleDisconnectLoss(match, disconnectedPlayerId);
-    await this.recordLeavePenalty(disconnectedPlayerId);
     return true;
   }
 
   private async settleDisconnectLoss(match: RankedMatch, loserId: string): Promise<{ log: RankedMatchLog }> {
     const winnerId = loserId === match.playerAId ? match.playerBId : match.playerAId;
-    return this.settleActiveMatch(
+    const settlement = await this.settleActiveMatch(
       match,
       { playerACoins: 0, playerBCoins: 0, playerASales: 0, playerBSales: 0 },
       winnerId
     );
+    await this.recordLeavePenalty(loserId);
+    return settlement;
   }
 
   private reconnectExpired(disconnectedAt: number): boolean {
@@ -363,18 +703,48 @@ export class RankedService {
   private async ensureCanJoinQueue(playerId: string, now: number): Promise<void> {
     const penalty = await this.options.store.leavePenaltyForPlayer(playerId);
     if (penalty.cooldownUntil !== null && penalty.cooldownUntil > now) {
-      throw new Error("Ranked cooldown is active.");
+      throw new RankedCooldownError(publicPenaltyFromInternal(penalty, now));
     }
   }
 
   private async recordLeavePenalty(playerId: string): Promise<void> {
     const now = this.options.now?.() ?? Date.now();
-    const current = await this.options.store.leavePenaltyForPlayer(playerId);
+    const current = withRankedLeavePenaltyDefaults(await this.options.store.leavePenaltyForPlayer(playerId));
     const leaveCount = current.leaveCount + 1;
     const cooldownSeconds = leaveCooldownSeconds(leaveCount);
     await this.options.store.recordLeavePenalty(playerId, {
       leaveCount,
-      cooldownUntil: cooldownSeconds > 0 ? now + cooldownSeconds * 1000 : null
+      cooldownUntil: cooldownSeconds > 0 ? now + cooldownSeconds * 1000 : null,
+      cleanGamesSinceLeave: 0
+    });
+  }
+
+  private async recordCleanRankedCompletion(player: RankedPlayerRating): Promise<void> {
+    if (player.isBot) {
+      return;
+    }
+
+    const now = this.options.now?.() ?? Date.now();
+    const current = withRankedLeavePenaltyDefaults(await this.options.store.leavePenaltyForPlayer(player.playerId));
+    if (current.leaveCount <= 0) {
+      return;
+    }
+
+    const cleanGamesSinceLeave = current.cleanGamesSinceLeave + 1;
+    if (cleanGamesSinceLeave < CLEAN_GAMES_FOR_FORGIVENESS) {
+      await this.options.store.recordLeavePenalty(player.playerId, {
+        ...current,
+        cooldownUntil: current.cooldownUntil !== null && current.cooldownUntil > now ? current.cooldownUntil : null,
+        cleanGamesSinceLeave
+      });
+      return;
+    }
+
+    const leaveCount = Math.max(0, current.leaveCount - 1);
+    await this.options.store.recordLeavePenalty(player.playerId, {
+      leaveCount,
+      cooldownUntil: leaveCount >= 3 && current.cooldownUntil !== null && current.cooldownUntil > now ? current.cooldownUntil : null,
+      cleanGamesSinceLeave: 0
     });
   }
 
@@ -398,36 +768,40 @@ export class MemoryRankedStore implements RankedStore {
   private readonly waiting = new Map<string, RankedQueueEntry>();
   private readonly matches = new Map<string, RankedMatch>();
   private readonly events = new Map<string, RankedMatchEvent[]>();
-  private readonly ratings = new Map<string, PlayerRating>();
+  private readonly ratings = new Map<string, RankedPlayerRating>();
   private readonly leavePenalties = new Map<string, RankedLeavePenalty>();
   private readonly settledLogs: RankedMatchLog[] = [];
 
-  constructor(ratings: PlayerRating[] = []) {
-    ratings.forEach((rating) => this.ratings.set(rating.playerId, { ...rating }));
+  constructor(ratings: Array<PlayerRating & Partial<RankedPlayerRating>> = [], settledLogs: RankedMatchLog[] = []) {
+    RANKED_BOTS.forEach((bot) => this.ratings.set(bot.id, defaultRankedRating(bot.id)));
+    ratings.forEach((rating) => this.ratings.set(rating.playerId, normalizeRankedRating(rating, true)));
+    this.settledLogs.push(...settledLogs.map((log) => ({ ...log })));
   }
 
-  async ratingForPlayer(playerId: string): Promise<PlayerRating> {
+  async ratingForPlayer(playerId: string): Promise<RankedPlayerRating> {
     const rating = this.ratings.get(playerId);
     if (!rating) {
-      throw new Error("Player rating not found.");
+      const defaultRating = defaultRankedRating(playerId);
+      this.ratings.set(playerId, defaultRating);
+      return { ...defaultRating };
     }
     return { ...rating };
   }
 
   async leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty> {
-    return { leaveCount: 0, cooldownUntil: null, ...this.leavePenalties.get(playerId) };
+    return withRankedLeavePenaltyDefaults(this.leavePenalties.get(playerId));
   }
 
   async recordLeavePenalty(playerId: string, penalty: RankedLeavePenalty): Promise<void> {
-    this.leavePenalties.set(playerId, { ...penalty });
+    this.leavePenalties.set(playerId, withRankedLeavePenaltyDefaults(penalty));
   }
 
   async waitingPlayers(): Promise<RankedQueueEntry[]> {
-    return Array.from(this.waiting.values());
+    return Array.from(this.waiting.values()).map(withRankedQueueDefaults);
   }
 
   async addWaitingPlayer(entry: RankedQueueEntry): Promise<void> {
-    this.waiting.set(entry.playerId, entry);
+    this.waiting.set(entry.playerId, withRankedQueueDefaults(entry));
   }
 
   async removeWaitingPlayer(playerId: string): Promise<void> {
@@ -435,17 +809,17 @@ export class MemoryRankedStore implements RankedStore {
   }
 
   async createMatch(match: RankedMatch): Promise<void> {
-    this.matches.set(match.id, { ...match });
+    this.matches.set(match.id, withRankedMatchDefaults(match));
   }
 
   async currentMatchForPlayer(playerId: string): Promise<RankedMatch | null> {
     const match = Array.from(this.matches.values()).find((match) => match.status === "active" && (match.playerAId === playerId || match.playerBId === playerId));
-    return match ? { ...match } : null;
+    return match ? withRankedMatchDefaults({ ...match }) : null;
   }
 
   async matchById(matchId: string): Promise<RankedMatch | null> {
     const match = this.matches.get(matchId);
-    return match ? { ...match } : null;
+    return match ? withRankedMatchDefaults({ ...match }) : null;
   }
 
   async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void> {
@@ -489,9 +863,9 @@ export class MemoryRankedStore implements RankedStore {
       .map((log) => ({ ...log }));
   }
 
-  async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
-    this.ratings.set(playerA.playerId, { ...playerA });
-    this.ratings.set(playerB.playerId, { ...playerB });
+  async settleMatch(log: RankedMatchLog, playerA: PlayerRating & Partial<RankedPlayerRating>, playerB: PlayerRating & Partial<RankedPlayerRating>): Promise<void> {
+    this.ratings.set(playerA.playerId, normalizeRankedRating(playerA, true));
+    this.ratings.set(playerB.playerId, normalizeRankedRating(playerB, true));
     this.settledLogs.push(log);
     const match = this.matches.get(log.matchId);
     if (match) {
@@ -499,85 +873,117 @@ export class MemoryRankedStore implements RankedStore {
     }
   }
 
-  async leaderboard(limit: number): Promise<RankedLeaderboardEntry[]> {
-    return Array.from(this.ratings.values())
+  async leaderboard(query: RankedLeaderboardQuery = {}): Promise<RankedLeaderboardPage> {
+    const { page, pageSize, search } = normalizeLeaderboardQuery(query);
+    const searchLower = search.toLowerCase();
+    const filtered = Array.from(this.ratings.values())
+      .filter((rating) => !rating.isBot && rating.calibrationGames >= CALIBRATION_MATCH_COUNT)
+      .filter((rating) => {
+        if (!searchLower) return true;
+        return rating.displayName.toLowerCase().includes(searchLower) || rating.playerId.toLowerCase().includes(searchLower);
+      })
       .sort((left, right) => right.mmr - left.mmr)
-      .slice(0, limit)
       .map((rating) => ({
         playerId: rating.playerId,
-        displayName: rating.playerId,
-        avatarUrl: null,
+        displayName: rating.displayName,
+        avatarUrl: rating.avatarUrl,
         mmr: rating.mmr,
         rankedGames: rating.rankedGames,
         wins: rating.wins,
         losses: rating.losses
       }));
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    return {
+      leaderboard: filtered.slice((page - 1) * pageSize, page * pageSize),
+      page,
+      pageSize,
+      total,
+      totalPages
+    };
   }
 }
 
 export class MariaDbRankedStore implements RankedStore {
   constructor(private readonly pool: MariaDbRankedPool) {}
 
-  async ratingForPlayer(playerId: string): Promise<PlayerRating> {
+  async ratingForPlayer(playerId: string): Promise<RankedPlayerRating> {
     await this.ensureRatingRow(playerId);
     const rows = await this.pool.query(
-      `SELECT player_id AS playerId, mmr, ranked_games AS rankedGames, wins, losses, last_ranked_at AS lastRankedAt
-       FROM player_ratings
-       WHERE player_id = ?
+      `SELECT r.player_id AS playerId, r.mmr, r.ranked_games AS rankedGames, r.wins, r.losses,
+        r.last_ranked_at AS lastRankedAt, r.rating_games AS ratingGames, r.calibration_games AS calibrationGames,
+        u.display_name AS displayName, u.avatar_url AS avatarUrl, u.is_bot AS isBot
+       FROM player_ratings r
+       JOIN users u ON u.id = r.player_id
+       WHERE r.player_id = ?
        LIMIT 1`,
       [playerId]
     );
     const row = rows[0];
-    return {
+    return normalizeRankedRating({
       playerId,
       mmr: Number(row?.mmr ?? DEFAULT_PLAYER_RATING.mmr),
       rankedGames: Number(row?.rankedGames ?? DEFAULT_PLAYER_RATING.rankedGames),
       wins: Number(row?.wins ?? DEFAULT_PLAYER_RATING.wins),
       losses: Number(row?.losses ?? DEFAULT_PLAYER_RATING.losses),
-      lastRankedAt: row?.lastRankedAt instanceof Date ? row.lastRankedAt.toISOString() : null
-    };
+      lastRankedAt: row?.lastRankedAt instanceof Date ? row.lastRankedAt.toISOString() : null,
+      ratingGames: Number(row?.ratingGames ?? row?.rankedGames ?? 0),
+      calibrationGames: Number(row?.calibrationGames ?? (isRankedBotId(playerId) ? CALIBRATION_MATCH_COUNT : 0)),
+      displayName: String(row?.displayName ?? playerId),
+      avatarUrl: row?.avatarUrl ? String(row.avatarUrl) : null,
+      isBot: Boolean(row?.isBot)
+    }, false);
   }
 
   async leavePenaltyForPlayer(playerId: string): Promise<RankedLeavePenalty> {
     await this.ensureRatingRow(playerId);
     const rows = await this.pool.query(
-      `SELECT ranked_leave_count AS leaveCount, ranked_cooldown_until AS cooldownUntil
+      `SELECT ranked_leave_count AS leaveCount, ranked_cooldown_until AS cooldownUntil,
+        ranked_clean_games_since_leave AS cleanGamesSinceLeave
        FROM player_ratings
        WHERE player_id = ?
        LIMIT 1`,
       [playerId]
     );
-    return {
+    return withRankedLeavePenaltyDefaults({
       leaveCount: Number(rows[0]?.leaveCount ?? 0),
-      cooldownUntil: dateValueToMillis(rows[0]?.cooldownUntil)
-    };
+      cooldownUntil: dateValueToMillis(rows[0]?.cooldownUntil),
+      cleanGamesSinceLeave: Number(rows[0]?.cleanGamesSinceLeave ?? 0)
+    });
   }
 
   async recordLeavePenalty(playerId: string, penalty: RankedLeavePenalty): Promise<void> {
     await this.ensureRatingRow(playerId);
     await this.pool.query(
       `UPDATE player_ratings
-       SET ranked_leave_count = ?, ranked_cooldown_until = ?
+       SET ranked_leave_count = ?, ranked_cooldown_until = ?, ranked_clean_games_since_leave = ?
        WHERE player_id = ?`,
-      [penalty.leaveCount, penalty.cooldownUntil === null ? null : new Date(penalty.cooldownUntil), playerId]
+      [
+        penalty.leaveCount,
+        penalty.cooldownUntil === null ? null : new Date(penalty.cooldownUntil),
+        penalty.cleanGamesSinceLeave,
+        playerId
+      ]
     );
   }
 
   async waitingPlayers(): Promise<RankedQueueEntry[]> {
-    const rows = await this.pool.query("SELECT player_id AS playerId, mmr, joined_at AS joinedAt FROM ranked_queue ORDER BY joined_at ASC");
-    return rows.map((row: { playerId: string; mmr: number; joinedAt: Date }) => ({
+    const rows = await this.pool.query("SELECT player_id AS playerId, mmr, joined_at AS joinedAt, allow_human AS allowHuman, bot_match_at AS botMatchAt FROM ranked_queue ORDER BY joined_at ASC");
+    return rows.map((row: { playerId: string; mmr: number; joinedAt: Date; allowHuman?: unknown; botMatchAt?: unknown }) => ({
       playerId: row.playerId,
       mmr: Number(row.mmr),
-      joinedAt: row.joinedAt instanceof Date ? row.joinedAt.getTime() : Date.now()
+      joinedAt: row.joinedAt instanceof Date ? row.joinedAt.getTime() : Date.now(),
+      allowHuman: row.allowHuman === undefined ? true : Boolean(row.allowHuman),
+      botMatchAt: dateValueToMillis(row.botMatchAt)
     }));
   }
 
   async addWaitingPlayer(entry: RankedQueueEntry): Promise<void> {
     await this.pool.query(
-      `INSERT INTO ranked_queue (player_id, mmr, joined_at)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE mmr = VALUES(mmr), joined_at = VALUES(joined_at)`,
-      [entry.playerId, entry.mmr, new Date(entry.joinedAt)]
+      `INSERT INTO ranked_queue (player_id, mmr, joined_at, allow_human, bot_match_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE mmr = VALUES(mmr), joined_at = VALUES(joined_at), allow_human = VALUES(allow_human), bot_match_at = VALUES(bot_match_at)`,
+      [entry.playerId, entry.mmr, new Date(entry.joinedAt), entry.allowHuman, entry.botMatchAt === null ? null : new Date(entry.botMatchAt)]
     );
   }
 
@@ -590,8 +996,8 @@ export class MariaDbRankedStore implements RankedStore {
       `INSERT INTO ranked_matches (
         id, player_a_id, player_b_id, player_a_mmr_before, player_b_mmr_before,
         first_player_id, seed, initial_state, status, created_at,
-        player_a_disconnected_at, player_b_disconnected_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        player_a_disconnected_at, player_b_disconnected_at, is_calibration, is_bot_match, bot_difficulty
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         match.id,
         match.playerAId,
@@ -604,7 +1010,10 @@ export class MariaDbRankedStore implements RankedStore {
         match.status,
         new Date(match.createdAt),
         match.playerADisconnectedAt ? new Date(match.playerADisconnectedAt) : null,
-        match.playerBDisconnectedAt ? new Date(match.playerBDisconnectedAt) : null
+        match.playerBDisconnectedAt ? new Date(match.playerBDisconnectedAt) : null,
+        match.isCalibration,
+        match.isBotMatch,
+        match.botDifficulty
       ]
     );
   }
@@ -614,7 +1023,8 @@ export class MariaDbRankedStore implements RankedStore {
       `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
         first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt,
-        player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt
+        player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt,
+        is_calibration AS isCalibration, is_bot_match AS isBotMatch, bot_difficulty AS botDifficulty
        FROM ranked_matches
        WHERE status = 'active' AND (player_a_id = ? OR player_b_id = ?)
        ORDER BY created_at DESC
@@ -635,7 +1045,10 @@ export class MariaDbRankedStore implements RankedStore {
           status: row.status,
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
           playerADisconnectedAt: dateValueToMillis(row.playerADisconnectedAt),
-          playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt)
+          playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt),
+          isCalibration: Boolean(row.isCalibration),
+          isBotMatch: Boolean(row.isBotMatch),
+          botDifficulty: row.botDifficulty === null || row.botDifficulty === undefined ? null : Number(row.botDifficulty)
         }
       : null;
   }
@@ -645,7 +1058,8 @@ export class MariaDbRankedStore implements RankedStore {
       `SELECT id, player_a_id AS playerAId, player_b_id AS playerBId,
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
         first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt,
-        player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt
+        player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt,
+        is_calibration AS isCalibration, is_bot_match AS isBotMatch, bot_difficulty AS botDifficulty
        FROM ranked_matches
        WHERE id = ?
        LIMIT 1`,
@@ -665,7 +1079,10 @@ export class MariaDbRankedStore implements RankedStore {
           status: row.status,
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
           playerADisconnectedAt: dateValueToMillis(row.playerADisconnectedAt),
-          playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt)
+          playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt),
+          isCalibration: Boolean(row.isCalibration),
+          isBotMatch: Boolean(row.isBotMatch),
+          botDifficulty: row.botDifficulty === null || row.botDifficulty === undefined ? null : Number(row.botDifficulty)
         }
       : null;
   }
@@ -727,16 +1144,29 @@ export class MariaDbRankedStore implements RankedStore {
 
   async matchHistoryForPlayer(playerId: string, limit: number): Promise<RankedMatchLog[]> {
     const rows = await this.pool.query(
-      `SELECT id AS matchId, player_a_id AS playerAId, player_b_id AS playerBId,
-        winner_id AS winnerId, loser_id AS loserId, player_a_coins AS playerACoins,
-        player_b_coins AS playerBCoins, player_a_sales AS playerASales,
-        player_b_sales AS playerBSales, player_a_mmr_before AS playerAMmrBefore,
-        player_b_mmr_before AS playerBMmrBefore, player_a_mmr_after AS playerAMmrAfter,
-        player_b_mmr_after AS playerBMmrAfter, mmr_change AS mmrChange,
-        first_player_id AS firstPlayerId, created_at AS createdAt
+      `SELECT ranked_matches.id AS matchId,
+        ranked_matches.player_a_id AS playerAId,
+        ranked_matches.player_b_id AS playerBId,
+        player_a.display_name AS playerADisplayName, player_b.display_name AS playerBDisplayName,
+        ranked_matches.winner_id AS winnerId,
+        ranked_matches.loser_id AS loserId,
+        ranked_matches.player_a_coins AS playerACoins,
+        ranked_matches.player_b_coins AS playerBCoins,
+        ranked_matches.player_a_sales AS playerASales,
+        ranked_matches.player_b_sales AS playerBSales,
+        ranked_matches.player_a_mmr_before AS playerAMmrBefore,
+        ranked_matches.player_b_mmr_before AS playerBMmrBefore,
+        ranked_matches.player_a_mmr_after AS playerAMmrAfter,
+        ranked_matches.player_b_mmr_after AS playerBMmrAfter,
+        ranked_matches.mmr_change AS mmrChange,
+        ranked_matches.first_player_id AS firstPlayerId,
+        ranked_matches.is_calibration AS isCalibration,
+        ranked_matches.created_at AS createdAt
        FROM ranked_matches
-       WHERE status = 'settled' AND (player_a_id = ? OR player_b_id = ?)
-       ORDER BY created_at DESC
+       JOIN users player_a ON player_a.id = ranked_matches.player_a_id
+       JOIN users player_b ON player_b.id = ranked_matches.player_b_id
+       WHERE ranked_matches.status = 'settled' AND (ranked_matches.player_a_id = ? OR ranked_matches.player_b_id = ?)
+       ORDER BY ranked_matches.created_at DESC
        LIMIT ?`,
       [playerId, playerId, limit]
     );
@@ -744,6 +1174,8 @@ export class MariaDbRankedStore implements RankedStore {
       matchId: row.matchId,
       playerAId: row.playerAId,
       playerBId: row.playerBId,
+      playerADisplayName: row.playerADisplayName,
+      playerBDisplayName: row.playerBDisplayName,
       winnerId: row.winnerId ?? null,
       loserId: row.loserId ?? null,
       playerACoins: Number(row.playerACoins),
@@ -756,23 +1188,44 @@ export class MariaDbRankedStore implements RankedStore {
       playerBMmrAfter: Number(row.playerBMmrAfter),
       mmrChange: Number(row.mmrChange),
       firstPlayerId: row.firstPlayerId,
+      isCalibration: Boolean(row.isCalibration),
       createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt)
     }));
   }
 
-  async settleMatch(log: RankedMatchLog, playerA: PlayerRating, playerB: PlayerRating): Promise<void> {
+  async settleMatch(log: RankedMatchLog, playerA: PlayerRating & Partial<RankedPlayerRating>, playerB: PlayerRating & Partial<RankedPlayerRating>): Promise<void> {
+    const nextPlayerA = normalizeRankedRating(playerA, true);
+    const nextPlayerB = normalizeRankedRating(playerB, true);
     await this.withTransaction(async (connection) => {
       await connection.query(
         `UPDATE player_ratings
-         SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
+         SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?, rating_games = ?, calibration_games = ?
          WHERE player_id = ?`,
-        [playerA.mmr, playerA.rankedGames, playerA.wins, playerA.losses, playerA.lastRankedAt, playerA.playerId]
+        [
+          nextPlayerA.mmr,
+          nextPlayerA.rankedGames,
+          nextPlayerA.wins,
+          nextPlayerA.losses,
+          nextPlayerA.lastRankedAt,
+          nextPlayerA.ratingGames,
+          nextPlayerA.calibrationGames,
+          nextPlayerA.playerId
+        ]
       );
       await connection.query(
         `UPDATE player_ratings
-         SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?
+         SET mmr = ?, ranked_games = ?, wins = ?, losses = ?, last_ranked_at = ?, rating_games = ?, calibration_games = ?
          WHERE player_id = ?`,
-        [playerB.mmr, playerB.rankedGames, playerB.wins, playerB.losses, playerB.lastRankedAt, playerB.playerId]
+        [
+          nextPlayerB.mmr,
+          nextPlayerB.rankedGames,
+          nextPlayerB.wins,
+          nextPlayerB.losses,
+          nextPlayerB.lastRankedAt,
+          nextPlayerB.ratingGames,
+          nextPlayerB.calibrationGames,
+          nextPlayerB.playerId
+        ]
       );
       await connection.query(
         `UPDATE ranked_matches
@@ -796,29 +1249,64 @@ export class MariaDbRankedStore implements RankedStore {
     });
   }
 
-  async leaderboard(limit: number): Promise<RankedLeaderboardEntry[]> {
+  async leaderboard(query: RankedLeaderboardQuery = {}): Promise<RankedLeaderboardPage> {
+    const { page, pageSize, search } = normalizeLeaderboardQuery(query);
+    const likeSearch = `%${search}%`;
+    const where = search
+      ? "u.is_bot = FALSE AND r.calibration_games >= ? AND (u.display_name LIKE ? OR r.player_id LIKE ?)"
+      : "u.is_bot = FALSE AND r.calibration_games >= ?";
+    const whereValues = search ? [CALIBRATION_MATCH_COUNT, likeSearch, likeSearch] : [CALIBRATION_MATCH_COUNT];
+    const countRows = await this.pool.query(
+      `SELECT COUNT(*) AS total
+       FROM player_ratings r
+       JOIN users u ON u.id = r.player_id
+       WHERE ${where}`,
+      whereValues
+    );
     const rows = await this.pool.query(
       `SELECT r.player_id AS playerId, u.display_name AS displayName, u.avatar_url AS avatarUrl,
         r.mmr, r.ranked_games AS rankedGames, r.wins, r.losses
        FROM player_ratings r
        JOIN users u ON u.id = r.player_id
+       WHERE ${where}
        ORDER BY r.mmr DESC, r.ranked_games DESC
-       LIMIT ?`,
-      [limit]
+       LIMIT ? OFFSET ?`,
+      [...whereValues, pageSize, (page - 1) * pageSize]
     );
-    return rows.map((row: RankedLeaderboardEntry) => ({
-      playerId: row.playerId,
-      displayName: row.displayName,
-      avatarUrl: row.avatarUrl ?? null,
-      mmr: Number(row.mmr),
-      rankedGames: Number(row.rankedGames),
-      wins: Number(row.wins),
-      losses: Number(row.losses)
-    }));
+    const total = Number(countRows[0]?.total ?? 0);
+    return {
+      leaderboard: rows.map((row: RankedLeaderboardEntry) => ({
+        playerId: row.playerId,
+        displayName: row.displayName,
+        avatarUrl: row.avatarUrl ?? null,
+        mmr: Number(row.mmr),
+        rankedGames: Number(row.rankedGames),
+        wins: Number(row.wins),
+        losses: Number(row.losses)
+      })),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize))
+    };
   }
 
   private async ensureRatingRow(playerId: string): Promise<void> {
-    await this.pool.query("INSERT INTO player_ratings (player_id) VALUES (?) ON DUPLICATE KEY UPDATE player_id = player_id", [playerId]);
+    const bot = RANKED_BOTS.find((candidate) => candidate.id === playerId);
+    if (bot) {
+      await this.pool.query(
+        `INSERT INTO users (id, display_name, is_bot)
+         VALUES (?, ?, TRUE)
+         ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), is_bot = TRUE`,
+        [bot.id, bot.displayName]
+      );
+    }
+    await this.pool.query(
+      `INSERT INTO player_ratings (player_id, mmr, rating_games, calibration_games)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE player_id = player_id`,
+      [playerId, bot?.mmr ?? DEFAULT_PLAYER_RATING.mmr, 0, bot ? CALIBRATION_MATCH_COUNT : 0]
+    );
   }
 
   private async withTransaction<T>(work: (connection: MariaDbRankedConnection) => Promise<T>): Promise<T> {

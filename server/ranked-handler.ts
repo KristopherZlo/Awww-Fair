@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { sessionTokenHash, type AuthStore, type AuthUser } from "./auth";
-import type { RankedService } from "./ranked";
+import { RankedCooldownError, type RankedService } from "./ranked";
 
 function json(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -41,9 +41,15 @@ function numberField(body: Record<string, unknown>, name: string): number {
   return value;
 }
 
-function rankedErrorResponse(error: unknown): { status: number; body: { error: string } } {
+function rankedErrorResponse(error: unknown): { status: number; body: { error: string; penalty?: unknown } } {
   if (error instanceof Error && error.message === "Ranked cooldown is active.") {
-    return { status: 429, body: { error: error.message } };
+    return {
+      status: 429,
+      body: {
+        error: error.message,
+        ...(error instanceof RankedCooldownError ? { penalty: error.penalty } : {})
+      }
+    };
   }
   if (error instanceof Error && error.message === "Ranked replay result mismatch.") {
     return { status: 409, body: { error: error.message } };
@@ -56,7 +62,11 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
     const parts = requestUrl.pathname.split("/").filter(Boolean);
     if (request.method === "GET" && parts[2] === "leaderboard") {
-      json(response, 200, { leaderboard: await service.leaderboard() });
+      json(response, 200, await service.leaderboard({
+        page: Number(requestUrl.searchParams.get("page") ?? 1),
+        pageSize: Number(requestUrl.searchParams.get("pageSize") ?? 25),
+        search: requestUrl.searchParams.get("search") ?? ""
+      }));
       return;
     }
 
@@ -81,7 +91,7 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         return;
       }
       if (request.method === "GET" && parts[2] === "rating") {
-        json(response, 200, { rating: await service.ratingForPlayer(user.id) });
+        json(response, 200, { rating: await service.publicRatingForPlayer(user.id) });
         return;
       }
       if (request.method === "GET" && parts[2] === "history") {

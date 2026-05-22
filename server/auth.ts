@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "mariadb";
+import { DEV_PLAYER_USER_ID, isSeededDevPlayerName } from "./dev-seed";
+import { publicPath } from "./listen-config.mjs";
 
 const SESSION_COOKIE = "tm_session";
 const OAUTH_STATE_COOKIE = "tm_oauth_state";
@@ -151,7 +153,7 @@ export function createAuthHandler({
         const user = await store.upsertOAuthUser(parts[2], profile);
         const token = tokenFactory();
         await store.createSession(sessionTokenHash(token), user.id, new Date(now().getTime() + SESSION_TTL_SECONDS * 1000));
-        redirect(response, "/", { "Set-Cookie": [sessionCookie(token), oauthStateCookie("", 0)] });
+        redirect(response, appHomePath(env), { "Set-Cookie": [sessionCookie(token), oauthStateCookie("", 0)] });
         return;
       }
 
@@ -164,6 +166,11 @@ export function createAuthHandler({
 
 function appBaseUrl(env: Partial<Record<string, string | undefined>>) {
   return (env.APP_BASE_URL ?? "http://127.0.0.1:5176").replace(/\/+$/, "");
+}
+
+function appHomePath(env: Partial<Record<string, string | undefined>>) {
+  const path = publicPath(env);
+  return path ? `/${path}/` : "/";
 }
 
 function oauthAuthorizeUrl(provider: "google" | "discord", env: Partial<Record<string, string | undefined>>, state: string) {
@@ -237,6 +244,56 @@ async function fetchOAuthProfile(
   };
 }
 
+export class MemoryAuthStore implements AuthStore {
+  private readonly users = new Map<string, AuthUser>();
+  private readonly sessions = new Map<string, { userId: string; expiresAt: Date }>();
+  private readonly oauthUsers = new Map<string, string>();
+
+  async findUserBySessionHash(tokenHash: string, now: Date): Promise<AuthUser | null> {
+    const session = this.sessions.get(tokenHash);
+    if (!session || session.expiresAt <= now) {
+      this.sessions.delete(tokenHash);
+      return null;
+    }
+    const user = this.users.get(session.userId);
+    return user ? { ...user } : null;
+  }
+
+  async createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser> {
+    const seededPlayerId = isSeededDevPlayerName(profile.displayName) ? DEV_PLAYER_USER_ID : null;
+    const user: AuthUser = {
+      id: seededPlayerId ?? crypto.randomUUID(),
+      displayName: profile.displayName,
+      avatarUrl: profile.avatarUrl ?? null,
+      email: profile.email ?? null
+    };
+    this.users.set(user.id, user);
+    return { ...user };
+  }
+
+  async upsertOAuthUser(provider: "google" | "discord", profile: OAuthProfile): Promise<AuthUser> {
+    const accountKey = `${provider}:${profile.providerUserId}`;
+    const existingId = this.oauthUsers.get(accountKey);
+    const user: AuthUser = {
+      id: existingId ?? crypto.randomUUID(),
+      displayName: profile.displayName,
+      avatarUrl: profile.avatarUrl ?? null,
+      email: profile.email ?? null
+    };
+    this.users.set(user.id, user);
+    this.oauthUsers.set(accountKey, user.id);
+    return { ...user };
+  }
+
+  async createSession(tokenHash: string, userId: string, expiresAt: Date): Promise<void> {
+    this.sessions.set(tokenHash, { userId, expiresAt });
+  }
+
+  async deleteSession(tokenHash: string): Promise<void> {
+    this.sessions.delete(tokenHash);
+  }
+}
+
 export class MariaDbAuthStore implements AuthStore {
   constructor(private readonly pool: Pick<Pool, "query">) {}
 
@@ -253,16 +310,26 @@ export class MariaDbAuthStore implements AuthStore {
   }
 
   async createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser> {
+    const seededPlayerId = isSeededDevPlayerName(profile.displayName) ? DEV_PLAYER_USER_ID : null;
     const user: AuthUser = {
-      id: crypto.randomUUID(),
+      id: seededPlayerId ?? crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
       email: profile.email ?? null
     };
-    await this.pool.query(
-      "INSERT INTO users (id, display_name, avatar_url, email) VALUES (?, ?, ?, ?)",
-      [user.id, user.displayName, user.avatarUrl, user.email]
-    );
+    if (seededPlayerId) {
+      await this.pool.query(
+        `INSERT INTO users (id, display_name, avatar_url, email, is_bot)
+         VALUES (?, ?, ?, ?, FALSE)
+         ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), avatar_url = VALUES(avatar_url), email = VALUES(email), is_bot = FALSE`,
+        [user.id, user.displayName, user.avatarUrl, user.email]
+      );
+    } else {
+      await this.pool.query(
+        "INSERT INTO users (id, display_name, avatar_url, email) VALUES (?, ?, ?, ?)",
+        [user.id, user.displayName, user.avatarUrl, user.email]
+      );
+    }
     return user;
   }
 

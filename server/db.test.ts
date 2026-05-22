@@ -37,6 +37,24 @@ describe("MariaDB server database setup", () => {
     expect(sql).toContain("player_a_disconnected_at DATETIME(3) NULL");
     expect(sql).toContain("player_b_disconnected_at DATETIME(3) NULL");
     expect(sql).toContain("ranked_leave_count INT NOT NULL DEFAULT 0");
+    expect(sql).toContain("ranked_clean_games_since_leave INT NOT NULL DEFAULT 0");
     expect(sql).toContain("ranked_cooldown_until DATETIME(3) NULL");
+    expect(sql).toContain("is_bot BOOLEAN NOT NULL DEFAULT FALSE");
+    expect(sql).toContain("rating_games INT NOT NULL DEFAULT 0");
+    expect(sql).toContain("calibration_games INT NOT NULL DEFAULT 0");
+    expect(sql).toContain("bot_match_at DATETIME(3) NULL");
+    expect(sql).toContain("is_calibration BOOLEAN NOT NULL DEFAULT FALSE");
+    expect(sql).toContain("is_bot_match BOOLEAN NOT NULL DEFAULT FALSE");
+  });
+
+  it("seeds the player test account with ranked matches and leaderboard rows", () => {
+    const sql = createMigrationStatements().join("\n");
+
+    expect(sql).toContain("'dev-player', 'player'");
+    expect(sql).toContain("'seed-mira', 'Mira'");
+    expect(sql).toContain("'seed-player-match-1'");
+    expect(sql).toContain("'seed-player-match-2'");
+    expect(sql).toContain("'seed-player-match-3'");
+    expect(sql).toContain("ranked_games, rating_games, calibration_games, wins, losses");
   });
 });

@@ -126,6 +126,10 @@
     grid-template-columns: 1fr;
   }
 
+  .play-layout {
+    grid-template-columns: 1fr;
+  }
+
   .party-goal-list {
     grid-template-columns: 1fr;
   }
@@ -158,14 +162,34 @@
     grid-template-columns: 1fr;
   }
 
+  .menu-header,
   .menu-primary-grid,
   .menu-online-row,
   .menu-tabs,
-  .ranked-queue-row,
+  .play-mode-tabs,
+  .ranked-card-top,
+  .ranked-search-panel,
+  .ranked-stats,
+  .leaderboard-heading,
+  .leaderboard-controls,
+  .custom-table-actions,
   .match-history-row,
   .oauth-actions,
   .dev-login-row {
     grid-template-columns: 1fr;
+  }
+
+  .menu-account {
+    width: 100%;
+  }
+
+  .menu-header {
+    height: auto;
+  }
+
+  .play-tabs {
+    flex-wrap: wrap;
+    gap: 10px 14px;
   }
 
   .level-map-heading,
@@ -186,14 +210,25 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .menu-footer-actions,
+  .play-level-road {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+
+  .menu-utility-actions,
   .join-lobby {
     justify-content: stretch;
   }
 
-  .menu-footer-actions button,
+  .menu-utility-buttons,
+  .menu-support-links {
+    justify-content: center;
+  }
+
+  .menu-utility-actions button,
+  .menu-utility-actions a,
   .join-lobby button,
-  .join-lobby input {
+  .join-lobby .menu-field {
     width: 100%;
   }
 

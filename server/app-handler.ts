@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "mariadb";
-import { createAuthHandler, MariaDbAuthStore, type AuthStore } from "./auth";
+import { createAuthHandler, MariaDbAuthStore, MemoryAuthStore, type AuthStore } from "./auth";
 import { createDbPool } from "./db";
+import { DEV_SEED_MATCH_LOGS, DEV_SEED_RATINGS } from "./dev-seed";
 import { createLobbyHandler, type RequestHandler } from "./lobby-handler.mjs";
 import { createRankedHandler } from "./ranked-handler";
-import { MariaDbRankedStore, RankedService } from "./ranked";
+import { MariaDbRankedStore, MemoryRankedStore, RankedService } from "./ranked";
 
 export interface AppHandlerOptions {
   env?: Partial<Record<string, string | undefined>>;
@@ -33,8 +34,9 @@ function isRankedRoute(request: IncomingMessage) {
 
 export function createAppHandler(options: AppHandlerOptions = {}): RequestHandler {
   const env = options.env ?? process.env;
-  const dbPool = options.dbPool ?? createDbPool(env);
-  const authStore = options.authStore ?? new MariaDbAuthStore(dbPool);
+  const useMemoryStore = env.DEV_MEMORY_STORE === "true";
+  const dbPool = options.dbPool ?? (useMemoryStore ? null : createDbPool(env));
+  const authStore = options.authStore ?? (useMemoryStore ? new MemoryAuthStore() : new MariaDbAuthStore(dbPool!));
   const authHandler = createAuthHandler({
     env,
     store: authStore,
@@ -42,7 +44,11 @@ export function createAppHandler(options: AppHandlerOptions = {}): RequestHandle
     oauthStateFactory: options.oauthStateFactory,
     fetch: options.fetch
   });
-  const rankedService = options.rankedService ?? new RankedService({ store: new MariaDbRankedStore(dbPool) });
+  const rankedService =
+    options.rankedService ??
+    new RankedService({
+      store: useMemoryStore ? new MemoryRankedStore(DEV_SEED_RATINGS, DEV_SEED_MATCH_LOGS) : new MariaDbRankedStore(dbPool!)
+    });
   const rankedHandler = createRankedHandler({ authStore, service: rankedService });
   const fallbackHandler =
     options.fallbackHandler ??

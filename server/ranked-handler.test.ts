@@ -71,20 +71,22 @@ describe("ranked handler", () => {
 
   it("serves leaderboard without requiring login", async () => {
     const store = new MemoryRankedStore([
-      { playerId: "a", mmr: 1600, rankedGames: 2, wins: 2, losses: 0, lastRankedAt: null },
-      { playerId: "b", mmr: 1500, rankedGames: 1, wins: 0, losses: 1, lastRankedAt: null }
+      { playerId: "a", displayName: "Alice", mmr: 1600, rankedGames: 6, wins: 4, losses: 2, lastRankedAt: null, calibrationGames: 5, ratingGames: 6 },
+      { playerId: "b", displayName: "Boris", mmr: 1500, rankedGames: 5, wins: 2, losses: 3, lastRankedAt: null, calibrationGames: 5, ratingGames: 5 },
+      { playerId: "c", displayName: "Carla", mmr: 1700, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null, calibrationGames: 2, ratingGames: 2 }
     ]);
     const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service: new RankedService({ store }) }));
     cleanups.push(server.close);
 
-    const response = await fetch(`${server.url}/api/ranked/leaderboard`);
+    const response = await fetch(`${server.url}/api/ranked/leaderboard?page=1&pageSize=1&search=bo`);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      leaderboard: [
-        { playerId: "a", displayName: "a", avatarUrl: null, mmr: 1600, rankedGames: 2, wins: 2, losses: 0 },
-        { playerId: "b", displayName: "b", avatarUrl: null, mmr: 1500, rankedGames: 1, wins: 0, losses: 1 }
-      ]
+      leaderboard: [{ playerId: "b", displayName: "Boris", avatarUrl: null, mmr: 1500, rankedGames: 5, wins: 2, losses: 3 }],
+      page: 1,
+      pageSize: 1,
+      total: 1,
+      totalPages: 1
     });
   });
 
@@ -102,13 +104,30 @@ describe("ranked handler", () => {
   });
 
   it("returns the authenticated player rating", async () => {
-    const store = new MemoryRankedStore([{ playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null }]);
+    const store = new MemoryRankedStore([{ playerId: "a", mmr: 1518, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null, calibrationGames: 2, ratingGames: 2 }]);
     const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service: new RankedService({ store }) }));
     cleanups.push(server.close);
 
     const response = await fetch(`${server.url}/api/ranked/rating`, { headers: { Cookie: "tm_session=token" } });
 
-    expect(await response.json()).toEqual({ rating: { playerId: "a", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+    expect(await response.json()).toEqual({
+      rating: {
+        playerId: "a",
+        mmr: null,
+        rankedGames: 0,
+        wins: 0,
+        losses: 0,
+        lastRankedAt: null,
+        isCalibrating: true,
+        calibrationGamesRemaining: 3,
+        penalty: {
+          leaveWarnings: 0,
+          cleanGamesUntilForgiven: null,
+          cooldownUntil: null,
+          queueBlocked: false
+        }
+      }
+    });
   });
 
   it("returns authenticated player match history", async () => {
@@ -202,11 +221,11 @@ describe("ranked handler", () => {
       body: JSON.stringify({ matchId: "match-1" })
     });
 
-    expect(await disconnect.json()).toEqual({ status: "reconnect_window", reconnectUntil: 91_000 });
+    expect(await disconnect.json()).toEqual({ status: "reconnect_window", reconnectUntil: 61_000 });
     expect(await reconnect.json()).toMatchObject({ status: "matched", match: { id: "match-1", status: "active" } });
   });
 
-  it("returns a cooldown error when ranked queue is locked", async () => {
+  it("returns a structured cooldown error when ranked queue is locked", async () => {
     let now = 1_000;
     let matchIndex = 0;
     const store = new MemoryRankedStore([
@@ -219,11 +238,11 @@ describe("ranked handler", () => {
       idFactory: () => `match-${++matchIndex}`,
       seedFactory: () => `seed-${matchIndex}`
     });
-    for (let leave = 0; leave < 2; leave += 1) {
+    for (let leave = 0; leave < 3; leave += 1) {
       await service.joinQueue("a");
       await service.joinQueue("b");
       await service.disconnectFromMatch("a", `match-${leave + 1}`);
-      now += 91_000;
+      now += 61_000;
       await service.statusForPlayer("b");
     }
     const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
@@ -232,7 +251,15 @@ describe("ranked handler", () => {
     const response = await fetch(`${server.url}/api/ranked/queue`, { method: "POST", headers: { Cookie: "tm_session=token" } });
 
     expect(response.status).toBe(429);
-    expect(await response.json()).toEqual({ error: "Ranked cooldown is active." });
+    expect(await response.json()).toEqual({
+      error: "Ranked cooldown is active.",
+      penalty: {
+        leaveWarnings: 3,
+        cleanGamesUntilForgiven: 5,
+        cooldownUntil: now + 3 * 60 * 1000,
+        queueBlocked: true
+      }
+    });
   });
 
   it("returns a replay mismatch error when submitted ranked result is invalid", async () => {
