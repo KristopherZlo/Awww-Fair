@@ -84,7 +84,7 @@ npm run xampp:migrate
 npm run xampp:api
 ```
 
-Open `http://<LAN-IP>/trendmarket/` from another device. Apache serves the frontend and proxies `/api` to the local Node server on `127.0.0.1:5176`. The XAMPP migration command creates the `trend_market` database if it does not exist, then applies the tables.
+Open `http://<LAN-IP>/trendmarket/` from another device. Apache serves the frontend and proxies `/api` and `/trendmarket/api` to the local Node server on `127.0.0.1:5176`. The XAMPP migration command creates the `trend_market` database if it does not exist, then applies the tables.
 
 ## Ranked Server Env
 
