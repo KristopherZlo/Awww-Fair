@@ -49,7 +49,7 @@ import {
 } from "./app/gameConfig";
 import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
-import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
+import { cancelProfileDeletion, deactivateProfile, devLogin, loadCurrentUser, logout, updateProfile, type AuthUser } from "./app/authClient";
 import {
   abandonRankedMatch,
   cancelRankedQueue,
@@ -238,6 +238,16 @@ function formatRankedQueueTime(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function formatDeletionCountdown(seconds: number): string {
+  const safeSeconds = Math.max(0, seconds);
+  const days = Math.floor(safeSeconds / 86400);
+  const hours = Math.floor((safeSeconds % 86400) / 3600);
+  if (days <= 0 && hours <= 0) {
+    return "меньше часа";
+  }
+  return `${days} дн. ${hours} ч.`;
 }
 
 const CUTSCENE_FRAMES = [
@@ -656,6 +666,11 @@ export default function App() {
   const [playModeTab, setPlayModeTab] = useState<PlayModeTab>("ranked");
   const [authError, setAuthError] = useState("");
   const [devLoginName, setDevLoginName] = useState("player");
+  const [profileDisplayName, setProfileDisplayName] = useState("");
+  const [profileAvatarFile, setProfileAvatarFile] = useState<File | null>(null);
+  const [profileDeleteConfirmation, setProfileDeleteConfirmation] = useState("");
+  const [profileStatus, setProfileStatus] = useState("");
+  const [profileDeleteSecondsLeft, setProfileDeleteSecondsLeft] = useState(0);
   const [profileRating, setProfileRating] = useState<PlayerRating | null>(null);
   const [matchHistory, setMatchHistory] = useState<RankedMatchHistoryEntry[]>([]);
   const [matchHistoryError, setMatchHistoryError] = useState("");
@@ -742,7 +757,54 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setProfileDisplayName(currentUser?.displayName ?? "");
+    setProfileAvatarFile(null);
+    setProfileDeleteConfirmation("");
+    setProfileStatus("");
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (currentUser) {
+      setProfileDisplayName(currentUser.displayName);
+    }
+  }, [currentUser?.displayName]);
+
+  useEffect(() => {
+    if (!currentUser?.deleteAfter) {
+      setProfileDeleteSecondsLeft(0);
+      return;
+    }
+    const deleteAfterMs = new Date(currentUser.deleteAfter).getTime();
+    const updateDeleteTimer = () => setProfileDeleteSecondsLeft(Math.max(0, Math.ceil((deleteAfterMs - Date.now()) / 1000)));
+    updateDeleteTimer();
+    const timer = window.setInterval(updateDeleteTimer, 60_000);
+    return () => window.clearInterval(timer);
+  }, [currentUser?.deleteAfter]);
+
+  useEffect(() => {
+    if (!currentUser?.deactivatedAt) {
+      return;
+    }
+    setMenuView("main");
+    setMenuTab("profile");
+    setRankedQueue("idle");
+    setRankedStatus("");
+    setRankedSession(null);
+    rankedSessionRef.current = null;
+    lobbyRef.current = null;
+    setLobby(null);
+    setSyncStatus("local");
+    setState((current) => (current.phase === "menu" ? current : buildInitialState(current.sound, DEFAULT_TURN_TIME_SECONDS)));
+  }, [currentUser?.deactivatedAt]);
+
+  useEffect(() => {
     if (!currentUser) {
+      setRankedQueue("idle");
+      setRankedStatus("");
+      setRankedResultLog(null);
+      return;
+    }
+    if (currentUser.deactivatedAt) {
       setRankedQueue("idle");
       setRankedStatus("");
       setRankedResultLog(null);
@@ -783,7 +845,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.deactivatedAt]);
 
   useEffect(() => {
     const cooldownUntil = profileRating?.penalty?.cooldownUntil;
@@ -939,7 +1001,7 @@ export default function App() {
   }, [rankedSession?.matchId, rankedSession?.settled, state.phase, state.players, currentUser?.id]);
 
   useEffect(() => {
-    if (menuTab !== "rating") {
+    if (menuTab !== "rating" || currentUser?.deactivatedAt) {
       return;
     }
     let disposed = false;
@@ -960,10 +1022,10 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [leaderboardPage, leaderboardSearch, menuTab]);
+  }, [currentUser?.deactivatedAt, leaderboardPage, leaderboardSearch, menuTab]);
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || currentUser.deactivatedAt) {
       setProfileRating(null);
       setMatchHistory([]);
       setMatchHistoryError("");
@@ -994,7 +1056,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.deactivatedAt]);
 
   useEffect(() => {
     if (state.phase === "menu" && playModeTab === "story" && campaignProgress.highestUnlockedLevel === 1) {
@@ -1877,6 +1939,44 @@ export default function App() {
       setCurrentUser(await devLogin({ displayName: devLoginName }));
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Не удалось войти.");
+    }
+  }
+
+  async function submitProfileUpdate() {
+    setAuthError("");
+    setProfileStatus("");
+    try {
+      const updated = await updateProfile({ displayName: profileDisplayName, avatar: profileAvatarFile });
+      setCurrentUser(updated);
+      setProfileAvatarFile(null);
+      setProfileStatus("Профиль обновлён.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось обновить профиль.");
+    }
+  }
+
+  async function submitProfileDeletion() {
+    setAuthError("");
+    setProfileStatus("");
+    try {
+      const updated = await deactivateProfile(profileDeleteConfirmation);
+      setCurrentUser(updated);
+      setProfileDeleteConfirmation("");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось деактивировать профиль.");
+    }
+  }
+
+  async function cancelProfileDeletionRequest() {
+    setAuthError("");
+    setProfileStatus("");
+    try {
+      const updated = await cancelProfileDeletion();
+      setCurrentUser(updated);
+      setProfileDeleteConfirmation("");
+      setProfileStatus("Удаление профиля отменено.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось отменить удаление профиля.");
     }
   }
 
@@ -3558,6 +3658,10 @@ export default function App() {
     profileRating && !profileRating.isCalibrating && profileRating.rankedGames > 0 ? `${Math.round((profileRating.wins / profileRating.rankedGames) * 100)}%` : "-";
   const menuUserMmrText = currentUser ? (profileRating ? `${profileRating.mmr ?? "?"} MMR` : "MMR ...") : "Войти";
   const rankedActionLabel = rankedQueueBlocked ? "Доступно через" : rankedQueueState === "waiting" ? "Отмена" : rankedQueueState === "matched" ? "Матч найден" : "Играть";
+  const profileDeletionPending = Boolean(currentUser?.deactivatedAt);
+  const profileDeleteSecondsFallback = currentUser?.deleteAfter ? Math.max(0, Math.ceil((new Date(currentUser.deleteAfter).getTime() - Date.now()) / 1000)) : 0;
+  const profileDeleteCountdownText = formatDeletionCountdown(profileDeleteSecondsLeft || profileDeleteSecondsFallback);
+  const profileDeleteConfirmationMatches = profileDeleteConfirmation.trim() === "УДАЛИТЬ ПРОФИЛЬ";
   const rankedButtonTime = rankedQueueBlocked ? rankedCooldownTime : rankedQueueState === "waiting" ? rankedQueueTime : "";
   const leaderboardStartIndex = (leaderboardPage - 1) * 10;
   const playTabs: Array<{ id: PlayModeTab; label: string }> = [
@@ -3657,19 +3761,19 @@ export default function App() {
               </header>
 
               <div className="menu-tabs" role="tablist" aria-label="Главное меню">
-                <button type="button" role="tab" aria-selected={menuTab === "play"} className={menuTab === "play" ? "active" : ""} onClick={() => setMenuTab("play")}>
+                <button type="button" role="tab" aria-selected={menuTab === "play"} className={menuTab === "play" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("play")}>
                   <Play size={16} /> Играть
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "profile"} className={menuTab === "profile" ? "active" : ""} onClick={() => setMenuTab("profile")}>
                   <User size={16} /> Профиль
                 </button>
-                <button type="button" role="tab" aria-selected={menuTab === "rating"} className={menuTab === "rating" ? "active" : ""} onClick={() => setMenuTab("rating")}>
+                <button type="button" role="tab" aria-selected={menuTab === "rating"} className={menuTab === "rating" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("rating")}>
                   <Trophy size={16} /> Лидерборд
                 </button>
-                <button type="button" role="tab" aria-selected={menuTab === "history"} className={menuTab === "history" ? "active" : ""} onClick={() => setMenuTab("history")}>
+                <button type="button" role="tab" aria-selected={menuTab === "history"} className={menuTab === "history" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("history")}>
                   <ScrollText size={16} /> История MMR
                 </button>
-                <button type="button" role="tab" aria-selected={menuTab === "dlc"} className={menuTab === "dlc" ? "active" : ""} onClick={() => setMenuTab("dlc")}>
+                <button type="button" role="tab" aria-selected={menuTab === "dlc"} className={menuTab === "dlc" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("dlc")}>
                   <ShoppingBasket size={16} /> DLC
                 </button>
               </div>
@@ -3851,6 +3955,45 @@ export default function App() {
                           <LogOut size={16} /> Выйти
                         </button>
                       </div>
+                      <div className="profile-edit">
+                        <label className="field-label">
+                          <span>Ник</span>
+                          <input className="menu-field" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} disabled={profileDeletionPending} />
+                        </label>
+                        <label className="field-label">
+                          <span>Аватарка</span>
+                          <input
+                            className="menu-field"
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            disabled={profileDeletionPending}
+                            onChange={(event) => setProfileAvatarFile(event.target.files?.[0] ?? null)}
+                          />
+                        </label>
+                        <button type="button" onClick={() => void submitProfileUpdate()} disabled={profileDeletionPending}>
+                          <Check size={16} /> Сохранить профиль
+                        </button>
+                      </div>
+                      <div className="profile-danger">
+                        {profileDeletionPending && <p className="profile-delete-timer">Профиль будет удалён через {profileDeleteCountdownText}.</p>}
+                        {profileDeletionPending ? (
+                          <button type="button" onClick={() => void cancelProfileDeletionRequest()}>
+                            <RefreshCw size={16} /> Отменить удаление профиля
+                          </button>
+                        ) : (
+                          <>
+                            <label className="field-label">
+                              <span>Подтверждение удаления</span>
+                              <input className="menu-field" value={profileDeleteConfirmation} onChange={(event) => setProfileDeleteConfirmation(event.target.value)} placeholder="УДАЛИТЬ ПРОФИЛЬ" />
+                            </label>
+                            <button type="button" className="danger-action" onClick={() => void submitProfileDeletion()} disabled={!profileDeleteConfirmationMatches}>
+                              <X size={16} /> Удалить профиль
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {profileStatus && <p className="profile-status">{profileStatus}</p>}
+                      {authError && <p className="lobby-error">{authError}</p>}
                       <p className="menu-note">Рейтинговые матчи и будущие DLC доступны этому аккаунту.</p>
                     </>
                   ) : (

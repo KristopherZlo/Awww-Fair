@@ -588,6 +588,35 @@
   font-size: 0.9rem;
 }
 
+.profile-edit {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.profile-danger {
+  padding: 10px;
+  border: 1px solid rgba(240, 112, 94, 0.28);
+  border-radius: 8px;
+  background: rgba(240, 112, 94, 0.09);
+}
+
+.profile-delete-timer,
+.profile-status {
+  margin: 0;
+  color: #f8ead2;
+  font-weight: 850;
+}
+
+.profile-status {
+  color: #8ee0ad;
+}
+
+.danger-action {
+  border-color: rgba(240, 112, 94, 0.45);
+  background: rgba(240, 112, 94, 0.16);
+  color: #ffd2cb;
+}
+
 .play-side,
 .menu-sections,
 .menu-panel,
@@ -598,6 +627,8 @@
 .custom-table-actions,
 .custom-table-create,
 .custom-table-join,
+.profile-edit,
+.profile-danger,
 .match-history,
 .match-history-list {
   display: grid;

@@ -909,6 +909,64 @@ describe("App layout shell", () => {
     expect(screen.queryByText("vs Opponent 21")).not.toBeInTheDocument();
   });
 
+  it("edits profile data and restricts the menu while profile deletion is pending", async () => {
+    const user = userEvent.setup();
+    const deleteAfter = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com", deactivatedAt: null, deleteAfter: null } });
+      }
+      if (url === "/api/ranked/rating") {
+        return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+      }
+      if (String(url).startsWith("/api/ranked/history")) {
+        return Response.json({ history: [] });
+      }
+      if (url === "/api/auth/profile" && init?.method === "PATCH") {
+        const form = init.body as FormData;
+        expect(form.get("displayName")).toBe("New Nick");
+        expect(form.get("avatar")).toBeInstanceOf(File);
+        return Response.json({ user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", email: "player@example.com", deactivatedAt: null, deleteAfter: null } });
+      }
+      if (url === "/api/auth/deactivate" && init?.method === "POST") {
+        expect(init.body).toBe(JSON.stringify({ confirmation: "УДАЛИТЬ ПРОФИЛЬ" }));
+        return Response.json({ user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", email: "player@example.com", deactivatedAt: new Date().toISOString(), deleteAfter } });
+      }
+      if (url === "/api/auth/cancel-deletion" && init?.method === "POST") {
+        return Response.json({ user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", email: "player@example.com", deactivatedAt: null, deleteAfter: null } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "idle" });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /Профиль/i }));
+    await user.clear(await screen.findByLabelText(/Ник/i));
+    await user.type(screen.getByLabelText(/Ник/i), "New Nick");
+    await user.upload(screen.getByLabelText(/Аватарка/i), new File(["avatar"], "avatar.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: /Сохранить профиль/i }));
+
+    expect(await screen.findByText("Профиль обновлён.")).toBeInTheDocument();
+    expect(screen.getAllByText("New Nick").length).toBeGreaterThan(0);
+
+    await user.type(screen.getByLabelText(/Подтверждение удаления/i), "УДАЛИТЬ ПРОФИЛЬ");
+    await user.click(screen.getByRole("button", { name: /^Удалить профиль$/i }));
+
+    expect(await screen.findByText(/Профиль будет удалён через/i)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Играть/i })).toBeDisabled();
+    expect(screen.getByRole("tab", { name: /Лидерборд/i })).toBeDisabled();
+    expect(screen.getByRole("tab", { name: /DLC/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /Отменить удаление профиля/i }));
+
+    expect(await screen.findByText("Удаление профиля отменено.")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Играть/i })).not.toBeDisabled();
+  });
+
   it("shows and cancels the current ranked queue state for logged-in players", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {

@@ -175,6 +175,7 @@
   .custom-table-actions,
   .match-history-row,
   .oauth-actions,
+  .profile-edit,
   .dev-login-row {
     grid-template-columns: 1fr;
   }
