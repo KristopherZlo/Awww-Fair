@@ -328,6 +328,40 @@ describe("ranked matchmaking", () => {
     await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
   });
 
+  it("abandons a ranked match immediately when a player explicitly exits", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+
+    const abandoned = await service.abandonMatch("a", "match-1");
+
+    expect(abandoned.log).toMatchObject({ winnerId: "b", loserId: "a", mmrChange: 24 });
+    await expect(service.statusForPlayer("a")).resolves.toEqual({ status: "idle" });
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ mmr: 1476, losses: 1 });
+    await expect(store.leavePenaltyForPlayer("a")).resolves.toMatchObject({ leaveCount: 1, cooldownUntil: null, cleanGamesSinceLeave: 0 });
+  });
+
+  it("can abandon a ranked match even when old replay history is invalid", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    const firstActorId = matched.match.firstPlayerId;
+    await store.recordMatchEvent({ matchId: "match-1", actorId: firstActorId, round: 1, phase: "planning", eventType: "ready", payload: {}, createdAt: 1_000 });
+    await store.recordMatchEvent({ matchId: "match-1", actorId: firstActorId, round: 1, phase: "planning", eventType: "ready", payload: {}, createdAt: 1_001 });
+
+    await expect(service.abandonMatch("a", "match-1")).resolves.toMatchObject({ log: { loserId: "a" } });
+    await expect(service.statusForPlayer("a")).resolves.toEqual({ status: "idle" });
+  });
+
   it("rejects out-of-turn ranked events before they corrupt replay history", async () => {
     const store = new MemoryRankedStore([
       { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },

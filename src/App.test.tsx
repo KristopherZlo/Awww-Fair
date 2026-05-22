@@ -654,30 +654,23 @@ describe("App layout shell", () => {
     expect(container.querySelector(".formula-requirement")).toBeNull();
   });
 
-  it("uses responsive customer atlas assets instead of the oversized source atlas", () => {
+  it("renders customer cards with direct image assets", () => {
     const { container } = render(<App />);
-    const sprite = container.querySelector<HTMLElement>(".customer-sprite");
-    const atlas = sprite?.style.getPropertyValue("--sprite-atlas");
+    const sprite = container.querySelector<HTMLImageElement>(".customer-sprite");
 
-    expect(atlas).toContain("customer-atlas-128.webp");
-    expect(atlas).toContain("customer-atlas-256.webp");
+    expect(sprite?.tagName).toBe("IMG");
+    expect(sprite?.src).toContain("/assets/customers-128/");
+    expect(sprite?.src).toContain(".png");
   });
 
-  it("uses the compressed WebP product atlas for product sprites", () => {
+  it("renders product cards with direct image assets", () => {
     saveGameState({});
     const { container } = render(<App />);
-    const sprite = container.querySelector<HTMLElement>(".product-sprite");
-    const atlas = sprite?.style.getPropertyValue("--sprite-atlas");
+    const sprite = container.querySelector<HTMLImageElement>(".product-sprite");
 
-    expect(atlas).toContain("product-atlas.webp");
-  });
-
-  it("preloads customer and product card atlases when the app opens", () => {
-    render(<App />);
-
-    expectImagePreloaded("customer-atlas-128.webp");
-    expectImagePreloaded("customer-atlas-256.webp");
-    expectImagePreloaded("product-atlas.webp");
+    expect(sprite?.tagName).toBe("IMG");
+    expect(sprite?.src).toContain("/assets/products/");
+    expect(sprite?.src).toContain(".png");
   });
 
   it("presents the play menu with text tabs, ranked matchmaking, story mode, and custom table", () => {
@@ -1013,6 +1006,62 @@ describe("App layout shell", () => {
       )
     );
     await waitFor(() => expect(document.querySelector(".app-shell.phase-planning")).not.toBeNull());
+  });
+
+  it("abandons an active ranked match when exiting through the pause menu", async () => {
+    const user = userEvent.setup();
+    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const, activePlayer: "A" as PlayerId, firstPlayer: "A" as PlayerId };
+    const match = {
+      id: "match-1",
+      playerAId: "p1",
+      playerBId: "p2",
+      playerAMmrBefore: 1500,
+      playerBMmrBefore: 1500,
+      firstPlayerId: "p1",
+      seed: "seed-1",
+      initialState: rankedInitialState,
+      status: "active",
+      createdAt: 1_000,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null,
+      isCalibration: false,
+      isBotMatch: false,
+      botDifficulty: null
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "matched", match });
+      }
+      if (String(url).startsWith("/api/ranked/events?")) {
+        return Response.json({ events: [] });
+      }
+      if (url === "/api/ranked/abandon" && init?.method === "POST") {
+        return Response.json({ log: { matchId: "match-1", winnerId: "p2", loserId: "p1", mmrChange: 24 } });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+
+    await waitFor(() => expect(container.querySelector(".app-shell.phase-planning")).not.toBeNull());
+    await user.click(container.querySelector<HTMLButtonElement>(".top-pause")!);
+    await user.click(container.querySelector<HTMLButtonElement>(".pause-actions button:last-child")!);
+    await user.click(container.querySelector<HTMLButtonElement>(".confirm-actions button:last-child")!);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/ranked/abandon",
+        expect.objectContaining({
+          body: JSON.stringify({ matchId: "match-1" }),
+          method: "POST"
+        })
+      )
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/ranked/disconnect", expect.anything());
   });
 
   it("starts a ranked match from a matched queue response", async () => {

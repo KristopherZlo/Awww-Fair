@@ -186,6 +186,10 @@ export async function disconnectRankedMatch(matchId: string): Promise<{ status: 
   return postRankedJson("/api/ranked/disconnect", { matchId });
 }
 
+export async function abandonRankedMatch(matchId: string): Promise<{ log: RankedMatchHistoryEntry }> {
+  return postRankedJson("/api/ranked/abandon", { matchId });
+}
+
 export async function reconnectRankedMatch(matchId: string): Promise<{ status: "matched"; match: RankedMatch }> {
   return postRankedJson("/api/ranked/reconnect", { matchId });
 }

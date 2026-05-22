@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { appAssetUrl } from "./assetUrl";
-import { preloadImage, preloadImages } from "./assetPreloader";
+import { preloadImage } from "./assetPreloader";
 import {
   CAMPAIGN_RULE_OPTIONS,
   DEFAULT_AUDIO_SETTINGS,
@@ -51,6 +51,7 @@ import { localHintMove, localHintValue } from "./app/localHints";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
 import { devLogin, loadCurrentUser, logout, type AuthUser } from "./app/authClient";
 import {
+  abandonRankedMatch,
   cancelRankedQueue,
   disconnectRankedMatch,
   joinRankedQueue,
@@ -175,11 +176,7 @@ import type {
 } from "./game/types";
 
 const assetUrl = appAssetUrl;
-const PRODUCT_ATLAS = assetUrl("product-atlas.webp");
-const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.webp");
-const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.webp");
 const MARKET_BG = assetUrl("market-bg.webp");
-const CARD_PRELOAD_IMAGES = [CUSTOMER_ATLAS, CUSTOMER_ATLAS_2X, PRODUCT_ATLAS] as const;
 const MENU_TRACK = { title: "Main Menu", src: assetUrl("music/main-menu.mp3") } as const;
 const CUTSCENE_TRACK = { title: "Cutscene", src: assetUrl("music/cutscene.mp3") } as const;
 const MUSIC_TRACKS = [
@@ -719,10 +716,6 @@ export default function App() {
     setRankedQueueStartedAt(null);
     setRankedQueueSeconds(0);
   }
-
-  useEffect(() => {
-    preloadImages(CARD_PRELOAD_IMAGES);
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -1763,6 +1756,10 @@ export default function App() {
     void disconnectRankedMatch(session.matchId).catch(() => undefined);
   }
 
+  function sendRankedAbandon(session: RankedSession) {
+    void abandonRankedMatch(session.matchId).catch(() => undefined);
+  }
+
   useEffect(() => {
     if (!lobby) {
       return;
@@ -2281,7 +2278,7 @@ export default function App() {
     }
     const activeRankedSession = rankedSessionRef.current;
     if (activeRankedSession) {
-      sendRankedDisconnect(activeRankedSession);
+      sendRankedAbandon(activeRankedSession);
     }
     skipNextSessionSaveRef.current = true;
     clearSavedSession();
@@ -2292,6 +2289,7 @@ export default function App() {
     setCutscene(null);
     setMenuView("main");
     setLobbyError("");
+    setRankedStatus("");
     setJoinCode("");
     setSyncStatus("local");
     setState((current) => buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds));
@@ -2321,6 +2319,7 @@ export default function App() {
     pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
     setLobbyError("");
+    setRankedStatus("");
     setSyncStatus("local");
     setShowAiDifficulty(false);
     patchState((current) => {

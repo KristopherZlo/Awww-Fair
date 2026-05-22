@@ -397,6 +397,11 @@ export class RankedService {
     return { status: "reconnect_window", reconnectUntil: now + RECONNECT_WINDOW_MS };
   }
 
+  async abandonMatch(actorId: string, matchId: string): Promise<{ log: RankedMatchLog }> {
+    const match = await this.requireActiveMatch(actorId, matchId);
+    return this.settleDisconnectLoss(match, actorId);
+  }
+
   async reconnectToMatch(actorId: string, matchId: string): Promise<{ status: "matched"; match: RankedMatch }> {
     const match = await this.requireActiveMatch(actorId, matchId);
     const disconnectedAt = disconnectedAtFor(match, actorId);

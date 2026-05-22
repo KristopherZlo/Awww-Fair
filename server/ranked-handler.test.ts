@@ -228,6 +228,28 @@ describe("ranked handler", () => {
     expect(await reconnect.json()).toMatchObject({ status: "matched", match: { id: "match-1", status: "active" } });
   });
 
+  it("abandons an authenticated ranked match immediately", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/abandon`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1" })
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ log: { matchId: "match-1", winnerId: "b", loserId: "a" } });
+    await expect(service.statusForPlayer("a")).resolves.toEqual({ status: "idle" });
+  });
+
   it("returns a structured cooldown error when ranked queue is locked", async () => {
     let now = 1_000;
     let matchIndex = 0;

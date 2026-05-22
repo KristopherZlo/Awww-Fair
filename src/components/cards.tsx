@@ -29,9 +29,6 @@ import {
 } from "../i18n";
 
 const assetUrl = appAssetUrl;
-const PRODUCT_ATLAS = assetUrl("product-atlas.webp");
-const CUSTOMER_ATLAS = assetUrl("customer-atlas-128.webp");
-const CUSTOMER_ATLAS_2X = assetUrl("customer-atlas-256.webp");
 
 function formatTrendModifiers(modifiers: { tag: Tag; value: number }[], language: Language, focused = false) {
   return modifiers
@@ -42,34 +39,23 @@ function formatTrendModifiers(modifiers: { tag: Tag; value: number }[], language
     .join(", ");
 }
 
-function Sprite({
-  atlas,
-  cols,
-  rows,
-  col,
-  row,
-  atlas2x,
+function CardImage({
+  src,
+  srcSet,
   className = ""
 }: {
-  atlas: string;
-  cols: number;
-  rows: number;
-  col: number;
-  row: number;
-  atlas2x?: string;
+  src: string;
+  srcSet?: string;
   className?: string;
 }) {
-  const x = cols === 1 ? 0 : (col / (cols - 1)) * 100;
-  const y = rows === 1 ? 0 : (row / (rows - 1)) * 100;
-  const spriteAtlas = atlas2x ? `image-set(url("${atlas}") 1x, url("${atlas2x}") 2x)` : `url("${atlas}")`;
   return (
-    <span
+    <img
       className={`sprite ${className}`}
-      style={{
-        "--sprite-atlas": spriteAtlas,
-        backgroundSize: `${cols * 100}% ${rows * 100}%`,
-        backgroundPosition: `${x}% ${y}%`
-      } as CSSProperties}
+      src={src}
+      srcSet={srcSet}
+      alt=""
+      draggable={false}
+      decoding="async"
     />
   );
 }
@@ -122,7 +108,7 @@ export function ProductCard({
       onClick={onClick}
       title={title}
     >
-      <Sprite atlas={PRODUCT_ATLAS} cols={4} rows={3} col={product.sprite.col} row={product.sprite.row} className="product-sprite" />
+      <CardImage src={assetUrl(`products/${product.cardId}.png`)} className="product-sprite" />
       <span className="product-copy card-copy">
         <strong>{label}</strong>
         <span className="tag-row">
@@ -154,7 +140,11 @@ export function CustomerCard({ customer, focusTags, language }: { customer: Cust
           : `${label}: главное ${tagText(language, customer.primaryTag)}, второе ${tagText(language, customer.secondaryTag)}${customer.personality ? `. Характер: ${personalityDescription}` : ""}`
       }
     >
-      <Sprite atlas={CUSTOMER_ATLAS} atlas2x={CUSTOMER_ATLAS_2X} cols={4} rows={4} col={customer.sprite.col} row={customer.sprite.row} className="customer-sprite" />
+      <CardImage
+        src={assetUrl(`customers-128/${customer.id}.png`)}
+        srcSet={`${assetUrl(`customers-128/${customer.id}.png`)} 1x, ${assetUrl(`customers/${customer.id}.png`)} 2x`}
+        className="customer-sprite"
+      />
       <div className="customer-copy card-copy">
         <strong>{label}</strong>
         {customer.personality && (

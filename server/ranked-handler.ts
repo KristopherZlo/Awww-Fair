@@ -123,6 +123,11 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         json(response, 200, await service.disconnectFromMatch(user.id, String(body.matchId ?? "")));
         return;
       }
+      if (request.method === "POST" && parts[2] === "abandon") {
+        const body = await readJson(request);
+        json(response, 200, await service.abandonMatch(user.id, String(body.matchId ?? "")));
+        return;
+      }
       if (request.method === "POST" && parts[2] === "reconnect") {
         const body = await readJson(request);
         json(response, 200, await service.reconnectToMatch(user.id, String(body.matchId ?? "")));

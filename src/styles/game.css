@@ -381,6 +381,7 @@ button.card {
   background-image: var(--sprite-atlas);
   background-repeat: no-repeat;
   background-color: #fff0cc;
+  object-fit: cover;
 }
 
 .product-sprite {

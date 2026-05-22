@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  abandonRankedMatch,
   cancelRankedQueue,
   disconnectRankedMatch,
   joinRankedQueue,
@@ -176,6 +177,17 @@ describe("ranked client", () => {
 
     await expect(disconnectRankedMatch("m1")).resolves.toEqual({ status: "reconnect_window", reconnectUntil: 123 });
     expect(fetchMock).toHaveBeenCalledWith("/api/ranked/disconnect", {
+      body: JSON.stringify({ matchId: "m1" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  });
+
+  it("abandons ranked matches immediately", async () => {
+    const fetchMock = stubFetch({ log: { matchId: "m1", winnerId: "b", loserId: "a" } });
+
+    await expect(abandonRankedMatch("m1")).resolves.toEqual({ log: { matchId: "m1", winnerId: "b", loserId: "a" } });
+    expect(fetchMock).toHaveBeenCalledWith("/api/ranked/abandon", {
       body: JSON.stringify({ matchId: "m1" }),
       headers: { "Content-Type": "application/json" },
       method: "POST"
