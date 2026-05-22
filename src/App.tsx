@@ -671,6 +671,7 @@ export default function App() {
   const [rankedCooldownSeconds, setRankedCooldownSeconds] = useState(0);
   const [rankedStatus, setRankedStatus] = useState("");
   const [rankedSession, setRankedSession] = useState<RankedSession | null>(null);
+  const [rankedResultLog, setRankedResultLog] = useState<RankedMatchHistoryEntry | null>(null);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => initialSession?.audioSettings ?? DEFAULT_AUDIO_SETTINGS);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(DEFAULT_TRACK_INDEX);
   const [currentTrackTitle, setCurrentTrackTitle] = useState<string>(MENU_TRACK.title);
@@ -743,6 +744,7 @@ export default function App() {
     if (!currentUser) {
       setRankedQueue("idle");
       setRankedStatus("");
+      setRankedResultLog(null);
       return;
     }
     let disposed = false;
@@ -922,7 +924,8 @@ export default function App() {
       playerASales: playerA.sales,
       playerBSales: playerB.sales
     })
-      .then(() => {
+      .then(({ log }) => {
+        setRankedResultLog(log);
         setRankedStatus("Р РµР·СѓР»СЊС‚Р°С‚ СЂРµР№С‚РёРЅРіР° Р·Р°РїРёСЃР°РЅ.");
         if (currentUser) {
           void loadMyRating().then(setProfileRating).catch(() => undefined);
@@ -1024,6 +1027,7 @@ export default function App() {
   const canResolveChoiceDraft = Boolean(state.choiceDraft && canControlSeat(state.choiceDraft.playerId));
   const selectedInfluence = handPlayer.influenceHand.find((card) => card.id === state.selectedInfluenceId) ?? null;
   const finalResult = useMemo(() => gameOutcome(state.players, localPlayerId, language), [state.players, localPlayerId, language]);
+  const rankedResultMmrChange = currentUser && rankedResultLog ? rankedHistoryMmrChange(rankedResultLog, currentUser.id) : null;
   const isTimedLocalTurn = localPlanningTurn && !state.pause.active;
   const isHotseatGame = !rankedSession && !lobby && !state.aiPlayerId;
   const activeTurnLabel = isHotseatGame
@@ -1756,10 +1760,6 @@ export default function App() {
     void disconnectRankedMatch(session.matchId).catch(() => undefined);
   }
 
-  function sendRankedAbandon(session: RankedSession) {
-    void abandonRankedMatch(session.matchId).catch(() => undefined);
-  }
-
   useEffect(() => {
     if (!lobby) {
       return;
@@ -1970,6 +1970,7 @@ export default function App() {
     await logout().catch(() => undefined);
     setCurrentUser(null);
     setRankedQueue("idle");
+    setRankedResultLog(null);
     setRankedStatus("");
     rankedSessionRef.current = null;
     pendingRankedMatchIdRef.current = null;
@@ -1977,20 +1978,14 @@ export default function App() {
     setRankedSession(null);
   }
 
-  async function joinRanked() {
-    if (rankedQueueState === "waiting") {
-      await cancelRanked();
-      return;
-    }
-    if (rankedQueueState === "matched") {
-      return;
-    }
+  async function startRankedSearch() {
     if (!currentUser) {
       setMenuTab("profile");
       setAuthError("Для рейтинга нужен аккаунт.");
       return;
     }
 
+    setRankedResultLog(null);
     setRankedStatus("");
     try {
       const result = await joinRankedQueue();
@@ -2006,6 +2001,17 @@ export default function App() {
     }
   }
 
+  async function joinRanked() {
+    if (rankedQueueState === "waiting") {
+      await cancelRanked();
+      return;
+    }
+    if (rankedQueueState === "matched") {
+      return;
+    }
+    await startRankedSearch();
+  }
+
   async function cancelRanked() {
     setRankedStatus("");
     try {
@@ -2016,6 +2022,26 @@ export default function App() {
     } catch (error) {
       setRankedStatus(error instanceof Error ? error.message : "Рейтинг временно недоступен.");
     }
+  }
+
+  async function playRankedAgain() {
+    skipNextSessionSaveRef.current = true;
+    clearSavedSession();
+    lobbyRef.current = null;
+    rankedSessionRef.current = null;
+    pendingRankedMatchIdRef.current = null;
+    pendingRankedActionKeysRef.current.clear();
+    setLobby(null);
+    setLobbyError("");
+    setSyncStatus("local");
+    setRankedSession(null);
+    setRankedQueue("idle");
+    setMenuView("main");
+    setMenuTab("play");
+    setPlayModeTab("ranked");
+    setState((current) => buildInitialState(current.sound, audioSettingsRef.current.turnTimeSeconds));
+    playEffect("ui-click");
+    await startRankedSearch();
   }
 
   function recordRankedActionAt(current: GameState, eventType: string, payload: unknown = {}) {
@@ -2085,6 +2111,7 @@ export default function App() {
     setSyncStatus("online");
     setRankedQueue("matched");
     setRankedStatus("");
+    setRankedResultLog(null);
     pendingRankedActionKeysRef.current.clear();
     rankedSessionRef.current = session;
     setRankedSession(session);
@@ -2121,6 +2148,7 @@ export default function App() {
     rankedSessionRef.current = null;
     pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
+    setRankedResultLog(null);
     setLobbyError("");
     setSyncStatus("local");
     patchState((current) => {
@@ -2160,6 +2188,7 @@ export default function App() {
     rankedSessionRef.current = null;
     pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
+    setRankedResultLog(null);
     setLobbyError("");
     setSyncStatus("local");
     setCutscene(null);
@@ -2276,10 +2305,6 @@ export default function App() {
     if (session) {
       sendLobbyLeave(session);
     }
-    const activeRankedSession = rankedSessionRef.current;
-    if (activeRankedSession) {
-      sendRankedAbandon(activeRankedSession);
-    }
     skipNextSessionSaveRef.current = true;
     clearSavedSession();
     setShowSettings(false);
@@ -2298,7 +2323,27 @@ export default function App() {
     pendingRankedActionKeysRef.current.clear();
     setLobby(null);
     setRankedSession(null);
+    setRankedResultLog(null);
     playEffect("ui-click");
+  }
+
+  async function confirmExitToMenu() {
+    const activeRankedSession = rankedSessionRef.current;
+    if (activeRankedSession && stateRef.current.phase !== "game_end") {
+      setRankedStatus("");
+      try {
+        const { log } = await abandonRankedMatch(activeRankedSession.matchId);
+        setRankedResultLog(log);
+        if (currentUser) {
+          void loadMyRating().then(setProfileRating).catch(() => undefined);
+          void loadMatchHistory().then(setMatchHistory).catch(() => undefined);
+        }
+      } catch (error) {
+        setRankedStatus(error instanceof Error ? error.message : "Не удалось сдаться.");
+        return;
+      }
+    }
+    exitToMenu();
   }
 
   function requestExitToMenu() {
@@ -2318,6 +2363,7 @@ export default function App() {
     rankedSessionRef.current = null;
     pendingRankedActionKeysRef.current.clear();
     setRankedSession(null);
+    setRankedResultLog(null);
     setLobbyError("");
     setRankedStatus("");
     setSyncStatus("local");
@@ -4048,8 +4094,11 @@ export default function App() {
           </span>
         </div>
         <div className="top-actions">
-          <div className={`sync-pill sync-${syncStatus}`}>
+          <div className={`sync-pill sync-${rankedSession ? "online" : syncStatus}`}>
+            {rankedSession && "Рейтинговый матч · online"}
+            <span hidden={Boolean(rankedSession)}>
             {lobby ? `${ui(language, "lobbyCode").toLowerCase()} ${lobby.code} · ${ui(language, "you").toLowerCase()} ${lobby.playerId}` : ui(language, "localTable")} · {syncStatus}
+            </span>
           </div>
           {rankedSession && rankedStatus && <div className="sync-pill sync-offline">{rankedStatus}</div>}
           {aiPlayer && !rankedSession && (
@@ -4501,9 +4550,14 @@ export default function App() {
             <span className="end-kicker">{finalResult.tone === "victory" ? ui(language, "marketSmiles") : finalResult.tone === "defeat" ? ui(language, "newDay") : ui(language, "friendlyFinal")}</span>
             <h2 id="game-end-title">{finalResult.title}</h2>
             <p>{finalResult.message}</p>
+            {rankedResultMmrChange !== null && (
+              <div className={`ranked-result-mmr ${rankedResultMmrChange >= 0 ? "is-win" : "is-loss"}`}>
+                {signedMmrChange(rankedResultMmrChange)} MMR
+              </div>
+            )}
             {state.partyGoals.length > 0 && <div className="goal-badge">{ui(language, "partyGoals")}: {completedGoalCount} / {state.partyGoals.length}</div>}
             <div className="end-actions">
-              <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : restartGame}>
+              <button className="primary-action" onClick={primaryCampaignEndLevel ? () => startCampaignLevel(primaryCampaignEndLevel) : rankedSession ? () => void playRankedAgain() : restartGame}>
                 {state.campaignRun && campaignCanAdvance && nextCampaignLevel ? <SkipForward size={18} /> : <RefreshCw size={18} />} {primaryEndActionLabel}
               </button>
               {state.campaignRun && (
@@ -4597,7 +4651,7 @@ export default function App() {
                 <Settings size={18} /> {ui(language, "settings")}
               </button>
               <button onClick={requestExitToMenu}>
-                <LogOut size={18} /> {ui(language, "exitToMenu")}
+                <LogOut size={18} /> {rankedSession ? "Сдаться" : ui(language, "exitToMenu")}
               </button>
             </div>
           </section>
@@ -4609,12 +4663,13 @@ export default function App() {
           <section className="confirm-modal" role="dialog" aria-label={ui(language, "exitToMenu")}>
             <h2>{ui(language, "exitToMenu")}</h2>
             <p>{ui(language, "exitConfirmText")}</p>
+            {rankedSession && state.phase !== "game_end" && <p>Игроку будет засчитано поражение.</p>}
             <div className="confirm-actions">
               <button className="primary-action" onClick={cancelExitToMenu}>
                 {ui(language, "stay")}
               </button>
-              <button onClick={exitToMenu}>
-                <LogOut size={18} /> {ui(language, "exit")}
+              <button onClick={() => void confirmExitToMenu()}>
+                <LogOut size={18} /> {rankedSession && state.phase !== "game_end" ? "Сдаться" : ui(language, "exit")}
               </button>
             </div>
           </section>

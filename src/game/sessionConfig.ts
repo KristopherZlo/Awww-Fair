@@ -3,6 +3,7 @@ import { PURCHASE_APPEAL_THRESHOLD } from "./engine";
 import type { CampaignLevelRules } from "./levels";
 
 export const DEFAULT_TURN_TIME_SECONDS = 45;
+export const RANKED_TURN_TIME_SECONDS = 45;
 export const MIN_TURN_TIME_SECONDS = 15;
 export const MAX_TURN_TIME_SECONDS = 120;
 

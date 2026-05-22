@@ -79,6 +79,8 @@ export interface RankedMatch {
   createdAt: number;
   playerADisconnectedAt: number | null;
   playerBDisconnectedAt: number | null;
+  playerAReconnectDeadline?: number | null;
+  playerBReconnectDeadline?: number | null;
   isCalibration: boolean;
   isBotMatch: boolean;
   botDifficulty: number | null;

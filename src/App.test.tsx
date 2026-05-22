@@ -1050,6 +1050,7 @@ describe("App layout shell", () => {
     await waitFor(() => expect(container.querySelector(".app-shell.phase-planning")).not.toBeNull());
     await user.click(container.querySelector<HTMLButtonElement>(".top-pause")!);
     await user.click(container.querySelector<HTMLButtonElement>(".pause-actions button:last-child")!);
+    expect(screen.getByText(/поражение/i)).toBeInTheDocument();
     await user.click(container.querySelector<HTMLButtonElement>(".confirm-actions button:last-child")!);
 
     await waitFor(() =>
@@ -1062,6 +1063,54 @@ describe("App layout shell", () => {
       )
     );
     expect(fetchMock).not.toHaveBeenCalledWith("/api/ranked/disconnect", expect.anything());
+  });
+
+  it("keeps a ranked match open when surrender cannot be recorded", async () => {
+    const user = userEvent.setup();
+    const rankedInitialState = { ...buildInitialState(true, 45), phase: "planning" as const, activePlayer: "A" as PlayerId, firstPlayer: "A" as PlayerId };
+    const match = {
+      id: "match-1",
+      playerAId: "p1",
+      playerBId: "p2",
+      playerAMmrBefore: 1500,
+      playerBMmrBefore: 1500,
+      firstPlayerId: "p1",
+      seed: "seed-1",
+      initialState: rankedInitialState,
+      status: "active",
+      createdAt: 1_000,
+      playerADisconnectedAt: null,
+      playerBDisconnectedAt: null,
+      isCalibration: false,
+      isBotMatch: false,
+      botDifficulty: null
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
+      }
+      if (url === "/api/ranked/status") {
+        return Response.json({ status: "matched", match });
+      }
+      if (String(url).startsWith("/api/ranked/events?")) {
+        return Response.json({ events: [] });
+      }
+      if (url === "/api/ranked/abandon" && init?.method === "POST") {
+        return Response.json({ error: "Abandon failed." }, { status: 500 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+
+    await waitFor(() => expect(container.querySelector(".app-shell.phase-planning")).not.toBeNull());
+    await user.click(container.querySelector<HTMLButtonElement>(".top-pause")!);
+    await user.click(container.querySelector<HTMLButtonElement>(".pause-actions button:last-child")!);
+    await user.click(container.querySelector<HTMLButtonElement>(".confirm-actions button:last-child")!);
+
+    await waitFor(() => expect(screen.getByText(/Abandon failed/i)).toBeInTheDocument());
+    expect(container.querySelector(".app-shell.phase-planning")).not.toBeNull();
   });
 
   it("starts a ranked match from a matched queue response", async () => {
@@ -1191,10 +1240,11 @@ describe("App layout shell", () => {
       activePlayer: "A" as PlayerId,
       firstPlayer: "A" as PlayerId,
       players: [
-        { ...testPlayer("A"), productHand: [], influenceHand: [] },
-        { ...testPlayer("B"), productHand: [], influenceHand: [] }
+        { ...testPlayer("A"), money: 10, productHand: [], influenceHand: [] },
+        { ...testPlayer("B"), money: 5, productHand: [], influenceHand: [] }
       ]
     };
+    let queueJoins = 0;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/auth/me") {
         return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com" } });
@@ -1203,6 +1253,10 @@ describe("App layout shell", () => {
         return Response.json({ status: "idle" });
       }
       if (url === "/api/ranked/queue" && init?.method === "POST") {
+        queueJoins += 1;
+        if (queueJoins > 1) {
+          return Response.json({ status: "waiting" });
+        }
         return Response.json({
           status: "matched",
           match: {
@@ -1234,7 +1288,7 @@ describe("App layout shell", () => {
         });
       }
       if (url === "/api/ranked/settle" && init?.method === "POST") {
-        return Response.json({ log: { matchId: "match-1" } });
+        return Response.json({ log: { matchId: "match-1", winnerId: "p1", loserId: "p2", mmrChange: 18 } });
       }
       return Response.json({});
     });
@@ -1254,11 +1308,16 @@ describe("App layout shell", () => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/ranked/settle",
         expect.objectContaining({
-          body: JSON.stringify({ matchId: "match-1", playerACoins: 0, playerBCoins: 0, playerASales: 0, playerBSales: 0 }),
+          body: JSON.stringify({ matchId: "match-1", playerACoins: 10, playerBCoins: 5, playerASales: 0, playerBSales: 0 }),
           method: "POST"
         })
       )
     );
+    expect(await screen.findByText(/\+18 MMR/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Сыграть ещё/i }));
+
+    await waitFor(() => expect(queueJoins).toBe(2));
   });
 
   it("rebuilds an active ranked match from stored event history", async () => {

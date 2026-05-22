@@ -4,7 +4,7 @@ import type { GameState } from "../src/app/types";
 import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
 import { applyRankedReplayEvent, replayRankedEvents, type RankedReplayOutcome } from "../src/game/rankedReplay";
 import { buildInitialState, seededRandom } from "../src/game/session";
-import { DEFAULT_INITIAL_STATE_OPTIONS, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
+import { DEFAULT_INITIAL_STATE_OPTIONS, RANKED_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 import type { PlayerRating } from "../src/game/rating";
 import {
   CALIBRATION_MATCH_COUNT,
@@ -30,6 +30,8 @@ export interface RankedMatch {
   createdAt: number;
   playerADisconnectedAt: number | null;
   playerBDisconnectedAt: number | null;
+  playerAReconnectDeadline: number | null;
+  playerBReconnectDeadline: number | null;
   isCalibration: boolean;
   isBotMatch: boolean;
   botDifficulty: number | null;
@@ -210,6 +212,8 @@ function normalizeLeaderboardQuery(query: RankedLeaderboardQuery = {}): Required
 function withRankedMatchDefaults(match: RankedMatch): RankedMatch {
   return {
     ...match,
+    playerAReconnectDeadline: match.playerAReconnectDeadline ?? null,
+    playerBReconnectDeadline: match.playerBReconnectDeadline ?? null,
     isCalibration: match.isCalibration ?? false,
     isBotMatch: match.isBotMatch ?? false,
     botDifficulty: match.botDifficulty ?? null
@@ -234,7 +238,7 @@ function withRankedLeavePenaltyDefaults(penalty: Partial<RankedLeavePenalty> = {
 
 function createRankedInitialState(seed: string): GameState {
   return {
-    ...buildInitialState(true, DEFAULT_TURN_TIME_SECONDS, DEFAULT_INITIAL_STATE_OPTIONS, seededRandom(seed)),
+    ...buildInitialState(true, RANKED_TURN_TIME_SECONDS, DEFAULT_INITIAL_STATE_OPTIONS, seededRandom(seed)),
     phase: "planning"
   };
 }
@@ -256,6 +260,12 @@ function dateValueToMillis(value: unknown): number | null {
 function disconnectedAtFor(match: RankedMatch, playerId: string): number | null {
   if (match.playerAId === playerId) return match.playerADisconnectedAt;
   if (match.playerBId === playerId) return match.playerBDisconnectedAt;
+  return null;
+}
+
+function reconnectDeadlineFor(match: RankedMatch, playerId: string): number | null {
+  if (match.playerAId === playerId) return match.playerAReconnectDeadline;
+  if (match.playerBId === playerId) return match.playerBReconnectDeadline;
   return null;
 }
 
@@ -281,7 +291,7 @@ export interface RankedStore {
   createMatch(match: RankedMatch): Promise<void>;
   currentMatchForPlayer(playerId: string): Promise<RankedMatch | null>;
   matchById(matchId: string): Promise<RankedMatch | null>;
-  setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void>;
+  setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null, reconnectDeadline?: number | null): Promise<void>;
   recordMatchEvent(event: Omit<RankedMatchEvent, "sequence">): Promise<RankedMatchEvent>;
   eventsForMatch(matchId: string): Promise<RankedMatchEvent[]>;
   recentSettledPairMatchCount(playerAId: string, playerBId: string, since: number): Promise<number>;
@@ -393,8 +403,9 @@ export class RankedService {
   async disconnectFromMatch(actorId: string, matchId: string): Promise<{ status: "reconnect_window"; reconnectUntil: number }> {
     const match = await this.requireActiveMatch(actorId, matchId);
     const now = this.options.now?.() ?? Date.now();
-    await this.options.store.setPlayerDisconnectedAt(match.id, actorId, now);
-    return { status: "reconnect_window", reconnectUntil: now + RECONNECT_WINDOW_MS };
+    const reconnectUntil = reconnectDeadlineFor(match, actorId) ?? now + RECONNECT_WINDOW_MS;
+    await this.options.store.setPlayerDisconnectedAt(match.id, actorId, now, reconnectUntil);
+    return { status: "reconnect_window", reconnectUntil };
   }
 
   async abandonMatch(actorId: string, matchId: string): Promise<{ log: RankedMatchLog }> {
@@ -405,7 +416,7 @@ export class RankedService {
   async reconnectToMatch(actorId: string, matchId: string): Promise<{ status: "matched"; match: RankedMatch }> {
     const match = await this.requireActiveMatch(actorId, matchId);
     const disconnectedAt = disconnectedAtFor(match, actorId);
-    if (disconnectedAt !== null && this.reconnectExpired(disconnectedAt)) {
+    if (disconnectedAt !== null && this.reconnectExpired(disconnectedAt, reconnectDeadlineFor(match, actorId))) {
       await this.settleDisconnectLoss(match, actorId);
       throw new Error("Reconnect window expired.");
     }
@@ -630,6 +641,8 @@ export class RankedService {
       createdAt: now,
       playerADisconnectedAt: null,
       playerBDisconnectedAt: null,
+      playerAReconnectDeadline: null,
+      playerBReconnectDeadline: null,
       isCalibration: false,
       isBotMatch: false,
       botDifficulty: null
@@ -666,6 +679,8 @@ export class RankedService {
       createdAt: now,
       playerADisconnectedAt: null,
       playerBDisconnectedAt: null,
+      playerAReconnectDeadline: null,
+      playerBReconnectDeadline: null,
       isCalibration: calibration,
       isBotMatch: true,
       botDifficulty: botSelection.difficulty
@@ -691,9 +706,9 @@ export class RankedService {
 
   private async settleExpiredDisconnect(match: RankedMatch): Promise<boolean> {
     const disconnectedPlayerId =
-      match.playerADisconnectedAt !== null && this.reconnectExpired(match.playerADisconnectedAt)
+      match.playerADisconnectedAt !== null && this.reconnectExpired(match.playerADisconnectedAt, match.playerAReconnectDeadline)
         ? match.playerAId
-        : match.playerBDisconnectedAt !== null && this.reconnectExpired(match.playerBDisconnectedAt)
+        : match.playerBDisconnectedAt !== null && this.reconnectExpired(match.playerBDisconnectedAt, match.playerBReconnectDeadline)
           ? match.playerBId
           : null;
     if (!disconnectedPlayerId) {
@@ -714,8 +729,8 @@ export class RankedService {
     return settlement;
   }
 
-  private reconnectExpired(disconnectedAt: number): boolean {
-    return (this.options.now?.() ?? Date.now()) - disconnectedAt >= RECONNECT_WINDOW_MS;
+  private reconnectExpired(disconnectedAt: number, reconnectDeadline: number | null): boolean {
+    return (this.options.now?.() ?? Date.now()) >= (reconnectDeadline ?? disconnectedAt + RECONNECT_WINDOW_MS);
   }
 
   private async ensureCanJoinQueue(playerId: string, now: number): Promise<void> {
@@ -840,15 +855,23 @@ export class MemoryRankedStore implements RankedStore {
     return match ? withRankedMatchDefaults({ ...match }) : null;
   }
 
-  async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void> {
+  async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null, reconnectDeadline?: number | null): Promise<void> {
     const match = this.matches.get(matchId);
     if (!match) return;
     if (match.playerAId === playerId) {
-      this.matches.set(matchId, { ...match, playerADisconnectedAt: disconnectedAt });
+      this.matches.set(matchId, {
+        ...match,
+        playerADisconnectedAt: disconnectedAt,
+        ...(reconnectDeadline === undefined ? {} : { playerAReconnectDeadline: reconnectDeadline })
+      });
       return;
     }
     if (match.playerBId === playerId) {
-      this.matches.set(matchId, { ...match, playerBDisconnectedAt: disconnectedAt });
+      this.matches.set(matchId, {
+        ...match,
+        playerBDisconnectedAt: disconnectedAt,
+        ...(reconnectDeadline === undefined ? {} : { playerBReconnectDeadline: reconnectDeadline })
+      });
     }
   }
 
@@ -1014,8 +1037,9 @@ export class MariaDbRankedStore implements RankedStore {
       `INSERT INTO ranked_matches (
         id, player_a_id, player_b_id, player_a_mmr_before, player_b_mmr_before,
         first_player_id, seed, initial_state, status, created_at,
-        player_a_disconnected_at, player_b_disconnected_at, is_calibration, is_bot_match, bot_difficulty
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        player_a_disconnected_at, player_b_disconnected_at, player_a_reconnect_deadline,
+        player_b_reconnect_deadline, is_calibration, is_bot_match, bot_difficulty
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         match.id,
         match.playerAId,
@@ -1029,6 +1053,8 @@ export class MariaDbRankedStore implements RankedStore {
         new Date(match.createdAt),
         match.playerADisconnectedAt ? new Date(match.playerADisconnectedAt) : null,
         match.playerBDisconnectedAt ? new Date(match.playerBDisconnectedAt) : null,
+        match.playerAReconnectDeadline ? new Date(match.playerAReconnectDeadline) : null,
+        match.playerBReconnectDeadline ? new Date(match.playerBReconnectDeadline) : null,
         match.isCalibration,
         match.isBotMatch,
         match.botDifficulty
@@ -1042,6 +1068,7 @@ export class MariaDbRankedStore implements RankedStore {
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
         first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt,
         player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt,
+        player_a_reconnect_deadline AS playerAReconnectDeadline, player_b_reconnect_deadline AS playerBReconnectDeadline,
         is_calibration AS isCalibration, is_bot_match AS isBotMatch, bot_difficulty AS botDifficulty
        FROM ranked_matches
        WHERE status = 'active' AND (player_a_id = ? OR player_b_id = ?)
@@ -1064,6 +1091,8 @@ export class MariaDbRankedStore implements RankedStore {
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
           playerADisconnectedAt: dateValueToMillis(row.playerADisconnectedAt),
           playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt),
+          playerAReconnectDeadline: dateValueToMillis(row.playerAReconnectDeadline),
+          playerBReconnectDeadline: dateValueToMillis(row.playerBReconnectDeadline),
           isCalibration: Boolean(row.isCalibration),
           isBotMatch: Boolean(row.isBotMatch),
           botDifficulty: row.botDifficulty === null || row.botDifficulty === undefined ? null : Number(row.botDifficulty)
@@ -1077,6 +1106,7 @@ export class MariaDbRankedStore implements RankedStore {
         player_a_mmr_before AS playerAMmrBefore, player_b_mmr_before AS playerBMmrBefore,
         first_player_id AS firstPlayerId, seed, initial_state AS initialState, status, created_at AS createdAt,
         player_a_disconnected_at AS playerADisconnectedAt, player_b_disconnected_at AS playerBDisconnectedAt,
+        player_a_reconnect_deadline AS playerAReconnectDeadline, player_b_reconnect_deadline AS playerBReconnectDeadline,
         is_calibration AS isCalibration, is_bot_match AS isBotMatch, bot_difficulty AS botDifficulty
        FROM ranked_matches
        WHERE id = ?
@@ -1098,6 +1128,8 @@ export class MariaDbRankedStore implements RankedStore {
           createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
           playerADisconnectedAt: dateValueToMillis(row.playerADisconnectedAt),
           playerBDisconnectedAt: dateValueToMillis(row.playerBDisconnectedAt),
+          playerAReconnectDeadline: dateValueToMillis(row.playerAReconnectDeadline),
+          playerBReconnectDeadline: dateValueToMillis(row.playerBReconnectDeadline),
           isCalibration: Boolean(row.isCalibration),
           isBotMatch: Boolean(row.isBotMatch),
           botDifficulty: row.botDifficulty === null || row.botDifficulty === undefined ? null : Number(row.botDifficulty)
@@ -1105,14 +1137,39 @@ export class MariaDbRankedStore implements RankedStore {
       : null;
   }
 
-  async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null): Promise<void> {
+  async setPlayerDisconnectedAt(matchId: string, playerId: string, disconnectedAt: number | null, reconnectDeadline?: number | null): Promise<void> {
     const disconnectedAtDate = disconnectedAt === null ? null : new Date(disconnectedAt);
+    if (reconnectDeadline === undefined) {
+      await this.pool.query(
+        `UPDATE ranked_matches
+         SET player_a_disconnected_at = CASE WHEN player_a_id = ? THEN ? ELSE player_a_disconnected_at END,
+           player_b_disconnected_at = CASE WHEN player_b_id = ? THEN ? ELSE player_b_disconnected_at END
+         WHERE id = ? AND status = 'active' AND (player_a_id = ? OR player_b_id = ?)`,
+        [playerId, disconnectedAtDate, playerId, disconnectedAtDate, matchId, playerId, playerId]
+      );
+      return;
+    }
+    const reconnectDeadlineDate = reconnectDeadline === null ? null : new Date(reconnectDeadline);
     await this.pool.query(
       `UPDATE ranked_matches
        SET player_a_disconnected_at = CASE WHEN player_a_id = ? THEN ? ELSE player_a_disconnected_at END,
-         player_b_disconnected_at = CASE WHEN player_b_id = ? THEN ? ELSE player_b_disconnected_at END
+         player_b_disconnected_at = CASE WHEN player_b_id = ? THEN ? ELSE player_b_disconnected_at END,
+         player_a_reconnect_deadline = CASE WHEN player_a_id = ? THEN ? ELSE player_a_reconnect_deadline END,
+         player_b_reconnect_deadline = CASE WHEN player_b_id = ? THEN ? ELSE player_b_reconnect_deadline END
        WHERE id = ? AND status = 'active' AND (player_a_id = ? OR player_b_id = ?)`,
-      [playerId, disconnectedAtDate, playerId, disconnectedAtDate, matchId, playerId, playerId]
+      [
+        playerId,
+        disconnectedAtDate,
+        playerId,
+        disconnectedAtDate,
+        playerId,
+        reconnectDeadlineDate,
+        playerId,
+        reconnectDeadlineDate,
+        matchId,
+        playerId,
+        playerId
+      ]
     );
   }
 

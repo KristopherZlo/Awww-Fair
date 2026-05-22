@@ -287,6 +287,30 @@ describe("ranked matchmaking", () => {
     expect(await service.statusForPlayer("a")).toMatchObject({ status: "matched", match: { id: "match-1" } });
   });
 
+  it("does not extend the reconnect deadline after a player reconnects and leaves again", async () => {
+    let now = 1_000;
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => now, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+
+    const firstDisconnect = await service.disconnectFromMatch("a", "match-1");
+    now = 20_000;
+    await service.reconnectToMatch("a", "match-1");
+    now = 30_000;
+    const secondDisconnect = await service.disconnectFromMatch("a", "match-1");
+
+    expect(firstDisconnect.reconnectUntil).toBe(61_000);
+    expect(secondDisconnect.reconnectUntil).toBe(61_000);
+
+    now = 61_001;
+    await expect(service.statusForPlayer("b")).resolves.toEqual({ status: "idle" });
+    await expect(store.ratingForPlayer("a")).resolves.toMatchObject({ losses: 1 });
+  });
+
   it("settles a disconnected player as the loser after the reconnect timeout", async () => {
     let now = 1_000;
     const store = new MemoryRankedStore([

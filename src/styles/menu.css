@@ -99,6 +99,22 @@
   line-height: 1.45;
 }
 
+.ranked-result-mmr {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 247, 232, 0.9);
+  font-size: 1.15rem;
+  font-weight: 950;
+}
+
+.ranked-result-mmr.is-win {
+  color: #196b3a;
+}
+
+.ranked-result-mmr.is-loss {
+  color: #a83228;
+}
+
 .goal-badge {
   padding: 7px 10px;
   border: 1px solid rgba(88, 65, 39, 0.2);
