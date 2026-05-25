@@ -52,6 +52,7 @@ interface SimState {
 export interface AiSkillCheckOptions {
   games?: number;
   seed?: number;
+  customerPersonalities?: boolean;
 }
 
 export interface AiSkillCheckResult {
@@ -83,6 +84,7 @@ export interface AiVsAiScenarioOptions {
   favoredHandPlayerId?: PlayerId | null;
   skillByPlayer?: Partial<Record<PlayerId, SkillLevel>>;
   forcedTrendIds?: string[];
+  customerPersonalities?: boolean;
 }
 
 export interface AiVsAiScenarioResult {
@@ -119,6 +121,7 @@ export interface AiVsAiScenarioResult {
 export interface AiVsAiMatrixOptions {
   gamesPerScenario?: number;
   seed?: number;
+  customerPersonalities?: boolean;
 }
 
 export interface AiVsAiBonusMatrixResult {
@@ -306,6 +309,7 @@ interface InitialStateOptions {
   startingMoneyByPlayer?: Partial<Record<PlayerId, number>>;
   favoredHandPlayerId?: PlayerId | null;
   forcedTrendIds?: string[];
+  customerPersonalities?: boolean;
 }
 
 function mulberry32(seed: number) {
@@ -334,6 +338,17 @@ function randomItem<T>(items: T[]): T | null {
 
 function positiveInteger(value: number | undefined, fallback: number) {
   return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback;
+}
+
+export function buildBalanceCustomerDeck(customerPersonalities = false): CustomerCard[] {
+  if (customerPersonalities) {
+    return CUSTOMER_CARDS.map((customer) => ({ ...customer }));
+  }
+
+  return CUSTOMER_CARDS.map((customer) => {
+    const { personality: _personality, ...customerWithoutPersonality } = customer;
+    return customerWithoutPersonality;
+  });
 }
 
 function makeProductDeck() {
@@ -613,7 +628,7 @@ function upgradeChoiceForSkill(skill: SkillLevel, player: PlayerState, upgrades:
 function buildInitialState(options: InitialStateOptions = {}): SimState {
   let productDeck = makeProductDeck();
   let influenceDeck = shuffleDeck([...INFLUENCE_CARDS]);
-  let customerDeck = shuffleDeck([...CUSTOMER_CARDS]);
+  let customerDeck = shuffleDeck(buildBalanceCustomerDeck(options.customerPersonalities));
   let trendDeck = shuffleDeck([...TREND_CARDS]);
   const [activeTrends, afterTrends] = drawActiveTrends(trendDeck, options.forcedTrendIds);
   const [currentCustomers, afterCustomers] = draw(customerDeck, 1);
@@ -1012,7 +1027,7 @@ function recordHeadToHeadGame(state: SimState, metrics: HeadToHeadMetrics) {
   }
 }
 
-function runGame(seed: number, strongPlayerId: PlayerId, metrics: Metrics) {
+function runGame(seed: number, strongPlayerId: PlayerId, metrics: Metrics, options: Pick<AiSkillCheckOptions, "customerPersonalities"> = {}) {
   const previousRandom = Math.random;
   Math.random = mulberry32(seed);
   const skillByPlayer: Record<PlayerId, SkillLevel> = {
@@ -1021,7 +1036,7 @@ function runGame(seed: number, strongPlayerId: PlayerId, metrics: Metrics) {
   };
 
   try {
-    let state = buildInitialState();
+    let state = buildInitialState({ customerPersonalities: options.customerPersonalities });
     while (state.phase !== "game_end") {
       if (state.phase === "planning") {
         state = applyAiPlanningTurn(state, skillByPlayer, metrics);
@@ -1072,7 +1087,8 @@ function runHeadToHeadGame(seed: number, options: AiVsAiScenarioOptions, metrics
       startingUpgradeByPlayer: startingUpgradesForScenario(options),
       startingMoneyByPlayer: options.startingMoneyByPlayer,
       favoredHandPlayerId: options.favoredHandPlayerId ?? null,
-      forcedTrendIds: options.forcedTrendIds
+      forcedTrendIds: options.forcedTrendIds,
+      customerPersonalities: options.customerPersonalities
     });
     while (state.phase !== "game_end") {
       if (state.phase === "planning") {
@@ -1116,7 +1132,7 @@ function runHeadToHeadGame(seed: number, options: AiVsAiScenarioOptions, metrics
   }
 }
 
-export function runAiSkillCheck({ games = 240, seed = 90210 }: AiSkillCheckOptions = {}): AiSkillCheckResult {
+export function runAiSkillCheck({ games = 240, seed = 90210, customerPersonalities = false }: AiSkillCheckOptions = {}): AiSkillCheckResult {
   const metrics: Metrics = {
     games: 0,
     customers: 0,
@@ -1133,7 +1149,7 @@ export function runAiSkillCheck({ games = 240, seed = 90210 }: AiSkillCheckOptio
   };
 
   for (let index = 0; index < games; index += 1) {
-    runGame(seed + index * 7919, index % 2 === 0 ? "A" : "B", metrics);
+    runGame(seed + index * 7919, index % 2 === 0 ? "A" : "B", metrics, { customerPersonalities });
   }
 
   const productRows = PRODUCT_CARDS.map((product) => ({

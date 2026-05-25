@@ -3,24 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "dev:5175": "vite --host 127.0.0.1 --port 5175",
+    "dev:5175": "node server/lan-dev-server.mjs",
     "dev:lan": "node server/lan-dev-server.mjs",
     "lan": "node server/lan-dev-server.mjs",
-    "lobby": "node server/lobby-server.mjs",
+    "lobby": "tsx server/lobby-server.ts",
+    "db:migrate": "tsx server/migrate.ts",
+    "xampp:build": "npm run build",
+    "xampp:migrate": "tsx server/xampp-migrate.mjs",
+    "xampp:api": "tsx server/xampp-api.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "preview:5175": "vite preview --host 127.0.0.1 --port 5175",
     "resize:customers": "node scripts/build-customer-atlases.mjs",
     "balance:skill": "vite-node scripts/ai-skill-check.ts",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --exclude src/game/aiSkillCheck.test.ts",
+    "test:watch": "vitest --exclude src/game/aiSkillCheck.test.ts",
+    "test:balance": "vitest run src/game/aiSkillCheck.test.ts --testTimeout 180000",
+    "test:all": "vitest run --testTimeout 180000"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^5.0.0",
     "lucide-react": "^0.468.0",
-    "vite": "^5.4.11",
+    "mariadb": "^3.5.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -28,10 +36,14 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^25.9.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "6.0.2",
     "jsdom": "^25.0.1",
+    "tsx": "^4.22.3",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.5"
+    "vite": "8.0.13",
+    "vitest": "4.1.7"
   }
 }

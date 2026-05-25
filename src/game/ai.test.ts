@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CUSTOMER_CARDS, INFLUENCE_CARDS, PRODUCT_CARDS, TREND_CARDS, UPGRADE_CARDS } from "../data/cards";
 import { createProductInstance } from "./engine";
-import { chooseAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn } from "./ai";
+import { chooseAiProductChoice, chooseAiUpgrade, planAiPlanningTurn, planAiPlanningTurnForDifficulty, planWeakAiPlanningTurn } from "./ai";
 import type { InfluenceCard, PlayerId, PlayerState, ProductInstance, UpgradeCard } from "./types";
 
 function product(id: string, instanceId = id): ProductInstance {
@@ -53,10 +53,10 @@ describe("AI planner", () => {
       {
         players: [
           player("A", [null, null, null], []),
-          player("B", [null, null, null], [product("bread", "bread-1"), product("toy", "toy-1")], [influence("kids_party")])
+          player("B", [null, null, null], [product("bread", "bread-1"), product("cake", "cake-1")], [influence("sweet_smell")])
         ],
         currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
-        activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+        activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "sweet_day")!],
         playedInfluences: [],
         roundBonuses: [],
         productDeckLength: 3,
@@ -65,9 +65,9 @@ describe("AI planner", () => {
       "B"
     );
 
-    expect(plan.productMove?.productInstanceId).toBe("toy-1");
+    expect(plan.productMove?.productInstanceId).toBe("cake-1");
     expect(plan.productMove?.slotIndex).toBe(0);
-    expect(plan.influenceMove?.cardId).toBe("kids_party");
+    expect(plan.influenceMove?.cardId).toBe("sweet_smell");
     expect(plan.scoreDelta).toBeGreaterThan(0);
   });
 
@@ -127,14 +127,53 @@ describe("AI planner", () => {
     expect(plan.scoreDelta).toBeGreaterThan(0);
   });
 
+  it("does not replace a higher payout winning shelf product with a lower payout product", () => {
+    const plan = planAiPlanningTurn(
+      {
+        players: [
+          player("A", [null], []),
+          player("B", [product("toy", "toy-on-shelf")], [product("smoothie", "smoothie-1")])
+        ],
+        currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
+        activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+        playedInfluences: [],
+        roundBonuses: [],
+        productDeckLength: 0,
+        influenceDeckLength: 0
+      },
+      "B"
+    );
+
+    expect(plan.productMove).toBeNull();
+  });
+
+  it("chooses drawn products by exact sale payout, not only tag value", () => {
+    const aiPlayer = player("B", [null], []);
+    const choice = chooseAiProductChoice(
+      {
+        players: [player("A", [null], []), aiPlayer],
+        currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
+        activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+        playedInfluences: [],
+        roundBonuses: [],
+        productDeckLength: 0,
+        influenceDeckLength: 0
+      },
+      aiPlayer,
+      [product("smoothie", "smoothie-choice"), product("toy", "toy-choice")]
+    );
+
+    expect(choice?.cardId).toBe("toy-choice");
+  });
+
   it("can intentionally choose a weaker product plan for training mode", () => {
     const input = {
       players: [
         player("A", [null, null, null], []),
-        player("B", [null, null, null], [product("bread", "bread-1"), product("toy", "toy-1")], [influence("kids_party")])
+        player("B", [null, null, null], [product("bread", "bread-1"), product("cake", "cake-1")], [influence("sweet_smell")])
       ],
       currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
-      activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+      activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "sweet_day")!],
       playedInfluences: [],
       roundBonuses: [],
       productDeckLength: 3,
@@ -144,7 +183,7 @@ describe("AI planner", () => {
     const strong = planAiPlanningTurn(input, "B");
     const weak = planWeakAiPlanningTurn(input, "B");
 
-    expect(strong.productMove?.productInstanceId).toBe("toy-1");
+    expect(strong.productMove?.productInstanceId).toBe("cake-1");
     expect(weak.productMove?.productInstanceId).toBe("bread-1");
     expect(weak.influenceMove).toBeNull();
     expect(weak.scoreDelta).toBeLessThan(strong.scoreDelta);
@@ -175,10 +214,10 @@ describe("AI planner", () => {
     const input = {
       players: [
         player("A", [null, null, null], []),
-        player("B", [null, null, null], [product("bread", "bread-1"), product("toy", "toy-1")], [influence("kids_party")])
+        player("B", [null, null, null], [product("bread", "bread-1"), product("cake", "cake-1")], [influence("sweet_smell")])
       ],
       currentCustomers: [CUSTOMER_CARDS.find((candidate) => candidate.id === "child")!],
-      activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "kids_day")!],
+      activeTrends: [TREND_CARDS.find((candidate) => candidate.id === "sweet_day")!],
       playedInfluences: [],
       roundBonuses: [],
       productDeckLength: 3,
@@ -189,7 +228,7 @@ describe("AI planner", () => {
     const lateLevel = planAiPlanningTurnForDifficulty(input, "B", 18);
 
     expect(earlyLevel.influenceMove).toBeNull();
-    expect(lateLevel.influenceMove?.cardId).toBe("kids_party");
+    expect(lateLevel.influenceMove?.cardId).toBe("sweet_smell");
     expect(lateLevel.scoreDelta).toBeGreaterThan(earlyLevel.scoreDelta);
   });
 });
