@@ -3,8 +3,8 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { Pool } from "mariadb";
-import { DEV_PLAYER_USER_ID, isSeededDevPlayerName } from "./dev-seed";
 import { publicPath } from "./listen-config.mjs";
+import { securityHeaders } from "./security-headers.mjs";
 
 const SESSION_COOKIE = "tm_session";
 const OAUTH_STATE_COOKIE = "tm_oauth_state";
@@ -14,11 +14,26 @@ const PROFILE_DELETE_CONFIRMATION = "УДАЛИТЬ ПРОФИЛЬ";
 const PROFILE_DELETE_DELAY_MS = 14 * 24 * 60 * 60 * 1000;
 const AVATAR_ROUTE_PREFIX = "/api/auth/avatar/";
 const AVATAR_MAX_BYTES = 512 * 1024;
-const DEFAULT_AVATAR_DIR = path.resolve(process.cwd(), "uploads", "avatars");
-const AVATAR_TYPES = new Map([
-  ["image/png", { extension: "png", contentType: "image/png" }],
-  ["image/jpeg", { extension: "jpg", contentType: "image/jpeg" }],
-  ["image/webp", { extension: "webp", contentType: "image/webp" }]
+const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const JPEG_SIGNATURE = Buffer.from([255, 216, 255]);
+const RIFF_SIGNATURE = Buffer.from("RIFF", "ascii");
+const WEBP_SIGNATURE = Buffer.from("WEBP", "ascii");
+type AvatarType = {
+  extension: string;
+  contentType: string;
+  isValid: (data: Buffer) => boolean;
+};
+const AVATAR_TYPES = new Map<string, AvatarType>([
+  ["image/png", { extension: "png", contentType: "image/png", isValid: (data: Buffer) => startsWithBytes(data, PNG_SIGNATURE) }],
+  ["image/jpeg", { extension: "jpg", contentType: "image/jpeg", isValid: (data: Buffer) => startsWithBytes(data, JPEG_SIGNATURE) }],
+  [
+    "image/webp",
+    {
+      extension: "webp",
+      contentType: "image/webp",
+      isValid: (data: Buffer) => startsWithBytes(data, RIFF_SIGNATURE) && startsWithBytes(data, WEBP_SIGNATURE, 8)
+    }
+  ]
 ]);
 
 export interface AuthUser {
@@ -54,7 +69,7 @@ export function sessionTokenHash(token: string): string {
 }
 
 function json(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
-  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", ...headers });
+  response.writeHead(status, { ...securityHeaders(), "Content-Type": "application/json; charset=utf-8", ...headers });
   response.end(JSON.stringify(body));
 }
 
@@ -62,6 +77,10 @@ class AuthHttpError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
   }
+}
+
+function startsWithBytes(data: Buffer, signature: Buffer, offset = 0) {
+  return data.length >= offset + signature.length && data.subarray(offset, offset + signature.length).equals(signature);
 }
 
 async function readRawBody(request: IncomingMessage, maxBytes = 64 * 1024): Promise<Buffer> {
@@ -102,7 +121,7 @@ function oauthStateCookie(state: string, maxAge = OAUTH_STATE_TTL_SECONDS) {
 }
 
 function redirect(response: ServerResponse, location: string, headers: Record<string, string | string[]> = {}) {
-  response.writeHead(302, { Location: location, ...headers });
+  response.writeHead(302, { ...securityHeaders(), Location: location, ...headers });
   response.end();
 }
 
@@ -212,6 +231,10 @@ function avatarPath(avatarDir: string, file: string) {
   return resolvedFile;
 }
 
+export function defaultAvatarDir(env: Partial<Record<string, string | undefined>> = process.env) {
+  return path.resolve(env.AVATAR_UPLOAD_DIR ?? path.join(process.cwd(), "..", "..", "trendmarket-private", "avatars"));
+}
+
 async function saveAvatarUpload(userId: string, upload: ProfileAvatarUpload | undefined, avatarDir: string): Promise<string | undefined> {
   if (!upload || upload.data.length === 0) {
     return undefined;
@@ -222,6 +245,9 @@ async function saveAvatarUpload(userId: string, upload: ProfileAvatarUpload | un
   }
   if (upload.data.length > AVATAR_MAX_BYTES) {
     throw new AuthHttpError(413, "Avatar file is too large.");
+  }
+  if (!avatarType.isValid(upload.data)) {
+    throw new AuthHttpError(400, "Avatar file content does not match its declared image type.");
   }
   await mkdir(avatarDir, { recursive: true });
   const file = `${userId}-${crypto.randomUUID()}.${avatarType.extension}`;
@@ -249,7 +275,7 @@ async function serveAvatar(file: string, avatarDir: string, response: ServerResp
   const contentType = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
   try {
     const body = await readFile(avatarPath(avatarDir, file));
-    response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "public, max-age=86400" });
+    response.writeHead(200, { ...securityHeaders(), "Content-Type": contentType, "Cache-Control": "private, max-age=86400" });
     response.end(body);
   } catch {
     json(response, 404, { error: "Avatar not found." });
@@ -263,7 +289,7 @@ export function createAuthHandler({
   tokenFactory = () => crypto.randomBytes(32).toString("base64url"),
   oauthStateFactory = () => crypto.randomBytes(24).toString("base64url"),
   fetch: fetchImpl = globalThis.fetch,
-  avatarDir = DEFAULT_AVATAR_DIR
+  avatarDir = defaultAvatarDir(env)
 }: {
   env?: Partial<Record<string, string | undefined>>;
   store: AuthStore;
@@ -278,14 +304,24 @@ export function createAuthHandler({
     const parts = requestUrl.pathname.split("/").filter(Boolean);
 
     try {
-      if (request.method === "GET" && parts[2] === "avatar" && parts[3]) {
-        await serveAvatar(parts[3], avatarDir, response);
-        return;
-      }
-
       const currentTime = now();
       const purgedAvatarUrls = await store.purgeExpiredDeactivatedUsers(currentTime);
       await Promise.all(purgedAvatarUrls.map((avatarUrl) => deleteUploadedAvatar(avatarUrl, avatarDir)));
+
+      if (request.method === "GET" && parts[2] === "avatar" && parts[3]) {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        if (user.deactivatedAt) {
+          json(response, 403, { error: "Profile is scheduled for deletion." });
+          return;
+        }
+        await serveAvatar(parts[3], avatarDir, response);
+        return;
+      }
 
       if (request.method === "GET" && parts[2] === "me") {
         const token = cookieValue(request, SESSION_COOKIE);
@@ -499,8 +535,7 @@ export class MemoryAuthStore implements AuthStore {
   }
 
   async createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser> {
-    const seededPlayerId = isSeededDevPlayerName(profile.displayName) ? DEV_PLAYER_USER_ID : null;
-    const userId = seededPlayerId ?? crypto.randomUUID();
+    const userId = crypto.randomUUID();
     const existingUser = this.users.get(userId);
     const user: AuthUser = {
       id: userId,
@@ -618,28 +653,18 @@ export class MariaDbAuthStore implements AuthStore {
   }
 
   async createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser> {
-    const seededPlayerId = isSeededDevPlayerName(profile.displayName) ? DEV_PLAYER_USER_ID : null;
     const user: AuthUser = {
-      id: seededPlayerId ?? crypto.randomUUID(),
+      id: crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
       email: profile.email ?? null,
       deactivatedAt: null,
       deleteAfter: null
     };
-    if (seededPlayerId) {
-      await this.pool.query(
-        `INSERT INTO users (id, display_name, avatar_url, email, is_bot)
-         VALUES (?, ?, ?, ?, FALSE)
-         ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), avatar_url = VALUES(avatar_url), email = VALUES(email), is_bot = FALSE`,
-        [user.id, user.displayName, user.avatarUrl, user.email]
-      );
-    } else {
-      await this.pool.query(
-        "INSERT INTO users (id, display_name, avatar_url, email) VALUES (?, ?, ?, ?)",
-        [user.id, user.displayName, user.avatarUrl, user.email]
-      );
-    }
+    await this.pool.query(
+      "INSERT INTO users (id, display_name, avatar_url, email) VALUES (?, ?, ?, ?)",
+      [user.id, user.displayName, user.avatarUrl, user.email]
+    );
     const rows = await this.pool.query(
       `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
         deactivated_at AS deactivatedAt, delete_after AS deleteAfter

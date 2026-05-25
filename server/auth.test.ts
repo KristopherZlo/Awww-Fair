@@ -90,6 +90,8 @@ function memoryStore(): AuthStore {
   };
 }
 
+const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+
 describe("auth handler", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
@@ -113,6 +115,42 @@ describe("auth handler", () => {
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Dev login is disabled." });
+  });
+
+  it("keeps dev login disabled when XAMPP defaults disable it", async () => {
+    const server = await startTestServer(createAuthHandler({ env: { AUTH_DEV_LOGIN: "false" }, store: new MemoryAuthStore() }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/auth/dev-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "player", email: "attacker@example.test" })
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Dev login is disabled." });
+  });
+
+  it("does not bind explicit dev login to the seeded player identity", async () => {
+    const server = await startTestServer(
+      createAuthHandler({
+        env: { AUTH_DEV_LOGIN: "true" },
+        store: new MemoryAuthStore(),
+        tokenFactory: () => "session-token"
+      })
+    );
+    cleanups.push(server.close);
+
+    const login = await fetch(`${server.url}/api/auth/dev-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "player", email: "p@example.test" })
+    });
+    const payload = await login.json();
+
+    expect(login.status).toBe(200);
+    expect(payload.user).toMatchObject({ displayName: "player", email: "p@example.test" });
+    expect(payload.user.id).not.toBe("dev-player");
   });
 
   it("creates a dev session and reads it through /me", async () => {
@@ -246,11 +284,12 @@ describe("auth handler", () => {
       body: JSON.stringify({ displayName: "Player", email: "p@example.test" })
     });
     const cookie = login.headers.get("set-cookie") ?? "";
-    const multipart = multipartProfileBody("New Nick", { bytes: new Uint8Array([137, 80, 78, 71]), fileName: "avatar.png", contentType: "image/png" });
+    const multipart = multipartProfileBody("New Nick", { bytes: PNG_BYTES, fileName: "avatar.png", contentType: "image/png" });
 
     const response = await fetch(`${server.url}/api/auth/profile`, { method: "PATCH", headers: { Cookie: cookie, "Content-Type": multipart.contentType }, body: multipart.body });
     const payload = await response.json();
-    const avatar = await fetch(`${server.url}${payload.user.avatarUrl}`);
+    const unauthenticatedAvatar = await fetch(`${server.url}${payload.user.avatarUrl}`);
+    const avatar = await fetch(`${server.url}${payload.user.avatarUrl}`, { headers: { Cookie: cookie } });
 
     expect(response.status).toBe(200);
     expect(payload.user).toMatchObject({
@@ -260,8 +299,12 @@ describe("auth handler", () => {
       deleteAfter: null
     });
     expect(avatar.status).toBe(200);
+    expect(unauthenticatedAvatar.status).toBe(401);
+    expect(await unauthenticatedAvatar.json()).toEqual({ error: "Login is required." });
     expect(avatar.headers.get("content-type")).toBe("image/png");
-    expect(new Uint8Array(await avatar.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71]));
+    expect(avatar.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(avatar.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+    expect(new Uint8Array(await avatar.arrayBuffer())).toEqual(PNG_BYTES);
   });
 
   it("rejects unsupported avatar uploads", async () => {
@@ -287,6 +330,31 @@ describe("auth handler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Unsupported avatar type." });
+  });
+
+  it("rejects avatar uploads whose bytes do not match the declared image type", async () => {
+    const avatarDir = await mkdtemp(path.join(tmpdir(), "trendmarket-avatar-"));
+    cleanups.push(() => rm(avatarDir, { recursive: true, force: true }));
+    const server = await startTestServer(
+      createAuthHandler({
+        env: { AUTH_DEV_LOGIN: "true" },
+        store: new MemoryAuthStore(),
+        tokenFactory: () => "session-token",
+        avatarDir
+      })
+    );
+    cleanups.push(server.close);
+    const login = await fetch(`${server.url}/api/auth/dev-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Player" })
+    });
+    const multipart = multipartProfileBody("Player", { bytes: "<!doctype html><script>alert(1)</script>", fileName: "avatar.png", contentType: "image/png" });
+
+    const response = await fetch(`${server.url}/api/auth/profile`, { method: "PATCH", headers: { Cookie: login.headers.get("set-cookie") ?? "", "Content-Type": multipart.contentType }, body: multipart.body });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Avatar file content does not match its declared image type." });
   });
 
   it("deactivates, cancels deletion, and lazily purges expired profiles", async () => {
