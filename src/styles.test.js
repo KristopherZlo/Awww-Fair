@@ -179,6 +179,16 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.oauth-actions,\s*\.dev-login-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
   });
 
+  it("styles the custom turn time range input like the menu controls", () => {
+    const css = readAppCss();
+
+    expect(css).toMatch(/\.custom-turn-time input\[type="range"\]\s*\{[\s\S]*-webkit-appearance:\s*none;[\s\S]*appearance:\s*none;[\s\S]*min-height:\s*44px;/);
+    expect(css).toMatch(/\.custom-turn-time input\[type="range"\]\s*\{[\s\S]*accent-color:\s*#f7d99b;/);
+    expect(css).toMatch(/\.custom-turn-time input\[type="range"\]::\-webkit-slider-runnable-track\s*\{[\s\S]*background:\s*rgba\(247,\s*217,\s*155,\s*0\.24\);/);
+    expect(css).toMatch(/\.custom-turn-time input\[type="range"\]::\-webkit-slider-thumb\s*\{[\s\S]*-webkit-appearance:\s*none;[\s\S]*background:\s*#f7d99b;/);
+    expect(css).toMatch(/\.custom-turn-time input\[type="range"\]::\-moz-range-thumb\s*\{[\s\S]*background:\s*#f7d99b;/);
+  });
+
   it("caps leaderboard pagination buttons and embeds search icon in the field", () => {
     const css = readAppCss();
 

@@ -8,6 +8,9 @@ export const MIN_TURN_TIME_SECONDS = 15;
 export const MAX_TURN_TIME_SECONDS = 120;
 
 export function clampTurnTime(seconds: number) {
+  if (!Number.isFinite(seconds)) {
+    return DEFAULT_TURN_TIME_SECONDS;
+  }
   return Math.max(MIN_TURN_TIME_SECONDS, Math.min(MAX_TURN_TIME_SECONDS, Math.round(seconds)));
 }
 
