@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
 import type { Pool, PoolConnection } from "mariadb";
 import type { GameState } from "../src/app/types";
+import { chooseAiUpgrade, chooseWeakAiUpgrade, planAiPlanningTurnForDifficulty, type AiInfluenceMove } from "../src/game/ai";
+import { PURCHASE_APPEAL_THRESHOLD } from "../src/game/engine";
 import { DEFAULT_PLAYER_RATING, applyRankedResult, buildRankedMatchLog, getRankedWinner, type RankedMatchLog } from "../src/game/rating";
 import { applyRankedReplayEvent, replayRankedEvents, type RankedReplayOutcome } from "../src/game/rankedReplay";
 import { buildInitialState, seededRandom } from "../src/game/session";
 import { DEFAULT_INITIAL_STATE_OPTIONS, RANKED_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
+import type { PlayerId } from "../src/game/types";
 import type { PlayerRating } from "../src/game/rating";
 import {
   CALIBRATION_MATCH_COUNT,
@@ -135,6 +138,8 @@ export class RankedCooldownError extends Error {
 }
 
 type RankedBotDelayFactory = (params: { isCalibration: boolean; playerId: string; now: number }) => number;
+type RankedSettlementInput = { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number };
+type PendingBotEvent = { actorId: string; eventType: string; payload: unknown };
 
 function randomDelay(minMs: number, maxMs: number): number {
   return minMs + Math.floor(Math.random() * (maxMs - minMs + 1));
@@ -378,6 +383,7 @@ export class RankedService {
       if (await this.settleExpiredDisconnect(match)) {
         return { status: "idle" };
       }
+      await this.recordPendingBotEvents(match.id);
       return { status: "matched", match };
     }
     const waiting = await this.options.store.waitingPlayers();
@@ -437,11 +443,14 @@ export class RankedService {
       throw new Error("Active ranked match not found.");
     }
     await this.assertRankedEventCanReplay(match, { actorId, eventType: event.eventType, payload: event.payload });
-    return this.options.store.recordMatchEvent({ ...event, actorId, createdAt: this.options.now?.() ?? Date.now() });
+    const recorded = await this.options.store.recordMatchEvent({ ...event, actorId, createdAt: this.options.now?.() ?? Date.now() });
+    await this.recordPendingBotEvents(match.id);
+    return recorded;
   }
 
   async eventsForPlayer(actorId: string, matchId: string, afterSequence = 0): Promise<RankedMatchEvent[]> {
     const match = await this.requireActiveMatch(actorId, matchId);
+    await this.recordPendingBotEvents(match.id);
     const events = await this.options.store.eventsForMatch(match.id);
     return events.filter((event) => event.sequence > afterSequence);
   }
@@ -473,17 +482,15 @@ export class RankedService {
     result: { matchId: string; playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }
   ): Promise<{ log: RankedMatchLog }> {
     const match = await this.requireActiveMatch(actorId, result.matchId);
-    return this.settleActiveMatch(match, result);
+    const trustedResult = await this.verifiedReplayResult(match, result);
+    return this.settleActiveMatch(match, trustedResult);
   }
 
   private async settleActiveMatch(
     match: RankedMatch,
-    result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number },
+    result: RankedSettlementInput,
     forcedWinnerId?: string
   ): Promise<{ log: RankedMatchLog }> {
-    if (!forcedWinnerId && !match.isBotMatch) {
-      await this.assertReplayMatchesSubmittedResult(match, result);
-    }
     const playerA = await this.options.store.ratingForPlayer(match.playerAId);
     const playerB = await this.options.store.ratingForPlayer(match.playerBId);
     const now = this.options.now?.() ?? Date.now();
@@ -530,7 +537,7 @@ export class RankedService {
     match: RankedMatch,
     playerA: RankedPlayerRating,
     playerB: RankedPlayerRating,
-    result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number },
+    result: RankedSettlementInput,
     winnerId: string,
     rankedAt: string,
     multiplier: number
@@ -590,22 +597,29 @@ export class RankedService {
     }
   }
 
-  private async assertReplayMatchesSubmittedResult(
-    match: RankedMatch,
-    result: { playerACoins: number; playerBCoins: number; playerASales: number; playerBSales: number }
-  ): Promise<void> {
+  private async verifiedReplayResult(match: RankedMatch, submitted: RankedSettlementInput): Promise<RankedSettlementInput> {
+    await this.recordPendingBotEvents(match.id);
     const events = await this.options.store.eventsForMatch(match.id);
     if (events.length === 0) {
-      return;
+      throw new Error("Ranked replay is incomplete.");
     }
-    const replayOutcome = replayRankedEvents(
-      match.initialState,
-      events.map((event) => ({ actorId: event.actorId, eventType: event.eventType, payload: event.payload })),
-      { playerAId: match.playerAId, playerBId: match.playerBId }
-    );
-    if (!sameRankedOutcome(replayOutcome, result)) {
+    let replayOutcome: RankedReplayOutcome;
+    try {
+      replayOutcome = replayRankedEvents(
+        match.initialState,
+        events.map((event) => ({ actorId: event.actorId, eventType: event.eventType, payload: event.payload })),
+        { playerAId: match.playerAId, playerBId: match.playerBId }
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "Ranked replay did not reach game end.") {
+        throw new Error("Ranked replay is incomplete.");
+      }
+      throw error;
+    }
+    if (!sameRankedOutcome(replayOutcome, submitted)) {
       throw new Error("Ranked replay result mismatch.");
     }
+    return replayOutcome;
   }
 
   private async assertRankedEventCanReplay(match: RankedMatch, event: { actorId: string; eventType: string; payload: unknown }): Promise<void> {
@@ -622,6 +636,131 @@ export class RankedService {
 
   private botDelay(params: { isCalibration: boolean; playerId: string; now: number }): number {
     return this.options.botDelayFactory?.(params) ?? defaultBotDelay(params);
+  }
+
+  private botSeatFor(match: RankedMatch): PlayerId | null {
+    if (isRankedBotId(match.playerAId)) return "A";
+    if (isRankedBotId(match.playerBId)) return "B";
+    return null;
+  }
+
+  private actorIdForSeat(match: RankedMatch, seat: PlayerId): string {
+    return seat === "A" ? match.playerAId : match.playerBId;
+  }
+
+  private async replayStateForMatch(match: RankedMatch): Promise<GameState> {
+    const events = await this.options.store.eventsForMatch(match.id);
+    return events.reduce(
+      (current, event) =>
+        applyRankedReplayEvent(current, { actorId: event.actorId, eventType: event.eventType, payload: event.payload }, { playerAId: match.playerAId, playerBId: match.playerBId }),
+      match.initialState
+    );
+  }
+
+  private botPlanningEvent(match: RankedMatch, state: GameState, botSeat: PlayerId): PendingBotEvent {
+    const botActorId = this.actorIdForSeat(match, botSeat);
+    if (state.choiceDraft?.playerId === botSeat) {
+      return { actorId: botActorId, eventType: "keep_draft_card", payload: { index: 0 } };
+    }
+
+    const plan = planAiPlanningTurnForDifficulty(
+      {
+        players: state.players,
+        currentCustomers: state.currentCustomers,
+        activeTrends: state.activeTrends,
+        playedInfluences: state.playedInfluences,
+        roundBonuses: state.roundBonuses,
+        productDeckLength: state.productDeck.length,
+        influenceDeckLength: state.influenceDeck.length,
+        purchaseAppealThreshold: PURCHASE_APPEAL_THRESHOLD,
+        firstPlayer: state.firstPlayer,
+        round: state.round
+      },
+      botSeat,
+      match.botDifficulty ?? 14
+    );
+
+    if (plan.productMove) {
+      return {
+        actorId: botActorId,
+        eventType: "place_product",
+        payload: { productInstanceId: plan.productMove.productInstanceId, slotIndex: plan.productMove.slotIndex }
+      };
+    }
+    if (plan.influenceMove) {
+      return { actorId: botActorId, eventType: "play_influence", payload: this.botInfluencePayload(plan.influenceMove) };
+    }
+    if (plan.tableBonusMove) {
+      return { actorId: botActorId, eventType: "use_ad_table", payload: { slotIndex: plan.tableBonusMove.slotIndex } };
+    }
+    return { actorId: botActorId, eventType: "ready", payload: {} };
+  }
+
+  private botInfluencePayload(move: AiInfluenceMove): { cardId: string; target?: { tag?: unknown; ownerId?: PlayerId; slotIndex?: number } } {
+    const target =
+      move.targetTag || move.targetOwnerId || move.targetSlotIndex !== undefined
+        ? { tag: move.targetTag, ownerId: move.targetOwnerId, slotIndex: move.targetSlotIndex }
+        : undefined;
+    return { cardId: move.cardId, ...(target ? { target } : {}) };
+  }
+
+  private botUpgradeEvent(match: RankedMatch, state: GameState, botSeat: PlayerId): PendingBotEvent {
+    const botActorId = this.actorIdForSeat(match, botSeat);
+    const buyer = state.players.find((player) => player.id === botSeat);
+    const choice = buyer
+      ? (match.botDifficulty ?? 14) <= 10
+        ? chooseWeakAiUpgrade(buyer, state.upgradeOffer)
+        : chooseAiUpgrade(buyer, state.upgradeOffer)
+      : null;
+    return choice
+      ? { actorId: botActorId, eventType: "buy_upgrade", payload: { upgradeId: choice.upgradeId } }
+      : { actorId: botActorId, eventType: "skip_upgrade", payload: {} };
+  }
+
+  private nextBotEvent(match: RankedMatch, state: GameState): PendingBotEvent | null {
+    const botSeat = this.botSeatFor(match);
+    if (!botSeat || state.phase === "game_end") {
+      return null;
+    }
+    if (state.choiceDraft) {
+      return state.choiceDraft.playerId === botSeat ? this.botPlanningEvent(match, state, botSeat) : null;
+    }
+    if (state.phase === "planning" && state.activePlayer === botSeat) {
+      return this.botPlanningEvent(match, state, botSeat);
+    }
+    if (state.phase === "upgrade" && state.upgradeQueue[0] === botSeat) {
+      return this.botUpgradeEvent(match, state, botSeat);
+    }
+    return null;
+  }
+
+  private async recordPendingBotEvents(matchId: string): Promise<void> {
+    let match = await this.options.store.matchById(matchId);
+    if (!match || match.status !== "active" || !match.isBotMatch) {
+      return;
+    }
+
+    for (let guard = 0; guard < 128; guard += 1) {
+      const state = await this.replayStateForMatch(match);
+      const event = this.nextBotEvent(match, state);
+      if (!event) {
+        return;
+      }
+      await this.options.store.recordMatchEvent({
+        matchId: match.id,
+        actorId: event.actorId,
+        round: state.round,
+        phase: state.phase,
+        eventType: event.eventType,
+        payload: event.payload,
+        createdAt: this.options.now?.() ?? Date.now()
+      });
+      match = (await this.options.store.matchById(matchId)) ?? match;
+      if (match.status !== "active") {
+        return;
+      }
+    }
+    throw new Error("Ranked bot replay did not stabilize.");
   }
 
   private async createHumanMatch(playerAId: string, playerBId: string, now: number): Promise<RankedMatch> {

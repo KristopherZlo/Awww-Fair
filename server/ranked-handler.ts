@@ -1,10 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { sessionTokenHash, type AuthStore, type AuthUser } from "./auth";
 import { RankedCooldownError, type RankedService } from "./ranked";
+import { securityHeaders } from "./security-headers.mjs";
+
+const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 
 function json(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  response.writeHead(status, { ...securityHeaders(), "Content-Type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+class RankedHttpError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
 }
 
 function cookieValue(request: IncomingMessage, name: string): string | null {
@@ -24,13 +33,26 @@ async function currentUser(request: IncomingMessage, authStore: AuthStore): Prom
   return token ? authStore.findUserBySessionHash(sessionTokenHash(token), new Date()) : null;
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(request: IncomingMessage, maxBodyBytes = DEFAULT_MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBodyBytes) {
+      throw new RankedHttpError(413, "Request body too large.");
+    }
+    chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) {
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new RankedHttpError(400, "Malformed JSON.");
+  }
 }
 
 function numberField(body: Record<string, unknown>, name: string): number {
@@ -42,6 +64,9 @@ function numberField(body: Record<string, unknown>, name: string): number {
 }
 
 function rankedErrorResponse(error: unknown): { status: number; body: { error: string; penalty?: unknown } } {
+  if (error instanceof RankedHttpError) {
+    return { status: error.status, body: { error: error.message } };
+  }
   if (error instanceof Error && error.message === "Ranked cooldown is active.") {
     return {
       status: 429,
@@ -51,13 +76,26 @@ function rankedErrorResponse(error: unknown): { status: number; body: { error: s
       }
     };
   }
-  if (error instanceof Error && error.message === "Ranked replay result mismatch.") {
+  if (
+    error instanceof Error &&
+    (error.message === "Ranked replay result mismatch." ||
+      error.message === "Ranked replay is incomplete." ||
+      error.message === "Ranked replay did not reach game end.")
+  ) {
     return { status: 409, body: { error: error.message } };
   }
   return { status: 500, body: { error: "Ranked server error." } };
 }
 
-export function createRankedHandler({ authStore, service }: { authStore: AuthStore; service: RankedService }) {
+export function createRankedHandler({
+  authStore,
+  service,
+  maxBodyBytes = DEFAULT_MAX_BODY_BYTES
+}: {
+  authStore: AuthStore;
+  service: RankedService;
+  maxBodyBytes?: number;
+}) {
   return async function rankedHandler(request: IncomingMessage, response: ServerResponse) {
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
     const parts = requestUrl.pathname.split("/").filter(Boolean);
@@ -111,7 +149,7 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         return;
       }
       if (request.method === "POST" && parts[2] === "events") {
-        const body = await readJson(request);
+        const body = await readJson(request, maxBodyBytes);
         const event = await service.recordEvent(user.id, {
           matchId: String(body.matchId ?? ""),
           round: numberField(body, "round"),
@@ -123,22 +161,22 @@ export function createRankedHandler({ authStore, service }: { authStore: AuthSto
         return;
       }
       if (request.method === "POST" && parts[2] === "disconnect") {
-        const body = await readJson(request);
+        const body = await readJson(request, maxBodyBytes);
         json(response, 200, await service.disconnectFromMatch(user.id, String(body.matchId ?? "")));
         return;
       }
       if (request.method === "POST" && parts[2] === "abandon") {
-        const body = await readJson(request);
+        const body = await readJson(request, maxBodyBytes);
         json(response, 200, await service.abandonMatch(user.id, String(body.matchId ?? "")));
         return;
       }
       if (request.method === "POST" && parts[2] === "reconnect") {
-        const body = await readJson(request);
+        const body = await readJson(request, maxBodyBytes);
         json(response, 200, await service.reconnectToMatch(user.id, String(body.matchId ?? "")));
         return;
       }
       if (request.method === "POST" && parts[2] === "settle") {
-        const body = await readJson(request);
+        const body = await readJson(request, maxBodyBytes);
         json(
           response,
           200,

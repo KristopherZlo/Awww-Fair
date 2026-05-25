@@ -15,6 +15,7 @@
     "src/app/types.ts",
     "src/data/cards.ts",
     "src/game/engine.ts",
+    "src/game/ai.ts",
     "src/game/goals.ts",
     "src/game/levels.ts",
     "src/game/rating.ts",

@@ -150,15 +150,25 @@ describe("ranked handler", () => {
     ]);
     const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
     await service.joinQueue("a");
-    await service.joinQueue("b");
-    await service.settleMatch("a", { matchId: "match-1", playerACoins: 10, playerBCoins: 5, playerASales: 4, playerBSales: 2 });
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    for (const replayEvent of replayEventsFor(matched.match)) {
+      await service.recordEvent(replayEvent.actorId, {
+        matchId: "match-1",
+        round: replayEvent.round,
+        phase: replayEvent.phase,
+        eventType: replayEvent.eventType,
+        payload: replayEvent.payload
+      });
+    }
+    await service.settleMatch("a", { matchId: "match-1", playerACoins: 0, playerBCoins: 0, playerASales: 0, playerBSales: 0 });
     const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
     cleanups.push(server.close);
 
     const response = await fetch(`${server.url}/api/ranked/history?limit=20`, { headers: { Cookie: "tm_session=token" } });
     const payload = await response.json();
 
-    expect(payload.history[0]).toMatchObject({ matchId: "match-1", winnerId: "a", loserId: "b", mmrChange: 26 });
+    expect(payload.history[0]).toMatchObject({ matchId: "match-1", winnerId: null, loserId: null, mmrChange: 0 });
   });
 
   it("records ranked events and settles the current match", async () => {
@@ -189,6 +199,80 @@ describe("ranked handler", () => {
     });
 
     expect(await settlement.json()).toMatchObject({ log: { winnerId: null, mmrChange: 0 } });
+  });
+
+  it("rejects zero-event ranked settlement instead of trusting submitted result totals", async () => {
+    const store = new MemoryRankedStore([
+      { playerId: "a", mmr: 1500, rankedGames: 10, ratingGames: 10, calibrationGames: 5, wins: 5, losses: 5, lastRankedAt: null },
+      { playerId: "b", mmr: 1500, rankedGames: 10, ratingGames: 10, calibrationGames: 5, wins: 5, losses: 5, lastRankedAt: null }
+    ]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-1", seedFactory: () => "seed-1" });
+    await service.joinQueue("a");
+    await service.joinQueue("b");
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/settle`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1", playerACoins: 999, playerBCoins: 0, playerASales: 99, playerBSales: 0 })
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Ranked replay is incomplete." });
+    expect(await store.eventsForMatch("match-1")).toEqual([]);
+    await expect(service.statusForPlayer("a")).resolves.toMatchObject({ status: "matched" });
+  });
+
+  it("rejects bot ranked settlement until server-side replay reaches game end", async () => {
+    const store = new MemoryRankedStore([{ playerId: "human", mmr: 1500, rankedGames: 0, ratingGames: 0, calibrationGames: 0, wins: 0, losses: 0, lastRankedAt: null }]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-bot", seedFactory: () => "seed-bot", botDelayFactory: () => 0 });
+    await service.joinQueue("human");
+    const status = await service.statusForPlayer("human");
+    if (status.status !== "matched") throw new Error("Expected bot match.");
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "human", displayName: "Human", avatarUrl: null, email: null }), service }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/settle`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-bot", playerACoins: 999, playerBCoins: 0, playerASales: 99, playerBSales: 0 })
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Ranked replay is incomplete." });
+    await expect(service.statusForPlayer("human")).resolves.toMatchObject({ status: "matched" });
+  });
+
+  it("records bot ranked actions on the server when the bot has the active turn", async () => {
+    const store = new MemoryRankedStore([{ playerId: "human", mmr: 1500, rankedGames: 0, ratingGames: 0, calibrationGames: 0, wins: 0, losses: 0, lastRankedAt: null }]);
+    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-bot", seedFactory: () => "seed-1", botDelayFactory: () => 0 });
+    await service.joinQueue("human");
+    const status = await service.statusForPlayer("human");
+    if (status.status !== "matched") throw new Error("Expected bot match.");
+    expect(status.match.firstPlayerId).toBe(status.match.playerBId);
+
+    const events = await service.eventsForPlayer("human", "match-bot");
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.actorId === status.match.playerBId)).toBe(true);
+    expect(events.at(-1)?.eventType).toBe("ready");
+  });
+
+  it("rejects oversized ranked JSON bodies before parsing", async () => {
+    const store = new MemoryRankedStore([{ playerId: "a", mmr: 1500, rankedGames: 0, wins: 0, losses: 0, lastRankedAt: null }]);
+    const service = new RankedService({ store, now: () => 1_000 });
+    const server = await startTestServer(createRankedHandler({ authStore: authStore({ id: "a", displayName: "A", avatarUrl: null, email: null }), service, maxBodyBytes: 20 }));
+    cleanups.push(server.close);
+
+    const response = await fetch(`${server.url}/api/ranked/disconnect`, {
+      method: "POST",
+      headers: { Cookie: "tm_session=token", "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId: "match-1", filler: "x".repeat(64) })
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Request body too large." });
   });
 
   it("returns ranked events after a requested sequence", async () => {

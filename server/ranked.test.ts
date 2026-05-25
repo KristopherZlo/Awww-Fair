@@ -26,6 +26,20 @@ function buildNoActionReplayEvents(match: { initialState: ReturnType<typeof buil
   return events;
 }
 
+async function recordNoActionReplay(store: MemoryRankedStore, match: { id: string; initialState: ReturnType<typeof buildInitialState>; playerAId: string; playerBId: string }) {
+  for (const event of buildNoActionReplayEvents(match)) {
+    await store.recordMatchEvent({
+      matchId: match.id,
+      actorId: event.actorId,
+      round: event.round,
+      phase: event.phase,
+      eventType: event.eventType,
+      payload: event.payload,
+      createdAt: 1_000
+    });
+  }
+}
+
 describe("ranked matchmaking", () => {
   it("expands the MMR search range by wait time", () => {
     expect(getAllowedMmrRange(0)).toBe(100);
@@ -117,13 +131,14 @@ describe("ranked matchmaking", () => {
     await service.joinQueue("new-player");
     const matched = await service.statusForPlayer("new-player");
     if (matched.status !== "matched") throw new Error("Expected bot match.");
+    await recordNoActionReplay(store, matched.match);
 
     await service.settleMatch("new-player", {
       matchId: "match-1",
-      playerACoins: 20,
-      playerBCoins: 8,
-      playerASales: 5,
-      playerBSales: 2
+      playerACoins: 0,
+      playerBCoins: 0,
+      playerASales: 0,
+      playerBSales: 0
     });
 
     await expect(store.ratingForPlayer("new-player")).resolves.toMatchObject({ rankedGames: 0, wins: 0, losses: 0, calibrationGames: 1 });
@@ -475,13 +490,15 @@ describe("ranked matchmaking", () => {
     });
 
     await service.joinQueue("a");
-    await service.joinQueue("b");
+    const matched = await service.joinQueue("b");
+    if (matched.status !== "matched") throw new Error("Expected ranked match.");
+    await recordNoActionReplay(store, matched.match);
     await service.settleMatch("a", {
       matchId: "match-1",
-      playerACoins: 10,
-      playerBCoins: 5,
-      playerASales: 4,
-      playerBSales: 2
+      playerACoins: 0,
+      playerBCoins: 0,
+      playerASales: 0,
+      playerBSales: 0
     });
 
     await expect(store.leavePenaltyForPlayer("a")).resolves.toMatchObject({ leaveCount: 1, cooldownUntil: null, cleanGamesSinceLeave: 0 });
@@ -502,13 +519,15 @@ describe("ranked matchmaking", () => {
 
     for (let index = 0; index < 4; index += 1) {
       await service.joinQueue("a");
-      await service.joinQueue("b");
+      const matched = await service.joinQueue("b");
+      if (matched.status !== "matched") throw new Error("Expected ranked match.");
+      await recordNoActionReplay(store, matched.match);
       await service.settleMatch("a", {
         matchId: `match-${index + 1}`,
-        playerACoins: 10,
-        playerBCoins: 10,
-        playerASales: 4,
-        playerBSales: 4
+        playerACoins: 0,
+        playerBCoins: 0,
+        playerASales: 0,
+        playerBSales: 0
       });
     }
 
@@ -520,21 +539,15 @@ describe("ranked matchmaking", () => {
       winnerMmr: winnerBefore.mmr,
       loserMmr: loserBefore.mmr,
       winnerRankedGames: winnerBefore.rankedGames,
-      winnerCoins: 10,
-      loserCoins: 5,
-      winnerSales: 4,
-      loserSales: 2
+      winnerCoins: 0,
+      loserCoins: 0,
+      winnerSales: 0,
+      loserSales: 0
     };
     const fullChange = calculateMmrChange(changeParams);
     const reducedChange = calculateMmrChange({ ...changeParams, multiplier: 0.5 });
 
-    const settlement = await service.settleMatch("a", {
-      matchId: "match-5",
-      playerACoins: 10,
-      playerBCoins: 5,
-      playerASales: 4,
-      playerBSales: 2
-    });
+    const settlement = await service.abandonMatch("b", "match-5");
 
     expect(settlement.log.mmrChange).toBe(reducedChange);
     expect(settlement.log.mmrChange).toBeLessThan(fullChange);
