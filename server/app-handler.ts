@@ -1,11 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "mariadb";
-import { createAuthHandler, MariaDbAuthStore, MemoryAuthStore, type AuthStore } from "./auth";
+import { createAuthHandler, MariaDbAuthStore, MemoryAuthStore, sessionTokenHash, type AuthStore, type AuthUser } from "./auth";
 import { createDbPool } from "./db";
 import { DEV_SEED_MATCH_LOGS, DEV_SEED_RATINGS } from "./dev-seed";
 import { createLobbyHandler, type RequestHandler } from "./lobby-handler.mjs";
 import { createRankedHandler } from "./ranked-handler";
 import { MariaDbRankedStore, MemoryRankedStore, RankedService } from "./ranked";
+import type { GameState } from "../src/app/types";
+import { applyRankedReplayEvent } from "../src/game/rankedReplay";
+import { buildInitialState } from "../src/game/session";
+import { clampTurnTime, DEFAULT_TURN_TIME_SECONDS } from "../src/game/sessionConfig";
 
 export interface AppHandlerOptions {
   env?: Partial<Record<string, string | undefined>>;
@@ -32,6 +36,38 @@ function isRankedRoute(request: IncomingMessage) {
   return parts[0] === "api" && parts[1] === "ranked";
 }
 
+function cookieValue(request: IncomingMessage, name: string): string | null {
+  const header = request.headers.cookie;
+  if (!header) {
+    return null;
+  }
+  return (
+    header
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${name}=`))
+      ?.slice(name.length + 1) ?? null
+  );
+}
+
+async function currentUser(request: IncomingMessage, authStore: AuthStore): Promise<AuthUser | null> {
+  const token = cookieValue(request, "tm_session");
+  return token ? authStore.findUserBySessionHash(sessionTokenHash(token), new Date()) : null;
+}
+
+function createServerLobbyState(body: Record<string, unknown> = {}): GameState {
+  const payload = body.payload && typeof body.payload === "object" ? (body.payload as Record<string, unknown>) : {};
+  const turnTimeSeconds = clampTurnTime(Number(body.turnTimeSeconds ?? payload.turnTimeSeconds ?? DEFAULT_TURN_TIME_SECONDS));
+  return {
+    ...buildInitialState(true, turnTimeSeconds),
+    phase: "planning"
+  };
+}
+
+function applyServerLobbyEvent(state: GameState, event: { actorId: string; eventType: string; payload: unknown }): GameState {
+  return applyRankedReplayEvent(state, event, { playerAId: "A", playerBId: "B" });
+}
+
 export function createAppHandler(options: AppHandlerOptions = {}): RequestHandler {
   const env = options.env ?? process.env;
   const useMemoryStore = env.DEV_MEMORY_STORE === "true";
@@ -55,7 +91,14 @@ export function createAppHandler(options: AppHandlerOptions = {}): RequestHandle
     createLobbyHandler({
       env,
       distDir: options.distDir,
-      publicPort: options.publicPort
+      publicPort: options.publicPort,
+      requireAuth: true,
+      authenticateRequest: async (request: IncomingMessage) => {
+        const user = await currentUser(request, authStore);
+        return user && !user.deactivatedAt ? { id: user.id } : null;
+      },
+      initialStateFactory: createServerLobbyState,
+      applyEvent: applyServerLobbyEvent
     });
 
   return async function appHandler(request: IncomingMessage, response: ServerResponse) {

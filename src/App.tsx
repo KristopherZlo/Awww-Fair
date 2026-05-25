@@ -48,7 +48,8 @@ import {
   clampTurnTime
 } from "./app/gameConfig";
 import { localHintMove, localHintValue } from "./app/localHints";
-import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse } from "./app/lobbyClient";
+import { apiHref, apiPath } from "./app/apiPath";
+import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse, sendLobbyEvent } from "./app/lobbyClient";
 import { cancelProfileDeletion, deactivateProfile, devLogin, loadCurrentUser, logout, updateProfile, type AuthUser } from "./app/authClient";
 import {
   abandonRankedMatch,
@@ -97,6 +98,7 @@ import type {
   CutsceneState,
   GameState,
   InitialStateOptions,
+  LobbyResponse,
   LobbySession,
   MenuView,
   MusicStatus,
@@ -721,6 +723,7 @@ export default function App() {
   const salePanelId = useId();
   const rankedSessionRef = useRef<RankedSession | null>(null);
   const pendingRankedActionKeysRef = useRef<Set<string>>(new Set());
+  const pendingLobbyActionKeysRef = useRef<Set<string>>(new Set());
   const pendingRankedMatchIdRef = useRef<string | null>(null);
   const matchFoundTimerRef = useRef<number | null>(null);
 
@@ -1800,7 +1803,7 @@ export default function App() {
 
   function sendRankedDisconnect(session: RankedSession, keepalive = false) {
     if (keepalive) {
-      void fetch("/api/ranked/disconnect", {
+      void fetch(apiPath("ranked/disconnect"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ matchId: session.matchId }),
@@ -1898,9 +1901,6 @@ export default function App() {
   function patchState(recipe: (draft: GameState) => GameState, tone?: SoundEffectId | ((current: GameState, next: GameState) => SoundEffectId | undefined)) {
     setState((current) => {
       const next = recipe(current);
-      if (next !== current) {
-        publishLobbyState(next);
-      }
       const effect = typeof tone === "function" ? tone(current, next) : tone;
       playStateTransitionSounds(current, next, effect);
       stateRef.current = next;
@@ -2165,6 +2165,54 @@ export default function App() {
       });
   }
 
+  function applyLobbyServerPayload(payload: LobbyResponse<GameState>) {
+    const remoteState = normalizeSavedGameState(payload.state);
+    setLobby((current) =>
+      current && current.code === payload.code
+        ? {
+            ...current,
+            version: payload.version,
+            seats: payload.seats
+          }
+        : current
+    );
+    applyingRemoteRef.current = true;
+    setState((current) => {
+      playStateTransitionSounds(current, remoteState);
+      stateRef.current = remoteState;
+      return remoteState;
+    });
+    window.setTimeout(() => {
+      applyingRemoteRef.current = false;
+    }, 0);
+  }
+
+  function recordLobbyActionAt(current: GameState, eventType: string, payload: unknown = {}) {
+    const session = lobbyRef.current;
+    if (!session || applyingRemoteRef.current) {
+      return;
+    }
+    const actionKey = JSON.stringify([session.code, session.version, current.round, current.phase, current.activePlayer, eventType, payload]);
+    if (pendingLobbyActionKeysRef.current.has(actionKey)) {
+      return;
+    }
+    pendingLobbyActionKeysRef.current.add(actionKey);
+    setSyncStatus("syncing");
+    void sendLobbyEvent<GameState>(session, { eventType, payload })
+      .then((payload) => {
+        applyLobbyServerPayload(payload);
+        setSyncStatus("online");
+        setLobbyError("");
+      })
+      .catch((error) => {
+        setLobbyError(error instanceof Error ? error.message : ui(language, "lobbyConnectionLost"));
+        setSyncStatus("offline");
+      })
+      .finally(() => {
+        pendingLobbyActionKeysRef.current.delete(actionKey);
+      });
+  }
+
   function recordRankedAction(eventType: string, payload: unknown = {}) {
     recordRankedActionAt(state, eventType, payload);
   }
@@ -2220,7 +2268,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (state.pause.active || lobby || !state.aiPlayerId || state.activePlayer !== state.aiPlayerId || !["planning", "upgrade"].includes(state.phase)) {
+    if (state.pause.active || lobby || rankedSession || !state.aiPlayerId || state.activePlayer !== state.aiPlayerId || !["planning", "upgrade"].includes(state.phase)) {
       return;
     }
 
@@ -2229,7 +2277,7 @@ export default function App() {
     }, randomAiTurnDelayMs());
 
     return () => window.clearTimeout(timer);
-  }, [state.pause.active, lobby, state.activePlayer, state.aiPlayerId, state.phase, state.round, state.players, state.upgradeQueue, state.upgradeOffer, state.choiceDraft]);
+  }, [state.pause.active, lobby, rankedSession, state.activePlayer, state.aiPlayerId, state.phase, state.round, state.players, state.upgradeQueue, state.upgradeOffer, state.choiceDraft]);
 
   function startGame() {
     musicModeRef.current = "menu";
@@ -2252,7 +2300,8 @@ export default function App() {
   }
 
   function restartGame() {
-    if (!lobbyRef.current) {
+    const session = lobbyRef.current;
+    if (!session) {
       startGame();
       return;
     }
@@ -2260,15 +2309,15 @@ export default function App() {
     musicModeRef.current = "menu";
     setLobbyError("");
     setSyncStatus("syncing");
-    patchState((current) => {
-      const next = buildInitialState(current.sound, current.turnTimeSeconds);
-      const language = audioSettingsRef.current.language;
-      return {
-        ...next,
-        phase: "planning",
-        logs: language === "en" ? [`New online game started in lobby ${lobbyRef.current?.code}.`] : next.logs
-      };
-    }, "customer-arrive");
+    void sendLobbyEvent<GameState>(session, { eventType: "restart", payload: { turnTimeSeconds: stateRef.current.turnTimeSeconds } })
+      .then((payload) => {
+        applyLobbyServerPayload(payload);
+        setSyncStatus("online");
+      })
+      .catch((error) => {
+        setLobbyError(error instanceof Error ? error.message : ui(language, "lobbyConnectionLost"));
+        setSyncStatus("offline");
+      });
   }
 
   function startCampaignLevel(level: CampaignLevel) {
@@ -2503,7 +2552,7 @@ export default function App() {
         await fetch(LOBBY_API, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state: next })
+          body: JSON.stringify({ turnTimeSeconds: customTurnTimeSeconds })
         })
       );
 
@@ -2816,6 +2865,7 @@ export default function App() {
       player.productHand = player.productHand.filter((card) => card.instanceId !== product.instanceId);
       player.productActionUsed = true;
       recordRankedActionAt(current, "place_product", { productInstanceId: product.instanceId, slotIndex });
+      recordLobbyActionAt(current, "place_product", { productInstanceId: product.instanceId, slotIndex });
 
       return {
         ...current,
@@ -2965,6 +3015,7 @@ export default function App() {
       }
 
       recordRankedActionAt(current, "play_influence", { cardId: card.id, target });
+      recordLobbyActionAt(current, "play_influence", { cardId: card.id, target });
       return {
         ...next,
         players,
@@ -2995,6 +3046,7 @@ export default function App() {
         player.influenceHand.push(keep as InfluenceCardType);
       }
       recordRankedActionAt(current, "keep_draft_card", { index });
+      recordLobbyActionAt(current, "keep_draft_card", { index });
 
       return {
         ...current,
@@ -3021,6 +3073,7 @@ export default function App() {
       }
       player.tableBonusUsed = true;
       recordRankedActionAt(current, "use_ad_table", { slotIndex });
+      recordLobbyActionAt(current, "use_ad_table", { slotIndex });
 
       return {
         ...current,
@@ -3039,6 +3092,9 @@ export default function App() {
   function readyPlayer() {
     if (rankedSession && state.phase === "planning" && !state.choiceDraft) {
       recordRankedAction("ready", {});
+    }
+    if (lobbyRef.current && state.phase === "planning" && !state.choiceDraft) {
+      recordLobbyActionAt(state, "ready", {});
     }
     patchState((current) => {
       if (current.choiceDraft) {
@@ -3105,6 +3161,7 @@ export default function App() {
         buyer.shelf.push(null);
       }
       recordRankedActionAt(current, "buy_upgrade", { upgradeId });
+      recordLobbyActionAt(current, "buy_upgrade", { upgradeId });
 
       const queue = current.upgradeQueue.slice(1);
       const next = {
@@ -3133,6 +3190,7 @@ export default function App() {
       const buyerId = current.upgradeQueue[0];
       const queue = current.upgradeQueue.slice(1);
       recordRankedActionAt(current, "skip_upgrade", {});
+      recordLobbyActionAt(current, "skip_upgrade", {});
       const next = {
         ...current,
         upgradeQueue: queue,
@@ -4001,10 +4059,10 @@ export default function App() {
                       <h2>Войдите в аккаунт</h2>
                       <p>Без входа нельзя играть в рейтинг и покупать будущие DLC.</p>
                       <div className="oauth-actions">
-                        <a href="/api/auth/google/start">
+                        <a href={apiHref("auth/google/start")}>
                           <GoogleGIcon /> Google
                         </a>
-                        <a href="/api/auth/discord/start">
+                        <a href={apiHref("auth/discord/start")}>
                           <DiscordIcon /> Discord
                         </a>
                       </div>

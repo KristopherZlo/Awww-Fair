@@ -134,6 +134,30 @@ describe("app handler", () => {
     });
   });
 
+  it("requires an authenticated session for lobby creation through the app handler", async () => {
+    const server = await startTestServer(
+      createAppHandler({
+        env: { AUTH_DEV_LOGIN: "true", DEV_MEMORY_STORE: "true" },
+        tokenFactory: () => "session-token"
+      })
+    );
+    cleanups.push(server.close);
+
+    const rejected = await fetch(`${server.url}/api/lobbies`, { method: "POST", body: "{}" });
+    const auth = await fetch(`${server.url}/api/auth/dev-login`, { method: "POST", body: JSON.stringify({ displayName: "Dev" }) });
+    const cookie = auth.headers.get("set-cookie") ?? "";
+    const created = await fetch(`${server.url}/api/lobbies`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: "{}"
+    });
+
+    expect(rejected.status).toBe(401);
+    expect(await rejected.json()).toEqual({ error: "Login is required." });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({ playerId: "A", token: expect.any(String) });
+  });
+
   it("seeds the player dev account with ranked history and leaderboard data in memory dev mode", async () => {
     const server = await startTestServer(
       createAppHandler({
@@ -150,15 +174,11 @@ describe("app handler", () => {
     const leaderboard = await fetch(`${server.url}/api/ranked/leaderboard?page=1&pageSize=10`);
     const playerSearch = await fetch(`${server.url}/api/ranked/leaderboard?page=1&pageSize=10&search=player`);
 
-    expect(await auth.json()).toEqual({ user: { id: "dev-player", displayName: "player", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } });
-    expect(await rating.json()).toMatchObject({ rating: { playerId: "dev-player", mmr: 1548, rankedGames: 5, wins: 3, losses: 2 } });
-    expect(await history.json()).toMatchObject({
-      history: [
-        { matchId: "seed-player-match-3", playerAId: "dev-player", playerBDisplayName: "Nova", winnerId: "dev-player" },
-        { matchId: "seed-player-match-2", playerAId: "seed-mira", playerADisplayName: "Mira", playerBId: "dev-player", winnerId: "seed-mira" },
-        { matchId: "seed-player-match-1", playerAId: "dev-player", playerBDisplayName: "Riley", winnerId: "dev-player" }
-      ]
-    });
+    const authPayload = await auth.json();
+    expect(authPayload).toMatchObject({ user: { id: expect.any(String), displayName: "player", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } });
+    expect(authPayload.user.id).not.toBe("dev-player");
+    expect(await rating.json()).toMatchObject({ rating: { playerId: authPayload.user.id, mmr: null, rankedGames: 0, wins: 0, losses: 0 } });
+    expect(await history.json()).toEqual({ history: [] });
     expect(await leaderboard.json()).toMatchObject({
       total: 5,
       leaderboard: [

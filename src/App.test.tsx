@@ -2048,16 +2048,16 @@ describe("App layout shell", () => {
         );
       }
 
-      const body = JSON.parse(String(init.body)) as { state: Record<string, unknown> };
-      postedState = body.state;
-      postedTurnTime = body.state.turnTimeSeconds;
+      const body = JSON.parse(String(init.body)) as { turnTimeSeconds: number };
+      postedTurnTime = body.turnTimeSeconds;
+      postedState = { ...buildInitialState(true, body.turnTimeSeconds), phase: "planning" };
       return new Response(
         JSON.stringify({
           code: "ABCD2",
           playerId: "A",
           token: "host-token",
           version: 1,
-          state: body.state,
+          state: postedState,
           seats: { A: true, B: false }
         }),
         { status: 201, headers: { "Content-Type": "application/json" } }
@@ -2694,9 +2694,10 @@ describe("App layout shell", () => {
         if (String(input) === "/api/network") {
           return new Response(JSON.stringify({ urls: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
-        if (init?.method === "PUT") {
+        if (String(input).endsWith("/events") && init?.method === "POST") {
           postedAuth = new Headers(init.headers).get("authorization");
-          postedState = JSON.parse(String(init.body)).state;
+          const body = JSON.parse(String(init.body)) as { eventType: string };
+          postedState = body.eventType === "restart" ? { ...saved.state, phase: "planning" } : saved.state;
           return new Response(
             JSON.stringify({ code: "ABCD2", playerId: "A", token: "host-token", version: 4, state: postedState, seats: { A: true, B: true } }),
             { status: 200, headers: { "Content-Type": "application/json" } }

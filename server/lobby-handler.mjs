@@ -3,11 +3,14 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { advertisedLanUrls } from "./listen-config.mjs";
+import { securityHeaders } from "./security-headers.mjs";
 
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_MAX_ROOMS = 100;
 const DEFAULT_ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_SEAT_TIMEOUT_MS = 7000;
+const DEFAULT_JOIN_ATTEMPT_WINDOW_MS = 60 * 1000;
+const DEFAULT_MAX_JOIN_ATTEMPTS = 20;
 const ROOM_SEATS = ["A", "B"];
 
 class HttpError extends Error {
@@ -53,6 +56,7 @@ function corsForRequest(request, env) {
 function json(response, request, env, status, body) {
   const cors = corsForRequest(request, env);
   response.writeHead(status, {
+    ...securityHeaders(),
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -73,6 +77,10 @@ function roomView(room, seat) {
       B: Boolean(room.seats.B)
     }
   };
+}
+
+function directStateUpdatesEnabled(env) {
+  return env.LOBBY_TRUST_CLIENT_STATE === "true";
 }
 
 function touchSeat(room, seat, now) {
@@ -121,8 +129,8 @@ function defaultTokenFactory() {
 function defaultCodeFactory() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
-  for (let index = 0; index < 5; index += 1) {
-    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  for (let index = 0; index < 8; index += 1) {
+    code += alphabet[crypto.randomInt(alphabet.length)];
   }
   return code;
 }
@@ -207,20 +215,20 @@ async function serveStatic(request, response, distDir) {
     const resolved = resolveStaticPath(distDir, requestUrl.pathname);
     const info = await stat(resolved);
     const filePath = info.isDirectory() ? path.join(resolved, "index.html") : resolved;
-    response.writeHead(200, { "Content-Type": staticContentType(filePath) });
+    response.writeHead(200, { ...securityHeaders(), "Content-Type": staticContentType(filePath) });
     response.end(await readFile(filePath));
   } catch (error) {
     if (error instanceof HttpError) {
-      response.writeHead(error.status);
+      response.writeHead(error.status, securityHeaders());
       response.end(error.message);
       return;
     }
 
     try {
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.writeHead(200, { ...securityHeaders(), "Content-Type": "text/html; charset=utf-8" });
       response.end(await readFile(path.join(distDir, "index.html")));
     } catch {
-      response.writeHead(404);
+      response.writeHead(404, securityHeaders());
       response.end("Run npm run build before serving production assets.");
     }
   }
@@ -236,11 +244,37 @@ function nextRoomCode(rooms, codeFactory) {
   throw new HttpError(503, "Could not allocate a lobby code.");
 }
 
+function failedJoinAttemptKey(request) {
+  return request.socket.remoteAddress ?? "unknown";
+}
+
+function recordFailedJoinAttempt(joinAttempts, request, timestamp, windowMs, maxAttempts) {
+  if (!Number.isFinite(windowMs) || windowMs <= 0 || !Number.isFinite(maxAttempts) || maxAttempts <= 0) {
+    return false;
+  }
+
+  for (const [key, attempt] of joinAttempts) {
+    if (timestamp - attempt.windowStartedAt >= windowMs) {
+      joinAttempts.delete(key);
+    }
+  }
+
+  const key = failedJoinAttemptKey(request);
+  const attempt = joinAttempts.get(key);
+  if (!attempt || timestamp - attempt.windowStartedAt >= windowMs) {
+    joinAttempts.set(key, { count: 1, windowStartedAt: timestamp });
+    return false;
+  }
+
+  attempt.count += 1;
+  return attempt.count > maxAttempts;
+}
+
 function rejectDisallowedCors(request, response, env) {
   if (corsForRequest(request, env).allowed) {
     return false;
   }
-  response.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+  response.writeHead(403, { ...securityHeaders(), "Content-Type": "application/json; charset=utf-8" });
   response.end(JSON.stringify({ error: "Origin is not allowed." }));
   return true;
 }
@@ -253,10 +287,40 @@ export function createLobbyHandler(options = {}) {
   const maxBodyBytes = finiteNumber(options.maxBodyBytes ?? env.LOBBY_MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES);
   const maxRooms = finiteNumber(options.maxRooms ?? env.LOBBY_MAX_ROOMS, DEFAULT_MAX_ROOMS);
   const roomTtlMs = finiteNumber(options.roomTtlMs ?? env.LOBBY_ROOM_TTL_MS, DEFAULT_ROOM_TTL_MS);
+  const joinAttemptWindowMs = finiteNumber(options.joinAttemptWindowMs ?? env.LOBBY_JOIN_ATTEMPT_WINDOW_MS, DEFAULT_JOIN_ATTEMPT_WINDOW_MS);
+  const maxJoinAttempts = finiteNumber(options.maxJoinAttempts ?? env.LOBBY_MAX_JOIN_ATTEMPTS, DEFAULT_MAX_JOIN_ATTEMPTS);
   const rooms = options.rooms ?? new Map();
+  const joinAttempts = options.joinAttempts ?? new Map();
   const now = options.now ?? (() => Date.now());
   const codeFactory = options.codeFactory ?? defaultCodeFactory;
   const tokenFactory = options.tokenFactory ?? defaultTokenFactory;
+  const initialStateFactory = options.initialStateFactory ?? null;
+  const applyEvent = options.applyEvent ?? null;
+  const allowDirectStateUpdates = directStateUpdatesEnabled(env) && !applyEvent;
+  const requireAuth = options.requireAuth ?? false;
+  const authenticateRequest = options.authenticateRequest ?? null;
+
+  async function authenticatedActor(request) {
+    if (!requireAuth) {
+      return null;
+    }
+    const actor = authenticateRequest ? await authenticateRequest(request) : null;
+    if (!actor?.id) {
+      throw new HttpError(401, "Login is required.");
+    }
+    return actor;
+  }
+
+  function findSeatForActor(room, candidateToken, actor) {
+    const seat = findSeat(room, candidateToken);
+    if (!seat) {
+      return null;
+    }
+    if (actor?.id && room.seats[seat]?.userId !== actor.id) {
+      return null;
+    }
+    return seat;
+  }
 
   return async function lobbyHandler(request, response) {
     if (request.method === "OPTIONS") {
@@ -290,6 +354,7 @@ export function createLobbyHandler(options = {}) {
 
     try {
       cleanupExpiredRooms(rooms, now(), roomTtlMs);
+      const actor = await authenticatedActor(request);
 
       if (request.method === "POST" && parts.length === 2) {
         if (rooms.size >= maxRooms) {
@@ -297,8 +362,13 @@ export function createLobbyHandler(options = {}) {
         }
 
         const body = await readBody(request, maxBodyBytes);
-        if (!body.state) {
-          throw new HttpError(400, "Initial game state is required.");
+        const initialState = initialStateFactory
+          ? initialStateFactory(body)
+          : allowDirectStateUpdates
+            ? body.state
+            : null;
+        if (!initialState) {
+          throw new HttpError(503, "Server lobby rules are not configured.");
         }
 
         const code = nextRoomCode(rooms, codeFactory);
@@ -306,9 +376,9 @@ export function createLobbyHandler(options = {}) {
         const room = {
           code,
           version: 1,
-          state: body.state,
+          state: initialState,
           seats: {
-            A: { token: tokenFactory(), joinedAt: timestamp, lastSeenAt: timestamp },
+            A: { token: tokenFactory(), joinedAt: timestamp, lastSeenAt: timestamp, userId: actor?.id ?? null },
             B: null
           },
           updatedAt: timestamp
@@ -321,6 +391,9 @@ export function createLobbyHandler(options = {}) {
       const code = parts[2]?.toUpperCase();
       const room = code ? rooms.get(code) : null;
       if (!room) {
+        if (request.method === "POST" && parts[3] === "join" && recordFailedJoinAttempt(joinAttempts, request, now(), joinAttemptWindowMs, maxJoinAttempts)) {
+          throw new HttpError(429, "Too many lobby join attempts.");
+        }
         throw new HttpError(404, "Lobby not found.");
       }
       expireInactiveSeats(room, now(), seatTimeoutMs);
@@ -331,7 +404,7 @@ export function createLobbyHandler(options = {}) {
           throw new HttpError(409, "Lobby already has two players.");
         }
         const timestamp = now();
-        room.seats[openSeat] = { token: tokenFactory(), joinedAt: timestamp, lastSeenAt: timestamp };
+        room.seats[openSeat] = { token: tokenFactory(), joinedAt: timestamp, lastSeenAt: timestamp, userId: actor?.id ?? null };
         room.version += 1;
         room.updatedAt = timestamp;
         json(response, request, env, 200, roomView(room, openSeat));
@@ -339,7 +412,7 @@ export function createLobbyHandler(options = {}) {
       }
 
       if (request.method === "GET" && parts.length === 3) {
-        const seat = findSeat(room, tokenFromAuthorization(request) ?? requestUrl.searchParams.get("token"));
+        const seat = findSeatForActor(room, tokenFromAuthorization(request) ?? requestUrl.searchParams.get("token"), actor);
         if (!seat) {
           throw new HttpError(401, "Invalid lobby token.");
         }
@@ -350,7 +423,7 @@ export function createLobbyHandler(options = {}) {
 
       if (request.method === "POST" && parts[3] === "leave") {
         const body = await readBody(request, maxBodyBytes);
-        const seat = findSeat(room, tokenFromAuthorization(request) ?? body.token);
+        const seat = findSeatForActor(room, tokenFromAuthorization(request) ?? body.token, actor);
         if (!seat || seat !== body.playerId) {
           throw new HttpError(401, "Invalid lobby token.");
         }
@@ -361,9 +434,45 @@ export function createLobbyHandler(options = {}) {
         return;
       }
 
-      if (request.method === "PUT" && parts[3] === "state") {
+      if (request.method === "POST" && parts[3] === "events") {
+        if (!applyEvent) {
+          throw new HttpError(503, "Server lobby rules are not configured.");
+        }
         const body = await readBody(request, maxBodyBytes);
-        const seat = findSeat(room, tokenFromAuthorization(request) ?? body.token);
+        const seat = findSeatForActor(room, tokenFromAuthorization(request) ?? body.token, actor);
+        if (!seat || seat !== body.playerId) {
+          throw new HttpError(401, "Invalid lobby token.");
+        }
+        if (typeof body.eventType !== "string" || !body.eventType) {
+          throw new HttpError(400, "Lobby event type is required.");
+        }
+        let nextState;
+        try {
+          nextState =
+            body.eventType === "restart" && initialStateFactory
+              ? initialStateFactory(body)
+              : applyEvent(room.state, {
+                  actorId: seat,
+                  eventType: body.eventType,
+                  payload: body.payload ?? {}
+                });
+        } catch {
+          throw new HttpError(409, "Invalid lobby event.");
+        }
+        touchSeat(room, seat, now());
+        room.state = nextState;
+        room.version += 1;
+        room.updatedAt = now();
+        json(response, request, env, 200, roomView(room, seat));
+        return;
+      }
+
+      if (request.method === "PUT" && parts[3] === "state") {
+        if (!allowDirectStateUpdates) {
+          throw new HttpError(403, "Direct lobby state updates are disabled.");
+        }
+        const body = await readBody(request, maxBodyBytes);
+        const seat = findSeatForActor(room, tokenFromAuthorization(request) ?? body.token, actor);
         if (!seat || seat !== body.playerId) {
           throw new HttpError(401, "Invalid lobby token.");
         }
