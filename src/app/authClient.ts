@@ -1,4 +1,5 @@
 import { apiErrorMessage } from "./apiErrors";
+import { apiPath, normalizeApiAssetUrl } from "./apiPath";
 
 export interface AuthUser {
   id: string;
@@ -14,17 +15,21 @@ async function parseAuthResponse(response: Response): Promise<{ user: AuthUser |
   if (!response.ok) {
     throw new Error(apiErrorMessage(response, payload?.error ?? "Auth request failed."));
   }
-  return { user: payload?.user ?? null };
+  return { user: normalizeAuthUser(payload?.user ?? null) };
+}
+
+function normalizeAuthUser(user: AuthUser | null): AuthUser | null {
+  return user ? { ...user, avatarUrl: normalizeApiAssetUrl(user.avatarUrl) } : null;
 }
 
 export async function loadCurrentUser(): Promise<AuthUser | null> {
-  const payload = await parseAuthResponse(await fetch("/api/auth/me"));
+  const payload = await parseAuthResponse(await fetch(apiPath("auth/me")));
   return payload.user;
 }
 
 export async function devLogin(profile: { displayName: string; email?: string | null; avatarUrl?: string | null }): Promise<AuthUser | null> {
   const payload = await parseAuthResponse(
-    await fetch("/api/auth/dev-login", {
+    await fetch(apiPath("auth/dev-login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(profile)
@@ -39,13 +44,13 @@ export async function updateProfile(profile: { displayName: string; avatar?: Fil
   if (profile.avatar) {
     body.set("avatar", profile.avatar);
   }
-  const payload = await parseAuthResponse(await fetch("/api/auth/profile", { method: "PATCH", body }));
+  const payload = await parseAuthResponse(await fetch(apiPath("auth/profile"), { method: "PATCH", body }));
   return payload.user;
 }
 
 export async function deactivateProfile(confirmation: string): Promise<AuthUser | null> {
   const payload = await parseAuthResponse(
-    await fetch("/api/auth/deactivate", {
+    await fetch(apiPath("auth/deactivate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmation })
@@ -55,12 +60,12 @@ export async function deactivateProfile(confirmation: string): Promise<AuthUser 
 }
 
 export async function cancelProfileDeletion(): Promise<AuthUser | null> {
-  const payload = await parseAuthResponse(await fetch("/api/auth/cancel-deletion", { method: "POST" }));
+  const payload = await parseAuthResponse(await fetch(apiPath("auth/cancel-deletion"), { method: "POST" }));
   return payload.user;
 }
 
 export async function logout(): Promise<void> {
-  const response = await fetch("/api/auth/logout", { method: "POST" });
+  const response = await fetch(apiPath("auth/logout"), { method: "POST" });
   if (!response.ok) {
     throw new Error("Logout failed.");
   }

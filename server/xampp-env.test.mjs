@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEnvValues, applyXamppDefaults, parseEnvFile } from "./xampp-env.mjs";
+import { applyEnvValues, applyXamppDefaults, assertXamppRuntimeSafe, parseEnvFile } from "./xampp-env.mjs";
 
 describe("XAMPP environment helpers", () => {
   it("parses env files with comments, whitespace, and quoted values", () => {
@@ -39,7 +39,7 @@ describe("XAMPP environment helpers", () => {
     applyXamppDefaults(env);
 
     expect(env).toMatchObject({
-      AUTH_DEV_LOGIN: "true",
+      AUTH_DEV_LOGIN: "false",
       DEV_MEMORY_STORE: "false",
       HOST: "127.0.0.1",
       MARIADB_DATABASE: "trend_market",
@@ -51,5 +51,23 @@ describe("XAMPP environment helpers", () => {
       PUBLIC_PATH: "trendmarket",
       PUBLIC_PORT: "80"
     });
+  });
+
+  it("accepts XAMPP runtime defaults as safe", () => {
+    const env = {};
+
+    applyXamppDefaults(env);
+
+    expect(() => assertXamppRuntimeSafe(env)).not.toThrow();
+  });
+
+  it("fails closed when dangerous dev runtime flags are enabled for XAMPP", () => {
+    for (const flag of ["AUTH_DEV_LOGIN", "DEV_MEMORY_STORE", "LOBBY_TRUST_CLIENT_STATE"]) {
+      const env = {};
+      applyXamppDefaults(env);
+      env[flag] = "true";
+
+      expect(() => assertXamppRuntimeSafe(env)).toThrow(`${flag}=true`);
+    }
   });
 });

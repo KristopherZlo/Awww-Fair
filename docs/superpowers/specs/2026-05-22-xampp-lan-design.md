@@ -6,7 +6,7 @@ Run Trend Market from XAMPP so other devices on the local network can open the f
 
 ## Approach
 
-Apache is the LAN-facing server on port 80. It serves the built Vite app from `dist` at `/trendmarket/` and reverse-proxies `/api` to the local Node server on `127.0.0.1:5176`.
+Apache is the LAN-facing server on port 80. It serves the built Vite app from `dist` at `/trendmarket/` and reverse-proxies `/trendmarket/api` and `/api` to the local Node server on `127.0.0.1:5176`.
 
 The Node server stays bound to localhost because Apache is the public LAN entry point. It uses XAMPP MariaDB defaults unless `.env.xampp` overrides them.
 
@@ -22,8 +22,8 @@ The Node server stays bound to localhost because Apache is the public LAN entry 
 
 1. Browser opens `http://<LAN-IP>/trendmarket/`.
 2. Apache serves files from `E:/xampp/htdocs/trendmarket/dist`.
-3. Browser calls `/api/...` on the same host.
-4. Apache proxies `/api/...` to `http://127.0.0.1:5176/api/...`.
+3. Browser calls `/trendmarket/api/...` on the same host when opened from `/trendmarket/`.
+4. Apache proxies `/trendmarket/api/...` to `http://127.0.0.1:5176/api/...`.
 5. Node reads and writes MariaDB through `127.0.0.1:3306`.
 
 ## Error Handling

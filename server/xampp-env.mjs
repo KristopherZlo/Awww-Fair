@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export const XAMPP_DEFAULT_ENV = {
-  AUTH_DEV_LOGIN: "true",
+  AUTH_DEV_LOGIN: "false",
   DEV_MEMORY_STORE: "false",
   HOST: "127.0.0.1",
   MARIADB_DATABASE: "trend_market",
@@ -14,6 +14,8 @@ export const XAMPP_DEFAULT_ENV = {
   PUBLIC_PATH: "trendmarket",
   PUBLIC_PORT: "80"
 };
+
+const XAMPP_FORBIDDEN_RUNTIME_FLAGS = ["AUTH_DEV_LOGIN", "DEV_MEMORY_STORE", "LOBBY_TRUST_CLIENT_STATE"];
 
 export function parseEnvFile(content) {
   const values = {};
@@ -54,6 +56,14 @@ export function applyEnvValues(env, values) {
 
 export function applyXamppDefaults(env = process.env) {
   return applyEnvValues(env, XAMPP_DEFAULT_ENV);
+}
+
+export function assertXamppRuntimeSafe(env = process.env) {
+  const enabledFlags = XAMPP_FORBIDDEN_RUNTIME_FLAGS.filter((flag) => String(env[flag] ?? "").trim().toLowerCase() === "true");
+  if (enabledFlags.length) {
+    throw new Error(`Unsafe XAMPP runtime configuration: ${enabledFlags.map((flag) => `${flag}=true`).join(", ")}.`);
+  }
+  return env;
 }
 
 export async function loadXamppEnvFile(filePath = path.resolve(".env.xampp"), env = process.env) {

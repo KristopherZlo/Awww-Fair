@@ -1,5 +1,6 @@
 import type { GameState } from "./types";
 import { apiErrorMessage } from "./apiErrors";
+import { apiPath, normalizeApiAssetUrl } from "./apiPath";
 
 export interface LeaderboardEntry {
   playerId: string;
@@ -131,7 +132,7 @@ async function parseRankedResponse<T>(response: Response): Promise<T> {
 
 async function postRankedJson<T>(path: string, body: unknown): Promise<T> {
   return parseRankedResponse<T>(
-    await fetch(path, {
+    await fetch(apiPath(path), {
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
       method: "POST"
@@ -145,54 +146,58 @@ export async function loadLeaderboard(query: LeaderboardQuery = {}): Promise<Lea
   if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
   if (query.search) params.set("search", query.search);
   const suffix = params.toString();
-  return parseRankedResponse<LeaderboardResult>(await fetch(`/api/ranked/leaderboard${suffix ? `?${suffix}` : ""}`));
+  const result = await parseRankedResponse<LeaderboardResult>(await fetch(`${apiPath("ranked/leaderboard")}${suffix ? `?${suffix}` : ""}`));
+  return {
+    ...result,
+    leaderboard: result.leaderboard.map((entry) => ({ ...entry, avatarUrl: normalizeApiAssetUrl(entry.avatarUrl) }))
+  };
 }
 
 export async function loadMyRating(): Promise<PlayerRating> {
-  const payload = await parseRankedResponse<{ rating: PlayerRating }>(await fetch("/api/ranked/rating"));
+  const payload = await parseRankedResponse<{ rating: PlayerRating }>(await fetch(apiPath("ranked/rating")));
   return payload.rating;
 }
 
 export async function loadMatchHistory(limit = 20): Promise<RankedMatchHistoryEntry[]> {
   const query = new URLSearchParams({ limit: String(limit) });
-  const payload = await parseRankedResponse<{ history: RankedMatchHistoryEntry[] }>(await fetch(`/api/ranked/history?${query}`));
+  const payload = await parseRankedResponse<{ history: RankedMatchHistoryEntry[] }>(await fetch(`${apiPath("ranked/history")}?${query}`));
   return payload.history;
 }
 
 export async function joinRankedQueue(): Promise<RankedQueueJoinResult> {
-  return parseRankedResponse(await fetch("/api/ranked/queue", { method: "POST" }));
+  return parseRankedResponse(await fetch(apiPath("ranked/queue"), { method: "POST" }));
 }
 
 export async function loadRankedStatus(): Promise<RankedQueueStatus> {
-  return parseRankedResponse(await fetch("/api/ranked/status"));
+  return parseRankedResponse(await fetch(apiPath("ranked/status")));
 }
 
 export async function cancelRankedQueue(): Promise<{ status: "idle" }> {
-  return parseRankedResponse(await fetch("/api/ranked/queue", { method: "DELETE" }));
+  return parseRankedResponse(await fetch(apiPath("ranked/queue"), { method: "DELETE" }));
 }
 
 export async function recordRankedEvent(input: RankedEventInput): Promise<{ event: unknown }> {
-  return postRankedJson("/api/ranked/events", input);
+  return postRankedJson("ranked/events", input);
 }
 
 export async function loadRankedEvents(matchId: string, afterSequence = 0): Promise<RankedMatchEvent[]> {
   const query = new URLSearchParams({ matchId, after: String(afterSequence) });
-  const payload = await parseRankedResponse<{ events: RankedMatchEvent[] }>(await fetch(`/api/ranked/events?${query}`));
+  const payload = await parseRankedResponse<{ events: RankedMatchEvent[] }>(await fetch(`${apiPath("ranked/events")}?${query}`));
   return payload.events;
 }
 
 export async function settleRankedMatch(input: RankedSettleInput): Promise<{ log: RankedMatchHistoryEntry }> {
-  return postRankedJson("/api/ranked/settle", input);
+  return postRankedJson("ranked/settle", input);
 }
 
 export async function disconnectRankedMatch(matchId: string): Promise<{ status: "reconnect_window"; reconnectUntil: number }> {
-  return postRankedJson("/api/ranked/disconnect", { matchId });
+  return postRankedJson("ranked/disconnect", { matchId });
 }
 
 export async function abandonRankedMatch(matchId: string): Promise<{ log: RankedMatchHistoryEntry }> {
-  return postRankedJson("/api/ranked/abandon", { matchId });
+  return postRankedJson("ranked/abandon", { matchId });
 }
 
 export async function reconnectRankedMatch(matchId: string): Promise<{ status: "matched"; match: RankedMatch }> {
-  return postRankedJson("/api/ranked/reconnect", { matchId });
+  return postRankedJson("ranked/reconnect", { matchId });
 }

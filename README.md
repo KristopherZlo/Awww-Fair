@@ -84,7 +84,9 @@ npm run xampp:migrate
 npm run xampp:api
 ```
 
-Open `http://<LAN-IP>/trendmarket/` from another device. Apache serves the frontend and proxies `/api` and `/trendmarket/api` to the local Node server on `127.0.0.1:5176`. The XAMPP migration command creates the `trend_market` database if it does not exist, then applies the tables.
+Open `http://<LAN-IP>/trendmarket/` from another device. Apache serves the frontend and proxies both `/trendmarket/api` and root `/api` to the local Node server on `127.0.0.1:5176`. The built frontend uses the current public path for API calls, so an app opened from `/trendmarket/` calls `/trendmarket/api/...`. The XAMPP migration command creates the `trend_market` database if it does not exist, then applies the tables.
+
+If `/trendmarket/api/...` returns HTTP 503, Apache is running but the Node API is not available. Start `npm run xampp:api` in a separate terminal and keep it open while playing. If the API starts but login still fails, run `npm run xampp:migrate` and confirm XAMPP MySQL/MariaDB is running.
 
 ## Ranked Server Env
 
@@ -93,4 +95,4 @@ Without `MARIADB_*` env vars, `npm run lan` uses in-memory auth and ranked data 
 
 OAuth: `APP_BASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`.
 
-Local test login is enabled by `npm run lan`; set `AUTH_DEV_LOGIN=true` when running the server directly.
+Local test login is disabled by default. Set `AUTH_DEV_LOGIN=true` only for short local-only testing sessions when running the server directly.
