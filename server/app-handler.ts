@@ -24,16 +24,18 @@ export interface AppHandlerOptions {
   publicPort?: number;
 }
 
-function isAuthRoute(request: IncomingMessage) {
+function apiRouteIndex(request: IncomingMessage, namespace: "auth" | "ranked") {
   const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
   const parts = requestUrl.pathname.split("/").filter(Boolean);
-  return parts[0] === "api" && parts[1] === "auth";
+  return parts.findIndex((part, index) => part === "api" && parts[index + 1] === namespace);
+}
+
+function isAuthRoute(request: IncomingMessage) {
+  return apiRouteIndex(request, "auth") >= 0;
 }
 
 function isRankedRoute(request: IncomingMessage) {
-  const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
-  const parts = requestUrl.pathname.split("/").filter(Boolean);
-  return parts[0] === "api" && parts[1] === "ranked";
+  return apiRouteIndex(request, "ranked") >= 0;
 }
 
 function cookieValue(request: IncomingMessage, name: string): string | null {

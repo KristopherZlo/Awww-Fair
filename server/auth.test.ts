@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAuthHandler, MemoryAuthStore, sessionTokenHash, type AuthStore, type AuthUser } from "./auth";
 
@@ -37,11 +38,13 @@ function memoryStore(): AuthStore {
       return userId ? users.get(userId) ?? null : null;
     },
     async createDevUser(profile) {
-      const user = {
+      const user: AuthUser = {
         id: `dev-${profile.displayName.toLowerCase()}`,
         displayName: profile.displayName,
         avatarUrl: profile.avatarUrl ?? null,
+        avatarShape: "circle",
         email: profile.email ?? null,
+        twoFactorEnabled: false,
         deactivatedAt: null,
         deleteAfter: null
       };
@@ -49,11 +52,13 @@ function memoryStore(): AuthStore {
       return user;
     },
     async upsertOAuthUser(_provider, profile) {
-      const user = {
+      const user: AuthUser = {
         id: `oauth-${profile.providerUserId}`,
         displayName: profile.displayName,
         avatarUrl: profile.avatarUrl ?? null,
+        avatarShape: "circle",
         email: profile.email ?? null,
+        twoFactorEnabled: false,
         deactivatedAt: null,
         deleteAfter: null
       };
@@ -62,7 +67,12 @@ function memoryStore(): AuthStore {
     },
     async updateProfile(userId, profile) {
       const user = users.get(userId)!;
-      const updated = { ...user, displayName: profile.displayName, avatarUrl: profile.avatarUrl ?? user.avatarUrl };
+      const updated: AuthUser = {
+        ...user,
+        displayName: profile.displayName,
+        avatarShape: profile.avatarShape ?? user.avatarShape,
+        avatarUrl: profile.removeAvatar ? null : profile.avatarUrl ?? user.avatarUrl
+      };
       users.set(userId, updated);
       return updated;
     },
@@ -91,6 +101,33 @@ function memoryStore(): AuthStore {
 }
 
 const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function base32Decode(value: string) {
+  let bits = "";
+  for (const char of value.replace(/=+$/g, "").toUpperCase()) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index < 0) {
+      throw new Error(`Invalid base32 character: ${char}`);
+    }
+    bits += index.toString(2).padStart(5, "0");
+  }
+  const bytes: number[] = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) {
+    bytes.push(Number.parseInt(bits.slice(offset, offset + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function totpCode(secret: string, now: Date) {
+  const counter = Math.floor(now.getTime() / 1000 / 30);
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64BE(BigInt(counter));
+  const hmac = crypto.createHmac("sha1", base32Decode(secret)).update(buffer).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binary = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
+  return String(binary % 1_000_000).padStart(6, "0");
+}
 
 describe("auth handler", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -178,7 +215,9 @@ describe("auth handler", () => {
         id: "dev-player",
         displayName: "Player",
         avatarUrl: null,
+        avatarShape: "circle",
         email: "p@example.test",
+        twoFactorEnabled: false,
         deactivatedAt: null,
         deleteAfter: null
       }
@@ -305,6 +344,58 @@ describe("auth handler", () => {
     expect(avatar.headers.get("x-content-type-options")).toBe("nosniff");
     expect(avatar.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
     expect(new Uint8Array(await avatar.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
+  it("sets up and toggles authenticator app two-factor authentication", async () => {
+    const currentTime = new Date("2026-05-22T10:00:00.000Z");
+    const server = await startTestServer(
+      createAuthHandler({
+        env: { AUTH_DEV_LOGIN: "true" },
+        store: new MemoryAuthStore(),
+        tokenFactory: () => "session-token",
+        now: () => currentTime
+      })
+    );
+    cleanups.push(server.close);
+    const login = await fetch(`${server.url}/api/auth/dev-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Player", email: "p@example.test" })
+    });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const setup = await fetch(`${server.url}/api/auth/two-factor/setup`, { method: "POST", headers: { Cookie: cookie } });
+    const setupPayload = (await setup.json()) as { secret: string; otpauthUri: string; qrCodeSvg: string };
+    expect(setup.status).toBe(200);
+    expect(setupPayload.secret).toMatch(/^[A-Z2-7]{32}$/);
+    expect(setupPayload.otpauthUri).toContain("otpauth://totp/Trend%20Market:Player");
+    expect(setupPayload.qrCodeSvg).toContain("<svg");
+
+    const wrong = await fetch(`${server.url}/api/auth/two-factor/enable`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ code: "000000" })
+    });
+    const enabled = await fetch(`${server.url}/api/auth/two-factor/enable`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ code: totpCode(setupPayload.secret, currentTime) })
+    });
+    const enabledPayload = await enabled.json();
+    const me = await fetch(`${server.url}/api/auth/me`, { headers: { Cookie: cookie } });
+    const disabled = await fetch(`${server.url}/api/auth/two-factor/disable`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ code: totpCode(setupPayload.secret, currentTime) })
+    });
+
+    expect(wrong.status).toBe(400);
+    expect(await wrong.json()).toEqual({ error: "Invalid authenticator code." });
+    expect(enabled.status).toBe(200);
+    expect(enabledPayload.user).toMatchObject({ displayName: "Player", twoFactorEnabled: true });
+    expect(enabledPayload.recoveryCodes).toHaveLength(8);
+    expect((await me.json()).user).toMatchObject({ twoFactorEnabled: true });
+    expect((await disabled.json()).user).toMatchObject({ twoFactorEnabled: false });
   });
 
   it("rejects unsupported avatar uploads", async () => {

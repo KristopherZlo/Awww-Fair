@@ -3,6 +3,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { Pool } from "mariadb";
+import QRCode from "qrcode";
 import { publicPath } from "./listen-config.mjs";
 import { securityHeaders } from "./security-headers.mjs";
 
@@ -14,6 +15,10 @@ const PROFILE_DELETE_CONFIRMATION = "УДАЛИТЬ ПРОФИЛЬ";
 const PROFILE_DELETE_DELAY_MS = 14 * 24 * 60 * 60 * 1000;
 const AVATAR_ROUTE_PREFIX = "/api/auth/avatar/";
 const AVATAR_MAX_BYTES = 512 * 1024;
+const TOTP_ISSUER = "Trend Market";
+const TOTP_STEP_SECONDS = 30;
+const TOTP_WINDOW_STEPS = 1;
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const JPEG_SIGNATURE = Buffer.from([255, 216, 255]);
 const RIFF_SIGNATURE = Buffer.from("RIFF", "ascii");
@@ -36,11 +41,22 @@ const AVATAR_TYPES = new Map<string, AvatarType>([
   ]
 ]);
 
+type AvatarShape = "circle" | "rounded";
+
+type TwoFactorState = {
+  enabled: boolean;
+  secret: string | null;
+  pendingSecret: string | null;
+  recoveryCodeHashes: string[];
+};
+
 export interface AuthUser {
   id: string;
   displayName: string;
   avatarUrl: string | null;
+  avatarShape: AvatarShape;
   email: string | null;
+  twoFactorEnabled: boolean;
   deactivatedAt: string | null;
   deleteAfter: string | null;
 }
@@ -56,12 +72,19 @@ export interface AuthStore {
   findUserBySessionHash(tokenHash: string, now: Date): Promise<AuthUser | null>;
   createDevUser(profile: { displayName: string; avatarUrl?: string | null; email?: string | null }): Promise<AuthUser>;
   upsertOAuthUser(provider: "google" | "discord", profile: OAuthProfile): Promise<AuthUser>;
-  updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null }): Promise<AuthUser>;
+  updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null; avatarShape?: AvatarShape; removeAvatar?: boolean }): Promise<AuthUser>;
   deactivateUser(userId: string, deactivatedAt: Date, deleteAfter: Date): Promise<AuthUser>;
   cancelDeletion(userId: string): Promise<AuthUser>;
   purgeExpiredDeactivatedUsers(now: Date): Promise<string[]>;
   createSession(tokenHash: string, userId: string, expiresAt: Date): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
+}
+
+export interface TwoFactorAuthStore {
+  findTwoFactorState(userId: string): Promise<TwoFactorState>;
+  setTwoFactorPendingSecret(userId: string, secret: string): Promise<void>;
+  enableTwoFactor(userId: string, secret: string, recoveryCodeHashes: string[]): Promise<AuthUser>;
+  disableTwoFactor(userId: string): Promise<AuthUser>;
 }
 
 export function sessionTokenHash(token: string): string {
@@ -134,6 +157,14 @@ function safeNullableString(value: unknown, maxLength: number) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : null;
 }
 
+function safeAvatarShape(value: unknown): AvatarShape {
+  return value === "rounded" ? "rounded" : "circle";
+}
+
+function booleanValue(value: unknown) {
+  return value === true || value === 1 || value === "1";
+}
+
 function dateString(value: unknown): string | null {
   if (!value) {
     return null;
@@ -147,10 +178,103 @@ function authUserFromRow(row: Record<string, unknown>): AuthUser {
     id: String(row.id),
     displayName: String(row.displayName ?? row.display_name ?? "Player"),
     avatarUrl: safeNullableString(row.avatarUrl ?? row.avatar_url, 512),
+    avatarShape: safeAvatarShape(row.avatarShape ?? row.avatar_shape),
     email: safeNullableString(row.email, 255),
+    twoFactorEnabled: booleanValue(row.twoFactorEnabled ?? row.two_factor_enabled),
     deactivatedAt: dateString(row.deactivatedAt ?? row.deactivated_at),
     deleteAfter: dateString(row.deleteAfter ?? row.delete_after)
   };
+}
+
+function getTwoFactorStore(store: AuthStore & Partial<TwoFactorAuthStore>): TwoFactorAuthStore {
+  if (
+    !store.findTwoFactorState ||
+    !store.setTwoFactorPendingSecret ||
+    !store.enableTwoFactor ||
+    !store.disableTwoFactor
+  ) {
+    throw new AuthHttpError(501, "Two-factor authentication store is unavailable.");
+  }
+  return store as AuthStore & TwoFactorAuthStore;
+}
+
+function generateBase32Secret(bytes = 20) {
+  const data = crypto.randomBytes(bytes);
+  let bits = "";
+  for (const byte of data) {
+    bits += byte.toString(2).padStart(8, "0");
+  }
+  let secret = "";
+  for (let offset = 0; offset < bits.length; offset += 5) {
+    const chunk = bits.slice(offset, offset + 5).padEnd(5, "0");
+    secret += BASE32_ALPHABET[Number.parseInt(chunk, 2)];
+  }
+  return secret;
+}
+
+function base32Decode(value: string) {
+  let bits = "";
+  for (const char of value.replace(/=+$/g, "").toUpperCase()) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index < 0) {
+      throw new AuthHttpError(400, "Invalid authenticator secret.");
+    }
+    bits += index.toString(2).padStart(5, "0");
+  }
+  const bytes: number[] = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) {
+    bytes.push(Number.parseInt(bits.slice(offset, offset + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function totpCode(secret: string, timeStep: number) {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64BE(BigInt(timeStep));
+  const hmac = crypto.createHmac("sha1", base32Decode(secret)).update(buffer).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binary = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
+  return String(binary % 1_000_000).padStart(6, "0");
+}
+
+function isValidTotpCode(secret: string, code: unknown, now: Date) {
+  const normalized = typeof code === "string" ? code.replace(/\s+/g, "") : "";
+  if (!/^\d{6}$/.test(normalized)) {
+    return false;
+  }
+  const currentStep = Math.floor(now.getTime() / 1000 / TOTP_STEP_SECONDS);
+  for (let offset = -TOTP_WINDOW_STEPS; offset <= TOTP_WINDOW_STEPS; offset += 1) {
+    if (totpCode(secret, currentStep + offset) === normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function recoveryCodeHash(code: string) {
+  return crypto.createHash("sha256").update(code.replace(/\s+/g, "").toUpperCase()).digest("hex");
+}
+
+function generateRecoveryCodes() {
+  return Array.from({ length: 8 }, () => `${crypto.randomBytes(3).toString("hex").toUpperCase()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`);
+}
+
+function parseRecoveryCodeHashes(value: unknown): string[] {
+  if (!value) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 type ProfileAvatarUpload = {
@@ -160,6 +284,8 @@ type ProfileAvatarUpload = {
 
 type ProfileUpdatePayload = {
   displayName: string;
+  avatarShape: AvatarShape;
+  removeAvatar: boolean;
   avatar?: ProfileAvatarUpload;
 };
 
@@ -180,7 +306,7 @@ async function readProfileUpdate(request: IncomingMessage): Promise<ProfileUpdat
   }
 
   const body = await readJson(request);
-  return { displayName: safeDisplayName(body.displayName) };
+  return { displayName: safeDisplayName(body.displayName), avatarShape: safeAvatarShape(body.avatarShape), removeAvatar: body.removeAvatar === true };
 }
 
 function parseProfileMultipart(body: Buffer, boundary: string): ProfileUpdatePayload {
@@ -211,7 +337,12 @@ function parseProfileMultipart(body: Buffer, boundary: string): ProfileUpdatePay
       fields.set(name, Buffer.from(content, "latin1").toString("utf8"));
     }
   }
-  return { displayName: safeDisplayName(fields.get("displayName")), avatar };
+  return {
+    displayName: safeDisplayName(fields.get("displayName")),
+    avatarShape: safeAvatarShape(fields.get("avatarShape")),
+    removeAvatar: fields.get("removeAvatar") === "true",
+    avatar
+  };
 }
 
 function avatarFileNameFromUrl(avatarUrl: string) {
@@ -292,7 +423,7 @@ export function createAuthHandler({
   avatarDir = defaultAvatarDir(env)
 }: {
   env?: Partial<Record<string, string | undefined>>;
-  store: AuthStore;
+  store: AuthStore & Partial<TwoFactorAuthStore>;
   now?: () => Date;
   tokenFactory?: () => string;
   oauthStateFactory?: () => string;
@@ -301,7 +432,9 @@ export function createAuthHandler({
 }) {
   return async function authHandler(request: IncomingMessage, response: ServerResponse) {
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
-    const parts = requestUrl.pathname.split("/").filter(Boolean);
+    const rawParts = requestUrl.pathname.split("/").filter(Boolean);
+    const apiIndex = rawParts.findIndex((part, index) => part === "api" && rawParts[index + 1] === "auth");
+    const parts = apiIndex >= 0 ? rawParts.slice(apiIndex) : rawParts;
 
     try {
       const currentTime = now();
@@ -339,6 +472,71 @@ export function createAuthHandler({
         return;
       }
 
+      if (request.method === "POST" && parts[2] === "two-factor" && parts[3] === "setup") {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        if (user.deactivatedAt) {
+          json(response, 403, { error: "Profile is scheduled for deletion." });
+          return;
+        }
+        const secret = generateBase32Secret();
+        await getTwoFactorStore(store).setTwoFactorPendingSecret(user.id, secret);
+        const label = `${encodeURIComponent(TOTP_ISSUER)}:${encodeURIComponent(user.displayName)}`;
+        const params = new URLSearchParams({ secret, issuer: TOTP_ISSUER, algorithm: "SHA1", digits: "6", period: String(TOTP_STEP_SECONDS) });
+        const otpauthUri = `otpauth://totp/${label}?${params}`;
+        const qrCodeSvg = await QRCode.toString(otpauthUri, { type: "svg", margin: 1, width: 180 });
+        json(response, 200, { secret, otpauthUri, qrCodeSvg });
+        return;
+      }
+
+      if (request.method === "POST" && parts[2] === "two-factor" && parts[3] === "enable") {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        const twoFactorStore = getTwoFactorStore(store);
+        const state = await twoFactorStore.findTwoFactorState(user.id);
+        const secret = state.pendingSecret;
+        if (!secret) {
+          throw new AuthHttpError(400, "Start two-factor setup first.");
+        }
+        const body = await readJson(request);
+        if (!isValidTotpCode(secret, body.code, currentTime)) {
+          throw new AuthHttpError(400, "Invalid authenticator code.");
+        }
+        const recoveryCodes = generateRecoveryCodes();
+        const updated = await twoFactorStore.enableTwoFactor(user.id, secret, recoveryCodes.map(recoveryCodeHash));
+        json(response, 200, { user: updated, recoveryCodes });
+        return;
+      }
+
+      if (request.method === "POST" && parts[2] === "two-factor" && parts[3] === "disable") {
+        const token = cookieValue(request, SESSION_COOKIE);
+        const user = token ? await store.findUserBySessionHash(sessionTokenHash(token), currentTime) : null;
+        if (!user) {
+          json(response, 401, { error: "Login is required." });
+          return;
+        }
+        const twoFactorStore = getTwoFactorStore(store);
+        const state = await twoFactorStore.findTwoFactorState(user.id);
+        if (!state.enabled || !state.secret) {
+          json(response, 200, { user });
+          return;
+        }
+        const body = await readJson(request);
+        if (!isValidTotpCode(state.secret, body.code, currentTime)) {
+          throw new AuthHttpError(400, "Invalid authenticator code.");
+        }
+        json(response, 200, { user: await twoFactorStore.disableTwoFactor(user.id) });
+        return;
+      }
+
       if (request.method === "POST" && parts[2] === "dev-login") {
         if (env.AUTH_DEV_LOGIN !== "true") {
           json(response, 404, { error: "Dev login is disabled." });
@@ -367,8 +565,8 @@ export function createAuthHandler({
         const profile = await readProfileUpdate(request);
         const avatarUrl = await saveAvatarUpload(user.id, profile.avatar, avatarDir);
         try {
-          const updated = await store.updateProfile(user.id, { displayName: profile.displayName, avatarUrl });
-          if (avatarUrl && avatarUrl !== user.avatarUrl) {
+          const updated = await store.updateProfile(user.id, { displayName: profile.displayName, avatarUrl, avatarShape: profile.avatarShape, removeAvatar: profile.removeAvatar });
+          if ((avatarUrl || profile.removeAvatar) && avatarUrl !== user.avatarUrl) {
             await deleteUploadedAvatar(user.avatarUrl, avatarDir);
           }
           json(response, 200, { user: updated });
@@ -519,10 +717,11 @@ async function fetchOAuthProfile(
   };
 }
 
-export class MemoryAuthStore implements AuthStore {
+export class MemoryAuthStore implements AuthStore, TwoFactorAuthStore {
   private readonly users = new Map<string, AuthUser>();
   private readonly sessions = new Map<string, { userId: string; expiresAt: Date }>();
   private readonly oauthUsers = new Map<string, string>();
+  private readonly twoFactor = new Map<string, TwoFactorState>();
 
   async findUserBySessionHash(tokenHash: string, now: Date): Promise<AuthUser | null> {
     const session = this.sessions.get(tokenHash);
@@ -541,7 +740,9 @@ export class MemoryAuthStore implements AuthStore {
       id: userId,
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
+      avatarShape: existingUser?.avatarShape ?? "circle",
       email: profile.email ?? null,
+      twoFactorEnabled: existingUser?.twoFactorEnabled ?? false,
       deactivatedAt: existingUser?.deactivatedAt ?? null,
       deleteAfter: existingUser?.deleteAfter ?? null
     };
@@ -557,7 +758,9 @@ export class MemoryAuthStore implements AuthStore {
       id: existingId ?? crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
+      avatarShape: existingUser?.avatarShape ?? "circle",
       email: profile.email ?? null,
+      twoFactorEnabled: existingUser?.twoFactorEnabled ?? false,
       deactivatedAt: existingUser?.deactivatedAt ?? null,
       deleteAfter: existingUser?.deleteAfter ?? null
     };
@@ -566,7 +769,7 @@ export class MemoryAuthStore implements AuthStore {
     return { ...user };
   }
 
-  async updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null }): Promise<AuthUser> {
+  async updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null; avatarShape?: AvatarShape; removeAvatar?: boolean }): Promise<AuthUser> {
     const user = this.users.get(userId);
     if (!user) {
       throw new Error("User not found.");
@@ -574,9 +777,48 @@ export class MemoryAuthStore implements AuthStore {
     const updated = {
       ...user,
       displayName: profile.displayName,
-      avatarUrl: profile.avatarUrl ?? user.avatarUrl
+      avatarUrl: profile.removeAvatar ? null : profile.avatarUrl ?? user.avatarUrl,
+      avatarShape: profile.avatarShape ?? user.avatarShape
     };
     this.users.set(userId, updated);
+    return { ...updated };
+  }
+
+  async findTwoFactorState(userId: string): Promise<TwoFactorState> {
+    const user = this.users.get(userId);
+    const state = this.twoFactor.get(userId);
+    return {
+      enabled: user?.twoFactorEnabled ?? false,
+      secret: state?.secret ?? null,
+      pendingSecret: state?.pendingSecret ?? null,
+      recoveryCodeHashes: [...(state?.recoveryCodeHashes ?? [])]
+    };
+  }
+
+  async setTwoFactorPendingSecret(userId: string, secret: string): Promise<void> {
+    const current = await this.findTwoFactorState(userId);
+    this.twoFactor.set(userId, { ...current, pendingSecret: secret });
+  }
+
+  async enableTwoFactor(userId: string, secret: string, recoveryCodeHashes: string[]): Promise<AuthUser> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    const updated = { ...user, twoFactorEnabled: true };
+    this.users.set(userId, updated);
+    this.twoFactor.set(userId, { enabled: true, secret, pendingSecret: null, recoveryCodeHashes });
+    return { ...updated };
+  }
+
+  async disableTwoFactor(userId: string): Promise<AuthUser> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    const updated = { ...user, twoFactorEnabled: false };
+    this.users.set(userId, updated);
+    this.twoFactor.set(userId, { enabled: false, secret: null, pendingSecret: null, recoveryCodeHashes: [] });
     return { ...updated };
   }
 
@@ -610,9 +852,11 @@ export class MemoryAuthStore implements AuthStore {
         displayName: `Deleted profile ${user.id.slice(0, 8)}`,
         avatarUrl: null,
         email: null,
+        twoFactorEnabled: false,
         deactivatedAt: null,
         deleteAfter: null
       });
+      this.twoFactor.delete(user.id);
     }
     for (const [tokenHash, session] of this.sessions) {
       if (expiredIds.has(session.userId)) {
@@ -636,12 +880,13 @@ export class MemoryAuthStore implements AuthStore {
   }
 }
 
-export class MariaDbAuthStore implements AuthStore {
+export class MariaDbAuthStore implements AuthStore, TwoFactorAuthStore {
   constructor(private readonly pool: Pick<Pool, "query">) {}
 
   async findUserBySessionHash(tokenHash: string, now: Date): Promise<AuthUser | null> {
     const rows = await this.pool.query(
-      `SELECT u.id, u.display_name AS displayName, u.avatar_url AS avatarUrl, u.email,
+      `SELECT u.id, u.display_name AS displayName, u.avatar_url AS avatarUrl, u.avatar_shape AS avatarShape, u.email,
+        u.two_factor_enabled AS twoFactorEnabled,
         u.deactivated_at AS deactivatedAt, u.delete_after AS deleteAfter
        FROM user_sessions s
        JOIN users u ON u.id = s.user_id
@@ -657,7 +902,9 @@ export class MariaDbAuthStore implements AuthStore {
       id: crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
+      avatarShape: "circle",
       email: profile.email ?? null,
+      twoFactorEnabled: false,
       deactivatedAt: null,
       deleteAfter: null
     };
@@ -666,7 +913,8 @@ export class MariaDbAuthStore implements AuthStore {
       [user.id, user.displayName, user.avatarUrl, user.email]
     );
     const rows = await this.pool.query(
-      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
         deactivated_at AS deactivatedAt, delete_after AS deleteAfter
        FROM users WHERE id = ? LIMIT 1`,
       [user.id]
@@ -683,7 +931,9 @@ export class MariaDbAuthStore implements AuthStore {
       id: existing[0]?.userId ?? crypto.randomUUID(),
       displayName: profile.displayName,
       avatarUrl: profile.avatarUrl ?? null,
+      avatarShape: "circle",
       email: profile.email ?? null,
+      twoFactorEnabled: false,
       deactivatedAt: null,
       deleteAfter: null
     };
@@ -700,7 +950,8 @@ export class MariaDbAuthStore implements AuthStore {
       [provider, profile.providerUserId, user.id, user.email, user.displayName, user.avatarUrl]
     );
     const rows = await this.pool.query(
-      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
         deactivated_at AS deactivatedAt, delete_after AS deleteAfter
        FROM users WHERE id = ? LIMIT 1`,
       [user.id]
@@ -708,14 +959,18 @@ export class MariaDbAuthStore implements AuthStore {
     return rows[0] ? authUserFromRow(rows[0]) : user;
   }
 
-  async updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null }): Promise<AuthUser> {
+  async updateProfile(userId: string, profile: { displayName: string; avatarUrl?: string | null; avatarShape?: AvatarShape; removeAvatar?: boolean }): Promise<AuthUser> {
+    const avatarShape = profile.avatarShape ?? null;
     if (profile.avatarUrl) {
-      await this.pool.query("UPDATE users SET display_name = ?, avatar_url = ? WHERE id = ?", [profile.displayName, profile.avatarUrl, userId]);
+      await this.pool.query("UPDATE users SET display_name = ?, avatar_url = ?, avatar_shape = COALESCE(?, avatar_shape) WHERE id = ?", [profile.displayName, profile.avatarUrl, avatarShape, userId]);
+    } else if (profile.removeAvatar) {
+      await this.pool.query("UPDATE users SET display_name = ?, avatar_url = NULL, avatar_shape = COALESCE(?, avatar_shape) WHERE id = ?", [profile.displayName, avatarShape, userId]);
     } else {
-      await this.pool.query("UPDATE users SET display_name = ? WHERE id = ?", [profile.displayName, userId]);
+      await this.pool.query("UPDATE users SET display_name = ?, avatar_shape = COALESCE(?, avatar_shape) WHERE id = ?", [profile.displayName, avatarShape, userId]);
     }
     const rows = await this.pool.query(
-      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
         deactivated_at AS deactivatedAt, delete_after AS deleteAfter
        FROM users WHERE id = ? LIMIT 1`,
       [userId]
@@ -729,7 +984,8 @@ export class MariaDbAuthStore implements AuthStore {
   async deactivateUser(userId: string, deactivatedAt: Date, deleteAfter: Date): Promise<AuthUser> {
     await this.pool.query("UPDATE users SET deactivated_at = ?, delete_after = ? WHERE id = ?", [deactivatedAt, deleteAfter, userId]);
     const rows = await this.pool.query(
-      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
         deactivated_at AS deactivatedAt, delete_after AS deleteAfter
        FROM users WHERE id = ? LIMIT 1`,
       [userId]
@@ -743,7 +999,70 @@ export class MariaDbAuthStore implements AuthStore {
   async cancelDeletion(userId: string): Promise<AuthUser> {
     await this.pool.query("UPDATE users SET deactivated_at = NULL, delete_after = NULL WHERE id = ?", [userId]);
     const rows = await this.pool.query(
-      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, email,
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    if (!rows[0]) {
+      throw new Error("User not found.");
+    }
+    return authUserFromRow(rows[0]);
+  }
+
+  async findTwoFactorState(userId: string): Promise<TwoFactorState> {
+    const rows = await this.pool.query(
+      `SELECT two_factor_enabled AS enabled, two_factor_secret AS secret,
+        two_factor_pending_secret AS pendingSecret, two_factor_recovery_hashes AS recoveryCodeHashes
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    const row = rows[0] as Record<string, unknown> | undefined;
+    return {
+      enabled: booleanValue(row?.enabled),
+      secret: safeNullableString(row?.secret, 64),
+      pendingSecret: safeNullableString(row?.pendingSecret, 64),
+      recoveryCodeHashes: parseRecoveryCodeHashes(row?.recoveryCodeHashes)
+    };
+  }
+
+  async setTwoFactorPendingSecret(userId: string, secret: string): Promise<void> {
+    await this.pool.query("UPDATE users SET two_factor_pending_secret = ? WHERE id = ?", [secret, userId]);
+  }
+
+  async enableTwoFactor(userId: string, secret: string, recoveryCodeHashes: string[]): Promise<AuthUser> {
+    await this.pool.query(
+      `UPDATE users
+       SET two_factor_enabled = TRUE, two_factor_secret = ?, two_factor_pending_secret = NULL,
+         two_factor_recovery_hashes = ?
+       WHERE id = ?`,
+      [secret, JSON.stringify(recoveryCodeHashes), userId]
+    );
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
+        deactivated_at AS deactivatedAt, delete_after AS deleteAfter
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    if (!rows[0]) {
+      throw new Error("User not found.");
+    }
+    return authUserFromRow(rows[0]);
+  }
+
+  async disableTwoFactor(userId: string): Promise<AuthUser> {
+    await this.pool.query(
+      `UPDATE users
+       SET two_factor_enabled = FALSE, two_factor_secret = NULL, two_factor_pending_secret = NULL,
+         two_factor_recovery_hashes = NULL
+       WHERE id = ?`,
+      [userId]
+    );
+    const rows = await this.pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, avatar_shape AS avatarShape, email,
+        two_factor_enabled AS twoFactorEnabled,
         deactivated_at AS deactivatedAt, delete_after AS deleteAfter
        FROM users WHERE id = ? LIMIT 1`,
       [userId]
@@ -770,6 +1089,10 @@ export class MariaDbAuthStore implements AuthStore {
        SET display_name = CONCAT('Deleted profile ', LEFT(id, 8)),
          avatar_url = NULL,
          email = NULL,
+         two_factor_enabled = FALSE,
+         two_factor_secret = NULL,
+         two_factor_pending_secret = NULL,
+         two_factor_recovery_hashes = NULL,
          deactivated_at = NULL,
          delete_after = NULL
        WHERE id IN (${placeholders})`,

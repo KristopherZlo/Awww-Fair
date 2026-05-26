@@ -892,7 +892,7 @@ describe("App layout shell", () => {
     await user.click(screen.getByRole("tab", { name: /Профиль/i }));
 
     expect((await screen.findAllByText(/Player One/i)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/MMR: 1518/i)).toBeInTheDocument();
+    expect(await screen.findByText(/1518 MMR/i)).toBeInTheDocument();
     expect(screen.queryByText(/\+18 MMR/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: /История MMR/i }));
@@ -914,7 +914,9 @@ describe("App layout shell", () => {
     const deleteAfter = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/auth/me") {
-        return Response.json({ user: { id: "p1", displayName: "Player One", avatarUrl: null, email: "player@example.com", deactivatedAt: null, deleteAfter: null } });
+        return Response.json({
+          user: { id: "p1", displayName: "Player One", avatarUrl: null, avatarShape: "circle", email: "player@example.com", twoFactorEnabled: false, deactivatedAt: null, deleteAfter: null }
+        });
       }
       if (url === "/api/ranked/rating") {
         return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
@@ -925,15 +927,22 @@ describe("App layout shell", () => {
       if (url === "/api/auth/profile" && init?.method === "PATCH") {
         const form = init.body as FormData;
         expect(form.get("displayName")).toBe("New Nick");
+        expect(form.get("avatarShape")).toBeNull();
         expect(form.get("avatar")).toBeInstanceOf(File);
-        return Response.json({ user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", email: "player@example.com", deactivatedAt: null, deleteAfter: null } });
+        return Response.json({
+          user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", avatarShape: "circle", email: "player@example.com", twoFactorEnabled: false, deactivatedAt: null, deleteAfter: null }
+        });
       }
       if (url === "/api/auth/deactivate" && init?.method === "POST") {
         expect(init.body).toBe(JSON.stringify({ confirmation: "УДАЛИТЬ ПРОФИЛЬ" }));
-        return Response.json({ user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", email: "player@example.com", deactivatedAt: new Date().toISOString(), deleteAfter } });
+        return Response.json({
+          user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", avatarShape: "circle", email: "player@example.com", twoFactorEnabled: false, deactivatedAt: new Date().toISOString(), deleteAfter }
+        });
       }
       if (url === "/api/auth/cancel-deletion" && init?.method === "POST") {
-        return Response.json({ user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", email: "player@example.com", deactivatedAt: null, deleteAfter: null } });
+        return Response.json({
+          user: { id: "p1", displayName: "New Nick", avatarUrl: "/api/auth/avatar/p1.png", avatarShape: "circle", email: "player@example.com", twoFactorEnabled: false, deactivatedAt: null, deleteAfter: null }
+        });
       }
       if (url === "/api/ranked/status") {
         return Response.json({ status: "idle" });
@@ -945,10 +954,16 @@ describe("App layout shell", () => {
     render(<App />);
 
     await user.click(screen.getByRole("tab", { name: /Профиль/i }));
+    expect(document.querySelector(".profile-sidebar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Круг$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Скругл/i })).not.toBeInTheDocument();
     await user.clear(await screen.findByLabelText(/Ник/i));
     await user.type(screen.getByLabelText(/Ник/i), "New Nick");
-    await user.upload(screen.getByLabelText(/Аватарка/i), new File(["avatar"], "avatar.png", { type: "image/png" }));
-    await user.click(screen.getByRole("button", { name: /Сохранить профиль/i }));
+    expect(screen.queryByRole("dialog", { name: /Кадр аватарки/i })).not.toBeInTheDocument();
+    await user.upload(screen.getByLabelText(/Новая аватарка/i), new File(["avatar"], "avatar.png", { type: "image/png" }));
+    expect(await screen.findByRole("dialog", { name: /Кадр аватарки/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Применить/i }));
+    await user.click(screen.getByRole("button", { name: /Сохранить/i }));
 
     expect(await screen.findByText("Профиль обновлён.")).toBeInTheDocument();
     expect(screen.getAllByText("New Nick").length).toBeGreaterThan(0);
@@ -965,6 +980,46 @@ describe("App layout shell", () => {
 
     expect(await screen.findByText("Удаление профиля отменено.")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Играть/i })).not.toBeDisabled();
+  });
+
+  it("sets up authenticator app two-factor authentication from the profile", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({
+          user: { id: "p1", displayName: "Player One", avatarUrl: null, avatarShape: "circle", email: "player@example.com", twoFactorEnabled: false, deactivatedAt: null, deleteAfter: null }
+        });
+      }
+      if (url === "/api/ranked/rating") {
+        return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+      }
+      if (String(url).startsWith("/api/ranked/history")) {
+        return Response.json({ history: [] });
+      }
+      if (url === "/api/auth/two-factor/setup" && init?.method === "POST") {
+        return Response.json({ secret: "ABCDEFGHIJKLMNOPQRSTUVWX234567", otpauthUri: "otpauth://totp/Trend%20Market:Player%20One", qrCodeSvg: "<svg><path /></svg>" });
+      }
+      if (url === "/api/auth/two-factor/enable" && init?.method === "POST") {
+        expect(init.body).toBe(JSON.stringify({ code: "123456" }));
+        return Response.json({
+          user: { id: "p1", displayName: "Player One", avatarUrl: null, avatarShape: "circle", email: "player@example.com", twoFactorEnabled: true, deactivatedAt: null, deleteAfter: null },
+          recoveryCodes: ["ABCD-EFGH"]
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /Профиль/i }));
+    await user.click(await screen.findByRole("button", { name: /Настроить 2FA/i }));
+    expect(await screen.findByRole("img", { name: /QR-код 2FA/i })).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/Код из приложения/i), "123456");
+    await user.click(screen.getByRole("button", { name: /Включить/i }));
+
+    expect(await screen.findByText("2FA включена.")).toBeInTheDocument();
+    expect(screen.getByText("ABCD-EFGH")).toBeInTheDocument();
   });
 
   it("shows and cancels the current ranked queue state for logged-in players", async () => {

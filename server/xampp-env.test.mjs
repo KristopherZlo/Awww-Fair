@@ -70,4 +70,13 @@ describe("XAMPP environment helpers", () => {
       expect(() => assertXamppRuntimeSafe(env)).toThrow(`${flag}=true`);
     }
   });
+
+  it("allows dangerous XAMPP dev flags only behind the explicit local override", () => {
+    const env = {};
+    applyXamppDefaults(env);
+    env.AUTH_DEV_LOGIN = "true";
+    env.XAMPP_ALLOW_UNSAFE_DEV_FLAGS = "true";
+
+    expect(() => assertXamppRuntimeSafe(env)).not.toThrow();
+  });
 });

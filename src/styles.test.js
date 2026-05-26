@@ -139,7 +139,14 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.menu-utility-actions\s*\{[\s\S]*display:\s*flex;/);
     expect(css).toMatch(/\.match-history\s*\{[\s\S]*align-content:\s*start;/);
     expect(css).toMatch(/\.match-history h2\s*\{[\s\S]*font-size:\s*1rem;/);
-    expect(css).toMatch(/\.profile-panel\.is-signed-in\s*\{[\s\S]*grid-template-columns:\s*minmax\(240px,\s*0\.75fr\)\s+minmax\(0,\s*1\.25fr\);/);
+    expect(css).toMatch(/\.profile-panel\.is-signed-in\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/\.profile-account-header\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(280px,\s*0\.78fr\)\s+auto;/);
+    expect(css).toMatch(/\.profile-main\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(300px,\s*0\.74fr\);/);
+    expect(css).toMatch(/\.profile-settings-grid\s*\{[\s\S]*grid-template-columns:\s*minmax\(148px,\s*0\.42fr\)\s+minmax\(0,\s*1fr\);/);
+    expect(css).not.toMatch(/\.profile-avatar-card\s*\{/);
+    expect(css).toMatch(/\.avatar-crop-backdrop\s*\{[\s\S]*position:\s*fixed;/);
+    expect(css).toMatch(/\.avatar-crop-actions button,\s*\.avatar-crop-actions \.profile-upload-button\s*\{[\s\S]*background:\s*rgba\(255,\s*250,\s*240,\s*0\.08\);[\s\S]*color:\s*#f8ead2;/);
+    expect(css).toMatch(/\.avatar-crop-actions \.primary-action\s*\{[\s\S]*background:\s*#f7d99b;[\s\S]*color:\s*#20140c;/);
   });
 
   it("lets the story level road use the full available play panel height", () => {

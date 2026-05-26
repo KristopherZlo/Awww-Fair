@@ -5,7 +5,16 @@ describe("auth client", () => {
   it("loads the current user from the auth API", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ user: { id: "u1", displayName: "User", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } })));
 
-    await expect(loadCurrentUser()).resolves.toEqual({ id: "u1", displayName: "User", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null });
+    await expect(loadCurrentUser()).resolves.toEqual({
+      id: "u1",
+      displayName: "User",
+      avatarUrl: null,
+      avatarShape: "circle",
+      email: null,
+      twoFactorEnabled: false,
+      deactivatedAt: null,
+      deleteAfter: null
+    });
   });
 
   it("posts dev login details and returns the logged-in user", async () => {
@@ -15,7 +24,9 @@ describe("auth client", () => {
       id: "u2",
       displayName: "Dev",
       avatarUrl: null,
+      avatarShape: "circle",
       email: "d@example.test",
+      twoFactorEnabled: false,
       deactivatedAt: null,
       deleteAfter: null
     });
@@ -52,6 +63,7 @@ describe("auth client", () => {
     });
     const form = fetchMock.mock.calls[0][1].body as FormData;
     expect(form.get("displayName")).toBe("New Nick");
+    expect(form.get("avatarShape")).toBeNull();
     expect(form.get("avatar")).toBe(avatar);
   });
 

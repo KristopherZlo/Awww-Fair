@@ -59,6 +59,10 @@ export function applyXamppDefaults(env = process.env) {
 }
 
 export function assertXamppRuntimeSafe(env = process.env) {
+  if (String(env.XAMPP_ALLOW_UNSAFE_DEV_FLAGS ?? "").trim().toLowerCase() === "true") {
+    return env;
+  }
+
   const enabledFlags = XAMPP_FORBIDDEN_RUNTIME_FLAGS.filter((flag) => String(env[flag] ?? "").trim().toLowerCase() === "true");
   if (enabledFlags.length) {
     throw new Error(`Unsafe XAMPP runtime configuration: ${enabledFlags.map((flag) => `${flag}=true`).join(", ")}.`);

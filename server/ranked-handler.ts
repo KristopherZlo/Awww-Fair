@@ -98,7 +98,9 @@ export function createRankedHandler({
 }) {
   return async function rankedHandler(request: IncomingMessage, response: ServerResponse) {
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
-    const parts = requestUrl.pathname.split("/").filter(Boolean);
+    const rawParts = requestUrl.pathname.split("/").filter(Boolean);
+    const apiIndex = rawParts.findIndex((part, index) => part === "api" && rawParts[index + 1] === "ranked");
+    const parts = apiIndex >= 0 ? rawParts.slice(apiIndex) : rawParts;
     if (request.method === "GET" && parts[2] === "leaderboard") {
       json(response, 200, await service.leaderboard({
         page: Number(requestUrl.searchParams.get("page") ?? 1),

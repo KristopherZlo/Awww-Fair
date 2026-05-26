@@ -332,7 +332,9 @@ export function createLobbyHandler(options = {}) {
     }
 
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
-    const parts = requestUrl.pathname.split("/").filter(Boolean);
+    const rawParts = requestUrl.pathname.split("/").filter(Boolean);
+    const apiIndex = rawParts.findIndex((part) => part === "api");
+    const parts = apiIndex >= 0 ? rawParts.slice(apiIndex) : rawParts;
     const isApiRoute = parts[0] === "api";
 
     if (isApiRoute && rejectDisallowedCors(request, response, env)) {

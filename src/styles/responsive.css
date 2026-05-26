@@ -157,6 +157,18 @@
 }
 
 @media (max-width: 680px) {
+  .menu-box {
+    grid-template-rows: auto auto auto auto auto;
+    height: auto;
+  }
+
+  .menu-shell > .menu-panel,
+  .menu-shell > .play-tabs,
+  .menu-shell > .play-layout,
+  .menu-shell > .menu-utility-actions {
+    grid-row: auto;
+  }
+
   .trend-strip,
   .customer-strip {
     grid-template-columns: 1fr;
@@ -174,7 +186,10 @@
   .custom-table-actions,
   .match-history-row,
   .oauth-actions,
-  .profile-edit,
+  .profile-main,
+  .profile-settings-grid,
+  .two-factor-setup,
+  .two-factor-disable,
   .dev-login-row {
     grid-template-columns: 1fr;
   }
@@ -189,10 +204,11 @@
 
   .profile-panel.is-signed-in {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
-  .profile-panel.is-signed-in .profile-card,
-  .profile-panel.is-signed-in .profile-edit,
+  .profile-panel.is-signed-in .profile-account-header,
+  .profile-panel.is-signed-in .profile-main,
   .profile-panel.is-signed-in .profile-danger,
   .profile-panel.is-signed-in .profile-status,
   .profile-panel.is-signed-in .lobby-error,
@@ -200,9 +216,33 @@
     grid-column: 1;
   }
 
-  .profile-panel.is-signed-in .profile-card {
-    grid-row: auto;
-    min-height: 0;
+  .profile-panel.is-signed-in .profile-account-header {
+    grid-template-columns: 1fr;
+    align-items: center;
+  }
+
+  .profile-panel.is-signed-in .profile-account-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .profile-panel.is-signed-in .profile-avatar-large {
+    width: 58px;
+    height: 58px;
+  }
+
+  .profile-panel.is-signed-in .profile-stat-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .profile-panel.is-signed-in .profile-stat-row {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .profile-panel.is-signed-in .profile-danger {
+    grid-template-columns: 1fr;
   }
 
   .play-tabs {

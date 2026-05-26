@@ -1,16 +1,19 @@
 import {
   BadgeHelp,
+  BadgeCheck,
   Bot,
   ChevronLeft,
   ChevronRight,
   Check,
   Coins,
   Coffee,
+  Crop,
   ExternalLink,
   Flag,
   Github,
   HandCoins,
   Info,
+  KeyRound,
   Languages,
   Lock,
   LogIn,
@@ -21,21 +24,27 @@ import {
   PackagePlus,
   Pause,
   Play,
+  QrCode,
   RefreshCw,
   ScrollText,
   Search,
+  ShieldAlert,
+  ShieldCheck,
   ShoppingBasket,
   Settings,
   SkipForward,
   Sparkles,
+  Smartphone,
   Timer,
   Trophy,
+  Trash2,
+  Upload,
   User,
   Volume2,
   VolumeX,
   X
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type PointerEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { appAssetUrl } from "./assetUrl";
 import { preloadImage } from "./assetPreloader";
 import {
@@ -50,7 +59,19 @@ import {
 import { localHintMove, localHintValue } from "./app/localHints";
 import { apiHref, apiPath } from "./app/apiPath";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse, sendLobbyEvent } from "./app/lobbyClient";
-import { cancelProfileDeletion, deactivateProfile, devLogin, loadCurrentUser, logout, updateProfile, type AuthUser } from "./app/authClient";
+import {
+  cancelProfileDeletion,
+  deactivateProfile,
+  devLogin,
+  disableTwoFactor,
+  enableTwoFactor,
+  loadCurrentUser,
+  logout,
+  startTwoFactorSetup,
+  updateProfile,
+  type AuthUser,
+  type TwoFactorSetup
+} from "./app/authClient";
 import {
   abandonRankedMatch,
   cancelRankedQueue,
@@ -205,6 +226,10 @@ const MATCH_FOUND_FALLBACK_MS = 3200;
 const UPGRADE_CHOICE_SECONDS = 20;
 type MainMenuTab = "play" | "profile" | "rating" | "history" | "dlc";
 type PlayModeTab = "ranked" | "story" | "hotseat" | "training" | "custom";
+type AvatarCropRect = { x: number; y: number; size: number };
+type AvatarCropDrag =
+  | { kind: "move"; pointerId: number; startX: number; startY: number; rect: AvatarCropRect }
+  | { kind: "resize"; pointerId: number; edgeX: -1 | 1; edgeY: -1 | 1; startX: number; startY: number; rect: AvatarCropRect };
 type RankedSession = {
   matchId: string;
   playerAId: string;
@@ -670,6 +695,15 @@ export default function App() {
   const [devLoginName, setDevLoginName] = useState("player");
   const [profileDisplayName, setProfileDisplayName] = useState("");
   const [profileAvatarFile, setProfileAvatarFile] = useState<File | null>(null);
+  const [profileAvatarPreviewUrl, setProfileAvatarPreviewUrl] = useState("");
+  const [profileRemoveAvatar, setProfileRemoveAvatar] = useState(false);
+  const [avatarCropSourceFile, setAvatarCropSourceFile] = useState<File | null>(null);
+  const [avatarCropPreviewUrl, setAvatarCropPreviewUrl] = useState("");
+  const [avatarCropRect, setAvatarCropRect] = useState<AvatarCropRect>({ x: 0.16, y: 0.1, size: 0.74 });
+  const [avatarCropDrag, setAvatarCropDrag] = useState<AvatarCropDrag | null>(null);
+  const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorSetup | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [twoFactorRecoveryCodes, setTwoFactorRecoveryCodes] = useState<string[]>([]);
   const [profileDeleteConfirmation, setProfileDeleteConfirmation] = useState("");
   const [profileStatus, setProfileStatus] = useState("");
   const [profileDeleteSecondsLeft, setProfileDeleteSecondsLeft] = useState(0);
@@ -721,6 +755,8 @@ export default function App() {
   const stateRef = useRef<GameState>(state);
   const language = audioSettings.language;
   const salePanelId = useId();
+  const avatarInputId = useId();
+  const cropAreaRef = useRef<HTMLDivElement | null>(null);
   const rankedSessionRef = useRef<RankedSession | null>(null);
   const pendingRankedActionKeysRef = useRef<Set<string>>(new Set());
   const pendingLobbyActionKeysRef = useRef<Set<string>>(new Set());
@@ -762,6 +798,16 @@ export default function App() {
   useEffect(() => {
     setProfileDisplayName(currentUser?.displayName ?? "");
     setProfileAvatarFile(null);
+    setProfileAvatarPreviewUrl((previewUrl) => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      return "";
+    });
+    setProfileRemoveAvatar(false);
+    setTwoFactorSetup(null);
+    setTwoFactorCode("");
+    setTwoFactorRecoveryCodes([]);
     setProfileDeleteConfirmation("");
     setProfileStatus("");
   }, [currentUser?.id]);
@@ -771,6 +817,22 @@ export default function App() {
       setProfileDisplayName(currentUser.displayName);
     }
   }, [currentUser?.displayName]);
+
+  useEffect(() => {
+    return () => {
+      if (avatarCropPreviewUrl) {
+        URL.revokeObjectURL(avatarCropPreviewUrl);
+      }
+    };
+  }, [avatarCropPreviewUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (profileAvatarPreviewUrl) {
+        URL.revokeObjectURL(profileAvatarPreviewUrl);
+      }
+    };
+  }, [profileAvatarPreviewUrl]);
 
   useEffect(() => {
     if (!currentUser?.deleteAfter) {
@@ -1942,13 +2004,160 @@ export default function App() {
     }
   }
 
+  function openAvatarCrop(file: File | null) {
+    if (!file) {
+      return;
+    }
+    if (avatarCropPreviewUrl) {
+      URL.revokeObjectURL(avatarCropPreviewUrl);
+    }
+    setAvatarCropSourceFile(file);
+    setAvatarCropPreviewUrl(URL.createObjectURL(file));
+    setAvatarCropRect({ x: 0.16, y: 0.1, size: 0.74 });
+  }
+
+  function closeAvatarCrop() {
+    setAvatarCropSourceFile(null);
+    setAvatarCropDrag(null);
+    if (avatarCropPreviewUrl) {
+      URL.revokeObjectURL(avatarCropPreviewUrl);
+      setAvatarCropPreviewUrl("");
+    }
+  }
+
+  function updateAvatarCropFromPointer(event: PointerEvent<HTMLDivElement>, drag = avatarCropDrag) {
+    if (!drag || event.pointerId !== drag.pointerId || !cropAreaRef.current) {
+      return;
+    }
+    const bounds = cropAreaRef.current.getBoundingClientRect();
+    const dx = (event.clientX - drag.startX) / bounds.width;
+    const dy = (event.clientY - drag.startY) / bounds.height;
+    if (drag.kind === "move") {
+      const x = Math.min(1 - drag.rect.size, Math.max(0, drag.rect.x + dx));
+      const y = Math.min(1 - drag.rect.size, Math.max(0, drag.rect.y + dy));
+      setAvatarCropRect({ ...drag.rect, x, y });
+      return;
+    }
+    const delta = drag.edgeX === drag.edgeY ? Math.max(dx * drag.edgeX, dy * drag.edgeY) : Math.max(dx * drag.edgeX, dy * drag.edgeY);
+    const size = Math.min(1, Math.max(0.28, drag.rect.size + delta));
+    const x = drag.edgeX < 0 ? Math.min(drag.rect.x + drag.rect.size - size, drag.rect.x + drag.rect.size - 0.28) : drag.rect.x;
+    const y = drag.edgeY < 0 ? Math.min(drag.rect.y + drag.rect.size - size, drag.rect.y + drag.rect.size - 0.28) : drag.rect.y;
+    setAvatarCropRect({
+      x: Math.min(1 - size, Math.max(0, x)),
+      y: Math.min(1 - size, Math.max(0, y)),
+      size
+    });
+  }
+
+  function startAvatarCropMove(event: PointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setAvatarCropDrag({ kind: "move", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect: avatarCropRect });
+  }
+
+  function startAvatarCropResize(event: PointerEvent<HTMLSpanElement>, edgeX: -1 | 1, edgeY: -1 | 1) {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setAvatarCropDrag({ kind: "resize", pointerId: event.pointerId, edgeX, edgeY, startX: event.clientX, startY: event.clientY, rect: avatarCropRect });
+  }
+
+  async function croppedAvatarFile(file: File, rect: AvatarCropRect): Promise<File> {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return file;
+    }
+    const sourceSize = Math.min(bitmap.width, bitmap.height) * rect.size;
+    const sourceX = Math.max(0, Math.min(bitmap.width - sourceSize, rect.x * bitmap.width));
+    const sourceY = Math.max(0, Math.min(bitmap.height - sourceSize, rect.y * bitmap.height));
+    context.drawImage(bitmap, sourceX, sourceY, sourceSize, sourceSize, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png", 0.92));
+    return blob ? new File([blob], "avatar.png", { type: "image/png" }) : file;
+  }
+
+  async function applyAvatarCrop() {
+    if (!avatarCropSourceFile) {
+      return;
+    }
+    try {
+      const cropped = typeof createImageBitmap === "function" ? await croppedAvatarFile(avatarCropSourceFile, avatarCropRect) : avatarCropSourceFile;
+      setProfileAvatarFile(cropped);
+      setProfileAvatarPreviewUrl((previewUrl) => {
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+        }
+        return URL.createObjectURL(cropped);
+      });
+    } catch {
+      setProfileAvatarFile(avatarCropSourceFile);
+      setProfileAvatarPreviewUrl((previewUrl) => {
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+        }
+        return URL.createObjectURL(avatarCropSourceFile);
+      });
+    }
+    setProfileRemoveAvatar(false);
+    closeAvatarCrop();
+  }
+
+  async function beginTwoFactorSetup() {
+    setAuthError("");
+    setProfileStatus("");
+    setTwoFactorRecoveryCodes([]);
+    try {
+      setTwoFactorSetup(await startTwoFactorSetup());
+      setTwoFactorCode("");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось начать настройку 2FA.");
+    }
+  }
+
+  async function submitTwoFactorEnable() {
+    setAuthError("");
+    setProfileStatus("");
+    try {
+      const result = await enableTwoFactor(twoFactorCode);
+      setCurrentUser(result.user);
+      setTwoFactorSetup(null);
+      setTwoFactorCode("");
+      setTwoFactorRecoveryCodes(result.recoveryCodes);
+      setProfileStatus("2FA включена.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось включить 2FA.");
+    }
+  }
+
+  async function submitTwoFactorDisable() {
+    setAuthError("");
+    setProfileStatus("");
+    try {
+      setCurrentUser(await disableTwoFactor(twoFactorCode));
+      setTwoFactorSetup(null);
+      setTwoFactorCode("");
+      setTwoFactorRecoveryCodes([]);
+      setProfileStatus("2FA выключена.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось выключить 2FA.");
+    }
+  }
+
   async function submitProfileUpdate() {
     setAuthError("");
     setProfileStatus("");
     try {
-      const updated = await updateProfile({ displayName: profileDisplayName, avatar: profileAvatarFile });
+      const updated = await updateProfile({ displayName: profileDisplayName, avatar: profileAvatarFile, removeAvatar: profileRemoveAvatar });
       setCurrentUser(updated);
       setProfileAvatarFile(null);
+      setProfileAvatarPreviewUrl((previewUrl) => {
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+        }
+        return "";
+      });
+      setProfileRemoveAvatar(false);
       setProfileStatus("Профиль обновлён.");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Не удалось обновить профиль.");
@@ -3720,6 +3929,12 @@ export default function App() {
   const profileDeleteSecondsFallback = currentUser?.deleteAfter ? Math.max(0, Math.ceil((new Date(currentUser.deleteAfter).getTime() - Date.now()) / 1000)) : 0;
   const profileDeleteCountdownText = formatDeletionCountdown(profileDeleteSecondsLeft || profileDeleteSecondsFallback);
   const profileDeleteConfirmationMatches = profileDeleteConfirmation.trim() === "УДАЛИТЬ ПРОФИЛЬ";
+  const cropBoxStyle = {
+    left: `${avatarCropRect.x * 100}%`,
+    top: `${avatarCropRect.y * 100}%`,
+    width: `${avatarCropRect.size * 100}%`,
+    height: `${avatarCropRect.size * 100}%`
+  };
   const rankedButtonTime = rankedQueueBlocked ? rankedCooldownTime : rankedQueueState === "waiting" ? rankedQueueTime : "";
   const leaderboardStartIndex = (leaderboardPage - 1) * 10;
   const playTabs: Array<{ id: PlayModeTab; label: string }> = [
@@ -3810,7 +4025,7 @@ export default function App() {
                   </button>
                 )}
                 <button className="menu-account" type="button" onClick={() => setMenuTab("profile")}>
-                  <span className="menu-account-avatar">{currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={20} />}</span>
+                  <span className="menu-account-avatar is-circle">{currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={20} />}</span>
                   <span>
                     <strong>{currentUser?.displayName ?? "Гость"}</strong>
                     <small>{menuUserMmrText}</small>
@@ -4003,34 +4218,152 @@ export default function App() {
                 <section className={`menu-panel profile-panel ${currentUser ? "is-signed-in" : "is-signed-out"}`}>
                   {currentUser ? (
                     <>
-                      <div className="profile-card">
-                        <div className="profile-avatar">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={24} />}</div>
-                        <div>
-                          <strong>{currentUser.displayName}</strong>
-                          <span>MMR: {profileRating ? profileRating.mmr ?? "?" : "..."}</span>
+                      <div className="profile-account-header">
+                        <div className="profile-account-summary">
+                          <div className="profile-avatar profile-avatar-large is-circle">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={32} />}</div>
+                          <div className="profile-identity">
+                            <strong>{currentUser.displayName}</strong>
+                            <span>{currentUser.email ?? "Аккаунт игрока"}</span>
+                          </div>
                         </div>
-                        <button onClick={() => void signOut()}>
+                        <div className="profile-stat-list">
+                          <div className="profile-stat-row">
+                            <Trophy size={16} />
+                            <span>Рейтинг</span>
+                            <strong>{profileRating ? profileRating.mmr ?? "?" : "..."}</strong>
+                          </div>
+                          <div className="profile-stat-row">
+                            <ScrollText size={16} />
+                            <span>Матчи</span>
+                            <strong>{profileRating ? profileRating.rankedGames : "..."}</strong>
+                          </div>
+                          <div className="profile-stat-row">
+                            {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                            <span>2FA</span>
+                            <strong>{currentUser.twoFactorEnabled ? "Вкл." : "Выкл."}</strong>
+                          </div>
+                        </div>
+                        <button className="profile-logout-button" type="button" onClick={() => void signOut()}>
                           <LogOut size={16} /> Выйти
                         </button>
                       </div>
-                      <div className="profile-edit">
-                        <label className="field-label">
-                          <span>Ник</span>
-                          <input className="menu-field" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} disabled={profileDeletionPending} />
-                        </label>
-                        <label className="field-label">
-                          <span>Аватарка</span>
-                          <input
-                            className="menu-field"
-                            type="file"
-                            accept="image/png,image/jpeg,image/webp"
-                            disabled={profileDeletionPending}
-                            onChange={(event) => setProfileAvatarFile(event.target.files?.[0] ?? null)}
-                          />
-                        </label>
-                        <button type="button" onClick={() => void submitProfileUpdate()} disabled={profileDeletionPending}>
-                          <Check size={16} /> Сохранить профиль
-                        </button>
+                      <div className="profile-main">
+                        <section className="profile-settings-card">
+                          <div className="profile-section-heading">
+                            <div>
+                              <h2>
+                                <BadgeCheck size={18} /> Профиль
+                              </h2>
+                            </div>
+                            <button type="button" className="primary-action" onClick={() => void submitProfileUpdate()} disabled={profileDeletionPending}>
+                              <Check size={16} /> Сохранить
+                            </button>
+                          </div>
+                          <div className="profile-settings-grid">
+                            <div className="profile-avatar-editor">
+                              <div className="profile-avatar profile-avatar-medium is-circle">
+                                {profileRemoveAvatar ? <User size={26} /> : profileAvatarPreviewUrl ? <img src={profileAvatarPreviewUrl} alt="" /> : currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={26} />}
+                              </div>
+                              <div className="profile-avatar-actions">
+                                <label className="profile-upload-button" htmlFor={avatarInputId}>
+                                  <Upload size={16} /> Загрузить
+                                </label>
+                                <input
+                                  id={avatarInputId}
+                                  className="profile-file-input"
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp"
+                                  aria-label="Новая аватарка"
+                                  disabled={profileDeletionPending}
+                                  onChange={(event) => {
+                                    openAvatarCrop(event.target.files?.[0] ?? null);
+                                    event.currentTarget.value = "";
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setProfileAvatarFile(null);
+                                    setProfileAvatarPreviewUrl((previewUrl) => {
+                                      if (previewUrl) {
+                                        URL.revokeObjectURL(previewUrl);
+                                      }
+                                      return "";
+                                    });
+                                    setProfileRemoveAvatar(true);
+                                  }}
+                                  disabled={profileDeletionPending || (!currentUser.avatarUrl && !profileAvatarFile)}
+                                >
+                                  <Trash2 size={16} /> Удалить
+                                </button>
+                              </div>
+                            </div>
+                            <div className="profile-fields">
+                              <label className="field-label">
+                                <span>Ник</span>
+                                <input className="menu-field" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} disabled={profileDeletionPending} />
+                              </label>
+                              <label className="field-label">
+                                <span>Email</span>
+                                <input className="menu-field" value={currentUser.email ?? ""} disabled />
+                              </label>
+                            </div>
+                          </div>
+                        </section>
+                        <section className="profile-settings-card">
+                          <div className="profile-section-heading">
+                            <div>
+                              <h2>
+                                <ShieldCheck size={18} /> 2FA
+                              </h2>
+                            </div>
+                            <span className={`profile-security-status ${currentUser.twoFactorEnabled ? "enabled" : ""}`}>
+                              {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                              {currentUser.twoFactorEnabled ? "Вкл." : "Выкл."}
+                            </span>
+                          </div>
+                          {!currentUser.twoFactorEnabled && !twoFactorSetup && (
+                            <button type="button" className="profile-inline-action" onClick={() => void beginTwoFactorSetup()}>
+                              <Smartphone size={16} /> Настроить 2FA
+                            </button>
+                          )}
+                          {twoFactorSetup && (
+                            <div className="two-factor-setup">
+                              <div className="two-factor-qr" aria-label="QR-код 2FA" role="img" dangerouslySetInnerHTML={{ __html: twoFactorSetup.qrCodeSvg }} />
+                              <div className="two-factor-code-panel">
+                                <div className="two-factor-step">
+                                  <QrCode size={18} />
+                                  <span>Сканировать</span>
+                                </div>
+                                <label className="field-label">
+                                  <span>Код из приложения</span>
+                                  <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
+                                </label>
+                                <button type="button" className="primary-action" onClick={() => void submitTwoFactorEnable()} disabled={twoFactorCode.length !== 6}>
+                                  <KeyRound size={16} /> Включить
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {currentUser.twoFactorEnabled && (
+                            <div className="two-factor-disable">
+                              <label className="field-label">
+                                <span>Код из приложения</span>
+                                <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
+                              </label>
+                              <button type="button" onClick={() => void submitTwoFactorDisable()} disabled={twoFactorCode.length !== 6}>
+                                <ShieldAlert size={16} /> Выключить
+                              </button>
+                            </div>
+                          )}
+                          {twoFactorRecoveryCodes.length > 0 && (
+                            <div className="recovery-codes">
+                              {twoFactorRecoveryCodes.map((code) => (
+                                <code key={code}>{code}</code>
+                              ))}
+                            </div>
+                          )}
+                        </section>
                       </div>
                       <div className="profile-danger">
                         {profileDeletionPending && <p className="profile-delete-timer">Профиль будет удалён через {profileDeleteCountdownText}.</p>}
@@ -4052,7 +4385,6 @@ export default function App() {
                       </div>
                       {profileStatus && <p className="profile-status">{profileStatus}</p>}
                       {authError && <p className="lobby-error">{authError}</p>}
-                      <p className="menu-note">Рейтинговые матчи и будущие DLC доступны этому аккаунту.</p>
                     </>
                   ) : (
                     <>
@@ -4076,6 +4408,53 @@ export default function App() {
                       {authError && <p className="lobby-error">{authError}</p>}
                     </>
                   )}
+                </section>
+              )}
+
+              {avatarCropSourceFile && avatarCropPreviewUrl && (
+                <section className="avatar-crop-backdrop" role="dialog" aria-label="Кадр аватарки">
+                  <div className="avatar-crop-modal">
+                    <header className="avatar-crop-heading">
+                      <div>
+                        <h2>
+                          <Crop size={18} /> Кадр аватарки
+                        </h2>
+                        <p>Тяните рамку или углы.</p>
+                      </div>
+                      <button type="button" aria-label="Закрыть" onClick={closeAvatarCrop}>
+                        <X size={18} />
+                      </button>
+                    </header>
+                    <div
+                      ref={cropAreaRef}
+                      className="avatar-crop-area"
+                      onPointerMove={updateAvatarCropFromPointer}
+                      onPointerUp={() => setAvatarCropDrag(null)}
+                      onPointerCancel={() => setAvatarCropDrag(null)}
+                    >
+                      <img src={avatarCropPreviewUrl} alt="" />
+                      <div className="avatar-crop-mask" aria-hidden="true" />
+                      <div className="avatar-crop-box" style={cropBoxStyle} onPointerDown={startAvatarCropMove}>
+                        <span className="crop-grid-v one" />
+                        <span className="crop-grid-v two" />
+                        <span className="crop-handle tl" onPointerDown={(event) => startAvatarCropResize(event, -1, -1)} />
+                        <span className="crop-handle tr" onPointerDown={(event) => startAvatarCropResize(event, 1, -1)} />
+                        <span className="crop-handle bl" onPointerDown={(event) => startAvatarCropResize(event, -1, 1)} />
+                        <span className="crop-handle br" onPointerDown={(event) => startAvatarCropResize(event, 1, 1)} />
+                      </div>
+                    </div>
+                    <footer className="avatar-crop-actions">
+                      <label className="profile-upload-button" htmlFor={avatarInputId}>
+                        <Upload size={16} /> Другой файл
+                      </label>
+                      <button type="button" onClick={closeAvatarCrop}>
+                        <X size={16} /> Отмена
+                      </button>
+                      <button type="button" className="primary-action" onClick={() => void applyAvatarCrop()}>
+                        <Check size={16} /> Применить
+                      </button>
+                    </footer>
+                  </div>
                 </section>
               )}
 

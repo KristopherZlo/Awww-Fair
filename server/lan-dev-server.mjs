@@ -64,7 +64,7 @@ if (devMemoryStore === "true") {
 }
 
 start("Lobby server", process.execPath, [tsxBin, "server/lobby-server.ts"], {
-  AUTH_DEV_LOGIN: process.env.AUTH_DEV_LOGIN ?? "false",
+  AUTH_DEV_LOGIN: process.env.AUTH_DEV_LOGIN ?? "true",
   DEV_MEMORY_STORE: devMemoryStore,
   PORT: String(lobbyPort),
   PUBLIC_PORT: String(appPort)

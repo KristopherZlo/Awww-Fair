@@ -16,8 +16,20 @@ async function startTestServer(handler: ReturnType<typeof createRankedHandler>) 
   };
 }
 
-function authStore(user: Omit<AuthUser, "deactivatedAt" | "deleteAfter"> & Partial<Pick<AuthUser, "deactivatedAt" | "deleteAfter">>): AuthStore {
-  const normalizedUser: AuthUser = { ...user, deactivatedAt: user.deactivatedAt ?? null, deleteAfter: user.deleteAfter ?? null };
+type RankedAuthUserInput = Pick<AuthUser, "id" | "displayName" | "avatarUrl" | "email"> &
+  Partial<Pick<AuthUser, "avatarShape" | "twoFactorEnabled" | "deactivatedAt" | "deleteAfter">>;
+
+function authStore(user: RankedAuthUserInput): AuthStore {
+  const normalizedUser: AuthUser = {
+    id: user.id,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    avatarShape: user.avatarShape ?? "circle",
+    email: user.email,
+    twoFactorEnabled: user.twoFactorEnabled ?? false,
+    deactivatedAt: user.deactivatedAt ?? null,
+    deleteAfter: user.deleteAfter ?? null
+  };
   return {
     async findUserBySessionHash(tokenHash) {
       return tokenHash === sessionTokenHash("token") ? normalizedUser : null;

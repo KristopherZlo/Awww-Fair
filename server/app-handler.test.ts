@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppHandler } from "./app-handler";
-import { sessionTokenHash, type AuthStore } from "./auth";
+import { MemoryAuthStore, sessionTokenHash, type AuthStore, type AuthUser } from "./auth";
 import { MemoryRankedStore, RankedService } from "./ranked";
 
 async function startTestServer(handler: ReturnType<typeof createAppHandler>) {
@@ -16,25 +16,39 @@ async function startTestServer(handler: ReturnType<typeof createAppHandler>) {
   };
 }
 
+function authUser(overrides: Partial<AuthUser> = {}): AuthUser {
+  return {
+    id: "dev",
+    displayName: "Dev",
+    avatarUrl: null,
+    avatarShape: "circle",
+    email: null,
+    twoFactorEnabled: false,
+    deactivatedAt: null,
+    deleteAfter: null,
+    ...overrides
+  };
+}
+
 function store(): AuthStore {
   return {
     async findUserBySessionHash() {
       return null;
     },
     async createDevUser() {
-      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+      return authUser();
     },
     async upsertOAuthUser() {
-      return { id: "oauth", displayName: "OAuth", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+      return authUser({ id: "oauth", displayName: "OAuth" });
     },
     async updateProfile() {
-      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+      return authUser();
     },
     async deactivateUser() {
-      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: "2026-05-22T00:00:00.000Z", deleteAfter: "2026-06-05T00:00:00.000Z" };
+      return authUser({ deactivatedAt: "2026-05-22T00:00:00.000Z", deleteAfter: "2026-06-05T00:00:00.000Z" });
     },
     async cancelDeletion() {
-      return { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null };
+      return authUser();
     },
     async purgeExpiredDeactivatedUsers() {
       return [];
@@ -76,11 +90,36 @@ describe("app handler", () => {
     expect(lobby.status).toBe(204);
   });
 
+  it("routes auth API requests when the app is served from the public path", async () => {
+    const server = await startTestServer(
+      createAppHandler({
+        env: { AUTH_DEV_LOGIN: "true", PUBLIC_PATH: "trendmarket" },
+        authStore: new MemoryAuthStore(),
+        rankedService: new RankedService({ store: new MemoryRankedStore() }),
+        tokenFactory: () => "public-path-token",
+        fallbackHandler: (_request: IncomingMessage, response: ServerResponse) => {
+          response.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify({ error: "fallback" }));
+        }
+      })
+    );
+    cleanups.push(server.close);
+
+    const auth = await fetch(`${server.url}/trendmarket/api/auth/dev-login`, { method: "POST", body: JSON.stringify({ displayName: "Dev" }) });
+    const cookie = auth.headers.get("set-cookie") ?? "";
+    const setup = await fetch(`${server.url}/trendmarket/api/auth/two-factor/setup`, { method: "POST", headers: { Cookie: cookie } });
+    const setupPayload = await setup.json();
+
+    expect(auth.status).toBe(200);
+    expect(setup.status).toBe(200);
+    expect(setupPayload).toMatchObject({ secret: expect.any(String), otpauthUri: expect.stringContaining("otpauth://totp/"), qrCodeSvg: expect.stringContaining("<svg") });
+  });
+
   it("routes ranked API requests before falling back to the lobby handler", async () => {
     const rankedAuthStore: AuthStore = {
       ...store(),
       async findUserBySessionHash(tokenHash) {
-        return tokenHash === sessionTokenHash("token") ? { id: "dev", displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } : null;
+        return tokenHash === sessionTokenHash("token") ? authUser() : null;
       }
     };
     const server = await startTestServer(
@@ -118,7 +157,18 @@ describe("app handler", () => {
     const rating = await fetch(`${server.url}/api/ranked/rating`, { headers: { Cookie: cookie } });
 
     expect(auth.status).toBe(200);
-    expect(await auth.json()).toEqual({ user: { id: expect.any(String), displayName: "Dev", avatarUrl: null, email: null, deactivatedAt: null, deleteAfter: null } });
+    expect(await auth.json()).toEqual({
+      user: {
+        id: expect.any(String),
+        displayName: "Dev",
+        avatarUrl: null,
+        avatarShape: "circle",
+        email: null,
+        twoFactorEnabled: false,
+        deactivatedAt: null,
+        deleteAfter: null
+      }
+    });
     expect(rating.status).toBe(200);
     expect(await rating.json()).toMatchObject({
       rating: {
