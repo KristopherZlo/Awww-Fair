@@ -6,7 +6,7 @@ export const CONTENT_SECURITY_POLICY = [
   "form-action 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https:",
+  "img-src 'self' data: https: blob:",
   "connect-src 'self'",
   "font-src 'self' data:",
   "media-src 'self'",

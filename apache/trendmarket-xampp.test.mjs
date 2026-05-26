@@ -18,5 +18,6 @@ describe("XAMPP Apache config", () => {
     expect(config).toContain('Header always set X-Content-Type-Options "nosniff"');
     expect(config).toContain('Header always set X-Frame-Options "DENY"');
     expect(config).toContain("Content-Security-Policy");
+    expect(config).toContain("img-src 'self' data: https: blob:");
   });
 });
