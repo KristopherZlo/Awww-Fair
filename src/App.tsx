@@ -241,9 +241,9 @@ type RankedSession = {
 const MATCH_FOUND_LICENSE =
   "Piano Notification 5b by FoolBoyMedia -- https://freesound.org/s/352654/ -- License: Attribution NonCommercial 4.0 used as match-found sound";
 
-function rankedHistoryResultLabel(match: RankedMatchHistoryEntry, playerId: string): string {
-  if (!match.winnerId) return "Ничья";
-  return match.winnerId === playerId ? "Победа" : "Поражение";
+function rankedHistoryResultLabel(match: RankedMatchHistoryEntry, playerId: string, language: Language): string {
+  if (!match.winnerId) return language === "en" ? "Draw" : "Ничья";
+  return match.winnerId === playerId ? (language === "en" ? "Win" : "Победа") : language === "en" ? "Loss" : "Поражение";
 }
 
 function rankedHistoryMmrChange(match: RankedMatchHistoryEntry, playerId: string): number {
@@ -255,9 +255,9 @@ function signedMmrChange(change: number): string {
   return change > 0 ? `+${change}` : String(change);
 }
 
-function rankedStatusText(status: RankedQueueStatus["status"]): string {
-  if (status === "matched") return "Матч найден.";
-  if (status === "waiting") return "Вы в очереди рейтинга.";
+function rankedStatusText(status: RankedQueueStatus["status"], language: Language): string {
+  if (status === "matched") return language === "en" ? "Match found." : "Матч найден.";
+  if (status === "waiting") return language === "en" ? "You are in the ranked queue." : "Вы в очереди рейтинга.";
   return "";
 }
 
@@ -754,6 +754,7 @@ export default function App() {
   const skipNextSessionSaveRef = useRef(false);
   const stateRef = useRef<GameState>(state);
   const language = audioSettings.language;
+  const tr = (ru: string, en: string) => (language === "en" ? en : ru);
   const salePanelId = useId();
   const avatarInputId = useId();
   const cropAreaRef = useRef<HTMLDivElement | null>(null);
@@ -3916,15 +3917,15 @@ export default function App() {
   const rankedCooldownTime = formatRankedQueueTime(rankedCooldownSeconds);
   const rankedWarningText =
     rankedPenalty && rankedPenalty.leaveWarnings > 0
-      ? "Вы покинули рейтинговый матч. Повторные выходы приведут к временной блокировке ranked."
+      ? tr("Вы покинули рейтинговый матч. Повторные выходы приведут к временной блокировке ranked.", "You left a ranked match. Repeated leaves can add a ranked cooldown.")
       : "";
   const rankedMmrText = currentUser ? (profileRating ? profileRating.mmr ?? "?" : "...") : "-";
   const rankedGamesText = profileRating ? (profileRating.isCalibrating ? "?" : String(profileRating.rankedGames)) : currentUser ? "..." : "0";
   const rankedRecordText = profileRating ? (profileRating.isCalibrating ? "?-?" : `${profileRating.wins}-${profileRating.losses}`) : currentUser ? "...-..." : "0-0";
   const rankedWinRateText =
     profileRating && !profileRating.isCalibrating && profileRating.rankedGames > 0 ? `${Math.round((profileRating.wins / profileRating.rankedGames) * 100)}%` : "-";
-  const menuUserMmrText = currentUser ? (profileRating ? `${profileRating.mmr ?? "?"} MMR` : "MMR ...") : "Войти";
-  const rankedActionLabel = rankedQueueBlocked ? "Доступно через" : rankedQueueState === "waiting" ? "Отмена" : rankedQueueState === "matched" ? "Матч найден" : "Играть";
+  const menuUserMmrText = currentUser ? (profileRating ? `${profileRating.mmr ?? "?"} MMR` : "MMR ...") : tr("Войти", "Sign in");
+  const rankedActionLabel = rankedQueueBlocked ? tr("Доступно через", "Available in") : rankedQueueState === "waiting" ? tr("Отмена", "Cancel") : rankedQueueState === "matched" ? tr("Матч найден", "Match found") : tr("Играть", "Play");
   const profileDeletionPending = Boolean(currentUser?.deactivatedAt);
   const profileDeleteSecondsFallback = currentUser?.deleteAfter ? Math.max(0, Math.ceil((new Date(currentUser.deleteAfter).getTime() - Date.now()) / 1000)) : 0;
   const profileDeleteCountdownText = formatDeletionCountdown(profileDeleteSecondsLeft || profileDeleteSecondsFallback);
@@ -3938,7 +3939,7 @@ export default function App() {
   const rankedButtonTime = rankedQueueBlocked ? rankedCooldownTime : rankedQueueState === "waiting" ? rankedQueueTime : "";
   const leaderboardStartIndex = (leaderboardPage - 1) * 10;
   const playTabs: Array<{ id: PlayModeTab; label: string }> = [
-    { id: "ranked", label: "Рейтинг 1vs1" },
+    { id: "ranked", label: tr("Рейтинг 1vs1", "Ranked 1v1") },
     { id: "story", label: ui(language, "campaignMode") },
     { id: "hotseat", label: ui(language, "twoPlayers") },
     { id: "training", label: ui(language, "aiTraining") },
@@ -4020,31 +4021,31 @@ export default function App() {
                   <p>{ui(language, "menuSubtitle")}</p>
                 </div>
                 {showRankedQueueChip && (
-                  <button className="menu-queue-chip" type="button" onClick={() => void cancelRanked()} aria-label={`Поиск рейтинга ${rankedQueueTime}`}>
+                  <button className="menu-queue-chip" type="button" onClick={() => void cancelRanked()} aria-label={tr(`Поиск рейтинга ${rankedQueueTime}`, `Ranked search ${rankedQueueTime}`)}>
                     <Timer size={16} /> {rankedQueueTime}
                   </button>
                 )}
                 <button className="menu-account" type="button" onClick={() => setMenuTab("profile")}>
                   <span className="menu-account-avatar is-circle">{currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={20} />}</span>
                   <span>
-                    <strong>{currentUser?.displayName ?? "Гость"}</strong>
+                    <strong>{currentUser?.displayName ?? tr("Гость", "Guest")}</strong>
                     <small>{menuUserMmrText}</small>
                   </span>
                 </button>
               </header>
 
-              <div className="menu-tabs" role="tablist" aria-label="Главное меню">
+              <div className="menu-tabs" role="tablist" aria-label={tr("Главное меню", "Main menu")}>
                 <button type="button" role="tab" aria-selected={menuTab === "play"} className={menuTab === "play" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("play")}>
-                  <Play size={16} /> Играть
+                  <Play size={16} /> {tr("Играть", "Play")}
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "profile"} className={menuTab === "profile" ? "active" : ""} onClick={() => setMenuTab("profile")}>
-                  <User size={16} /> Профиль
+                  <User size={16} /> {tr("Профиль", "Profile")}
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "rating"} className={menuTab === "rating" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("rating")}>
-                  <Trophy size={16} /> Лидерборд
+                  <Trophy size={16} /> {tr("Лидерборд", "Leaderboard")}
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "history"} className={menuTab === "history" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("history")}>
-                  <ScrollText size={16} /> История MMR
+                  <ScrollText size={16} /> {tr("История MMR", "MMR History")}
                 </button>
                 <button type="button" role="tab" aria-selected={menuTab === "dlc"} className={menuTab === "dlc" ? "active" : ""} disabled={profileDeletionPending} onClick={() => setMenuTab("dlc")}>
                   <ShoppingBasket size={16} /> DLC
@@ -4073,8 +4074,8 @@ export default function App() {
                       <section className={`ranked-match-card${rankedQueueState === "waiting" ? " is-searching" : ""}`} aria-labelledby="ranked-title">
                         <div className="ranked-card-top">
                           <div>
-                            <h2 id="ranked-title">Рейтинг 1vs1</h2>
-                            <p>Матч против живого соперника с записью результата в MMR.</p>
+                            <h2 id="ranked-title">{tr("Рейтинг 1vs1", "Ranked 1v1")}</h2>
+                            <p>{tr("Матч против живого соперника с записью результата в MMR.", "Play against another player and record the result in MMR.")}</p>
                           </div>
                           <div className="ranked-mmr-card">
                             <span>MMR</span>
@@ -4084,21 +4085,21 @@ export default function App() {
 
                         <div className="ranked-stats">
                           <div>
-                            <span>Матчи</span>
+                            <span>{tr("Матчи", "Matches")}</span>
                             <strong>{rankedGamesText}</strong>
                           </div>
                           <div>
-                            <span>Счет</span>
+                            <span>{tr("Счет", "Record")}</span>
                             <strong>{rankedRecordText}</strong>
                           </div>
                           <div>
-                            <span>Победы</span>
+                            <span>{tr("Победы", "Wins")}</span>
                             <strong>{rankedWinRateText}</strong>
                           </div>
                         </div>
 
                         <div className="play-start-action">
-                          {!currentUser && <p className="menu-note">Для рейтинга нужен вход в аккаунт.</p>}
+                          {!currentUser && <p className="menu-note">{tr("Для рейтинга нужен вход в аккаунт.", "Sign in to play ranked.")}</p>}
                           {rankedWarningText && <p className="menu-note ranked-warning">{rankedWarningText}</p>}
                           {rankedStatus && <p className="menu-note">{rankedStatus}</p>}
                           <button className="ranked-action ranked-play-button play-start-button" disabled={rankedQueueState === "matched" || rankedQueueBlocked} onClick={() => void joinRanked()}>
@@ -4115,8 +4116,8 @@ export default function App() {
                       <section className="menu-panel play-mode-card story-mode-card" aria-labelledby="story-mode-title">
                         <div className="play-mode-copy">
                           <h2 id="story-mode-title">{ui(language, "campaignMode")}</h2>
-                          <p>Проходите уровни ярмарки, открывайте новых соперников и постепенно собирайте полный набор правил.</p>
-                          <span>Открыто уровней: {campaignProgress.highestUnlockedLevel} / {CAMPAIGN_LEVELS.length}</span>
+                          <p>{tr("Проходите уровни ярмарки, открывайте новых соперников и постепенно собирайте полный набор правил.", "Play fair levels, meet new rivals, and learn the full rule set over time.")}</p>
+                          <span>{tr("Открыто уровней", "Unlocked levels")}: {campaignProgress.highestUnlockedLevel} / {CAMPAIGN_LEVELS.length}</span>
                         </div>
                         {renderCampaignLevelRoad("level-road play-level-road")}
                       </section>
@@ -4126,11 +4127,11 @@ export default function App() {
                       <section className="menu-panel play-mode-card" aria-labelledby="hotseat-mode-title">
                         <div className="play-mode-copy">
                           <h2 id="hotseat-mode-title">{ui(language, "twoPlayers")}</h2>
-                          <p>Локальная партия на одном устройстве: игроки ходят по очереди и видят общий стол.</p>
+                          <p>{tr("Локальная партия на одном устройстве: игроки ходят по очереди и видят общий стол.", "Local match on one device. Players take turns and share the same table.")}</p>
                         </div>
                         <div className="play-start-action">
                           <button className="primary-action play-start-button" onClick={startGame}>
-                            <Play size={18} /> Играть
+                            <Play size={18} /> {tr("Играть", "Play")}
                           </button>
                         </div>
                       </section>
@@ -4140,11 +4141,11 @@ export default function App() {
                       <section className="menu-panel play-mode-card" aria-labelledby="training-mode-title">
                         <div className="play-mode-copy">
                           <h2 id="training-mode-title">{ui(language, "aiTraining")}</h2>
-                          <p>Партия против слабого ИИ с подсказками тренера и скрытой проверкой правильных ходов.</p>
+                          <p>{tr("Партия против слабого ИИ с подсказками тренера и скрытой проверкой правильных ходов.", "Practice against a weak AI with coach hints and hidden move checks.")}</p>
                         </div>
                         <div className="play-start-action">
                           <button className="primary-action play-start-button" onClick={() => startAiGame("training")}>
-                            <Bot size={18} /> Играть
+                            <Bot size={18} /> {tr("Играть", "Play")}
                           </button>
                         </div>
                       </section>
@@ -4154,17 +4155,17 @@ export default function App() {
                       <section className="menu-panel play-mode-card" aria-labelledby="custom-mode-title">
                         <div className="play-mode-copy">
                           <h2 id="custom-mode-title">{ui(language, "onlineGame")}</h2>
-                          <p>Для новой онлайн-партии создайте стол. Код появится после создания, и его можно будет отправить второму игроку.</p>
+                          <p>{tr("Для новой онлайн-партии создайте стол. Код появится после создания, и его можно будет отправить второму игроку.", "Create a table for a new online match. The lobby code appears after creation.")}</p>
                           <div className="custom-table-actions">
                             <div className="custom-table-create">
-                              <h3>Создать новый стол</h3>
-                              <p>Код не нужен: стол создаётся сразу, а второй игрок подключится по выданному коду.</p>
+                              <h3>{tr("Создать новый стол", "Create new table")}</h3>
+                              <p>{tr("Код не нужен: стол создаётся сразу, а второй игрок подключится по выданному коду.", "No code needed: the table is created now, and the second player joins with the issued code.")}</p>
                               <label className="custom-turn-time">
                                 <span>
-                                  <Timer size={16} /> Время хода: {customTurnTimeSeconds} сек.
+                                  <Timer size={16} /> {tr("Время хода", "Turn time")}: {customTurnTimeSeconds} {tr("сек.", "sec.")}
                                 </span>
                                 <input
-                                  aria-label="Время хода"
+                                  aria-label={tr("Время хода", "Turn time")}
                                   type="range"
                                   min={MIN_TURN_TIME_SECONDS}
                                   max={MAX_TURN_TIME_SECONDS}
@@ -4180,11 +4181,11 @@ export default function App() {
                                   void createLobby();
                                 }}
                               >
-                                <PackagePlus size={18} /> Создать стол
+                                <PackagePlus size={18} /> {ui(language, "createTable")}
                               </button>
                             </div>
                             <div className="custom-table-join">
-                              <h3>Войти по коду</h3>
+                              <h3>{tr("Войти по коду", "Join by code")}</h3>
                               <div className="join-lobby">
                                 <label className="field-label">
                                   <span>{ui(language, "lobbyCodePlaceholder")}</span>
@@ -4223,28 +4224,28 @@ export default function App() {
                           <div className="profile-avatar profile-avatar-large is-circle">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={32} />}</div>
                           <div className="profile-identity">
                             <strong>{currentUser.displayName}</strong>
-                            <span>{currentUser.email ?? "Аккаунт игрока"}</span>
+                            <span>{currentUser.email ?? tr("Аккаунт игрока", "Player account")}</span>
                           </div>
                         </div>
                         <div className="profile-stat-list">
                           <div className="profile-stat-row">
                             <Trophy size={16} />
-                            <span>Рейтинг</span>
+                            <span>{tr("Рейтинг", "Rating")}</span>
                             <strong>{profileRating ? profileRating.mmr ?? "?" : "..."}</strong>
                           </div>
                           <div className="profile-stat-row">
                             <ScrollText size={16} />
-                            <span>Матчи</span>
+                            <span>{tr("Матчи", "Matches")}</span>
                             <strong>{profileRating ? profileRating.rankedGames : "..."}</strong>
                           </div>
                           <div className="profile-stat-row">
                             {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
                             <span>2FA</span>
-                            <strong>{currentUser.twoFactorEnabled ? "Вкл." : "Выкл."}</strong>
+                            <strong>{currentUser.twoFactorEnabled ? tr("Вкл.", "On") : tr("Выкл.", "Off")}</strong>
                           </div>
                         </div>
                         <button className="profile-logout-button" type="button" onClick={() => void signOut()}>
-                          <LogOut size={16} /> Выйти
+                          <LogOut size={16} /> {tr("Выйти", "Sign out")}
                         </button>
                       </div>
                       <div className="profile-main">
@@ -4252,11 +4253,11 @@ export default function App() {
                           <div className="profile-section-heading">
                             <div>
                               <h2>
-                                <BadgeCheck size={18} /> Профиль
+                                <BadgeCheck size={18} /> {tr("Профиль", "Profile")}
                               </h2>
                             </div>
                             <button type="button" className="primary-action" onClick={() => void submitProfileUpdate()} disabled={profileDeletionPending}>
-                              <Check size={16} /> Сохранить
+                              <Check size={16} /> {tr("Сохранить", "Save")}
                             </button>
                           </div>
                           <div className="profile-settings-grid">
@@ -4266,14 +4267,14 @@ export default function App() {
                               </div>
                               <div className="profile-avatar-actions">
                                 <label className="profile-upload-button" htmlFor={avatarInputId}>
-                                  <Upload size={16} /> Загрузить
+                                  <Upload size={16} /> {tr("Загрузить", "Upload")}
                                 </label>
                                 <input
                                   id={avatarInputId}
                                   className="profile-file-input"
                                   type="file"
                                   accept="image/png,image/jpeg,image/webp"
-                                  aria-label="Новая аватарка"
+                                  aria-label={tr("Новая аватарка", "New avatar")}
                                   disabled={profileDeletionPending}
                                   onChange={(event) => {
                                     openAvatarCrop(event.target.files?.[0] ?? null);
@@ -4294,13 +4295,13 @@ export default function App() {
                                   }}
                                   disabled={profileDeletionPending || (!currentUser.avatarUrl && !profileAvatarFile)}
                                 >
-                                  <Trash2 size={16} /> Удалить
+                                  <Trash2 size={16} /> {tr("Удалить", "Remove")}
                                 </button>
                               </div>
                             </div>
                             <div className="profile-fields">
                               <label className="field-label">
-                                <span>Ник</span>
+                                <span>{tr("Ник", "Name")}</span>
                                 <input className="menu-field" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} disabled={profileDeletionPending} />
                               </label>
                               <label className="field-label">
@@ -4319,28 +4320,28 @@ export default function App() {
                             </div>
                             <span className={`profile-security-status ${currentUser.twoFactorEnabled ? "enabled" : ""}`}>
                               {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
-                              {currentUser.twoFactorEnabled ? "Вкл." : "Выкл."}
+                              {currentUser.twoFactorEnabled ? tr("Вкл.", "On") : tr("Выкл.", "Off")}
                             </span>
                           </div>
                           {!currentUser.twoFactorEnabled && !twoFactorSetup && (
                             <button type="button" className="profile-inline-action" onClick={() => void beginTwoFactorSetup()}>
-                              <Smartphone size={16} /> Настроить 2FA
+                              <Smartphone size={16} /> {tr("Настроить 2FA", "Set up 2FA")}
                             </button>
                           )}
                           {twoFactorSetup && (
                             <div className="two-factor-setup">
-                              <div className="two-factor-qr" aria-label="QR-код 2FA" role="img" dangerouslySetInnerHTML={{ __html: twoFactorSetup.qrCodeSvg }} />
+                              <div className="two-factor-qr" aria-label={tr("QR-код 2FA", "2FA QR code")} role="img" dangerouslySetInnerHTML={{ __html: twoFactorSetup.qrCodeSvg }} />
                               <div className="two-factor-code-panel">
                                 <div className="two-factor-step">
                                   <QrCode size={18} />
-                                  <span>Сканировать</span>
+                                  <span>{tr("Сканировать", "Scan")}</span>
                                 </div>
                                 <label className="field-label">
-                                  <span>Код из приложения</span>
+                                  <span>{tr("Код из приложения", "App code")}</span>
                                   <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
                                 </label>
                                 <button type="button" className="primary-action" onClick={() => void submitTwoFactorEnable()} disabled={twoFactorCode.length !== 6}>
-                                  <KeyRound size={16} /> Включить
+                                  <KeyRound size={16} /> {tr("Включить", "Enable")}
                                 </button>
                               </div>
                             </div>
@@ -4348,11 +4349,11 @@ export default function App() {
                           {currentUser.twoFactorEnabled && (
                             <div className="two-factor-disable">
                               <label className="field-label">
-                                <span>Код из приложения</span>
+                                <span>{tr("Код из приложения", "App code")}</span>
                                 <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
                               </label>
                               <button type="button" onClick={() => void submitTwoFactorDisable()} disabled={twoFactorCode.length !== 6}>
-                                <ShieldAlert size={16} /> Выключить
+                                <ShieldAlert size={16} /> {tr("Выключить", "Disable")}
                               </button>
                             </div>
                           )}
@@ -4366,19 +4367,19 @@ export default function App() {
                         </section>
                       </div>
                       <div className="profile-danger">
-                        {profileDeletionPending && <p className="profile-delete-timer">Профиль будет удалён через {profileDeleteCountdownText}.</p>}
+                        {profileDeletionPending && <p className="profile-delete-timer">{tr("Профиль будет удалён через", "Profile will be deleted in")} {profileDeleteCountdownText}.</p>}
                         {profileDeletionPending ? (
                           <button type="button" onClick={() => void cancelProfileDeletionRequest()}>
-                            <RefreshCw size={16} /> Отменить удаление профиля
+                            <RefreshCw size={16} /> {tr("Отменить удаление профиля", "Cancel profile deletion")}
                           </button>
                         ) : (
                           <>
                             <label className="field-label">
-                              <span>Подтверждение удаления</span>
+                              <span>{tr("Подтверждение удаления", "Deletion confirmation")}</span>
                               <input className="menu-field" value={profileDeleteConfirmation} onChange={(event) => setProfileDeleteConfirmation(event.target.value)} placeholder="УДАЛИТЬ ПРОФИЛЬ" />
                             </label>
                             <button type="button" className="danger-action" onClick={() => void submitProfileDeletion()} disabled={!profileDeleteConfirmationMatches}>
-                              <X size={16} /> Удалить профиль
+                              <X size={16} /> {tr("Удалить профиль", "Delete profile")}
                             </button>
                           </>
                         )}
@@ -4388,8 +4389,8 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <h2>Войдите в аккаунт</h2>
-                      <p>Без входа нельзя играть в рейтинг и покупать будущие DLC.</p>
+                      <h2>{tr("Войдите в аккаунт", "Sign in")}</h2>
+                      <p>{tr("Без входа нельзя играть в рейтинг и покупать будущие DLC.", "Sign in to play ranked and buy future DLC.")}</p>
                       <div className="oauth-actions">
                         <a href={apiHref("auth/google/start")}>
                           <GoogleGIcon /> Google
@@ -4400,10 +4401,10 @@ export default function App() {
                       </div>
                       <div className="dev-login-row">
                         <label className="field-label">
-                          <span>Имя для тестового входа</span>
+                          <span>{tr("Имя для тестового входа", "Dev login name")}</span>
                           <input className="menu-field" value={devLoginName} onChange={(event) => setDevLoginName(event.target.value)} />
                         </label>
-                        <button onClick={() => void submitDevLogin()}>Тестовый вход</button>
+                        <button onClick={() => void submitDevLogin()}>{tr("Тестовый вход", "Dev login")}</button>
                       </div>
                       {authError && <p className="lobby-error">{authError}</p>}
                     </>
@@ -4412,16 +4413,16 @@ export default function App() {
               )}
 
               {avatarCropSourceFile && avatarCropPreviewUrl && (
-                <section className="avatar-crop-backdrop" role="dialog" aria-label="Кадр аватарки">
+                <section className="avatar-crop-backdrop" role="dialog" aria-label={tr("Кадр аватарки", "Avatar crop")}>
                   <div className="avatar-crop-modal">
                     <header className="avatar-crop-heading">
                       <div>
                         <h2>
-                          <Crop size={18} /> Кадр аватарки
+                          <Crop size={18} /> {tr("Кадр аватарки", "Avatar crop")}
                         </h2>
-                        <p>Тяните рамку или углы.</p>
+                        <p>{tr("Тяните рамку или углы.", "Drag the frame or corners.")}</p>
                       </div>
-                      <button type="button" aria-label="Закрыть" onClick={closeAvatarCrop}>
+                      <button type="button" aria-label={ui(language, "close")} onClick={closeAvatarCrop}>
                         <X size={18} />
                       </button>
                     </header>
@@ -4445,13 +4446,13 @@ export default function App() {
                     </div>
                     <footer className="avatar-crop-actions">
                       <label className="profile-upload-button" htmlFor={avatarInputId}>
-                        <Upload size={16} /> Другой файл
+                        <Upload size={16} /> {tr("Другой файл", "Other file")}
                       </label>
                       <button type="button" onClick={closeAvatarCrop}>
-                        <X size={16} /> Отмена
+                        <X size={16} /> {tr("Отмена", "Cancel")}
                       </button>
                       <button type="button" className="primary-action" onClick={() => void applyAvatarCrop()}>
-                        <Check size={16} /> Применить
+                        <Check size={16} /> {tr("Применить", "Apply")}
                       </button>
                     </footer>
                   </div>
@@ -4460,8 +4461,8 @@ export default function App() {
 
               {menuTab === "history" && (
                 <section className="menu-panel match-history">
-                  <h2>История MMR</h2>
-                  {!currentUser && <p className="menu-note">Для истории рейтинга нужен вход в аккаунт.</p>}
+                  <h2>{tr("История MMR", "MMR History")}</h2>
+                  {!currentUser && <p className="menu-note">{tr("Для истории рейтинга нужен вход в аккаунт.", "Sign in to view rating history.")}</p>}
                   {currentUser && matchHistoryError && <p className="lobby-error">{matchHistoryError}</p>}
                   {currentUser && matchHistory.length > 0 && (
                     <div className="match-history-list">
@@ -4475,10 +4476,10 @@ export default function App() {
                         const resultClass = change > 0 ? "is-win" : change < 0 ? "is-loss" : "is-draw";
                         return (
                           <div className={`match-history-row ${resultClass}`} key={match.matchId}>
-                            <strong>{rankedHistoryResultLabel(match, currentUser.id)}</strong>
+                            <strong>{rankedHistoryResultLabel(match, currentUser.id, language)}</strong>
                             <span>vs {opponentName}</span>
                             <span>
-                              {match.playerACoins}:{match.playerBCoins} монет
+                              {match.playerACoins}:{match.playerBCoins} {coinText(language, match.playerACoins + match.playerBCoins)}
                             </span>
                             <span>{signedMmrChange(change)} MMR</span>
                           </div>
@@ -4486,26 +4487,26 @@ export default function App() {
                       })}
                     </div>
                   )}
-                  {currentUser && !matchHistory.length && !matchHistoryError && <p className="menu-note">История рейтинга пока пуста.</p>}
+                  {currentUser && !matchHistory.length && !matchHistoryError && <p className="menu-note">{tr("История рейтинга пока пуста.", "Rating history is empty.")}</p>}
                 </section>
               )}
 
               {menuTab === "rating" && (
                 <section className="menu-panel leaderboard-panel" aria-labelledby="leaderboard-title">
                   <div className="leaderboard-heading">
-                    <h2 id="leaderboard-title">Лидерборд</h2>
-                    <span>{leaderboardTotal} игроков</span>
+                    <h2 id="leaderboard-title">{tr("Лидерборд", "Leaderboard")}</h2>
+                    <span>{leaderboardTotal} {tr("игроков", "players")}</span>
                   </div>
                   {leaderboardError && <p className="lobby-error">{leaderboardError}</p>}
                   <div className={`leaderboard-list${!leaderboard.length && !leaderboardError ? " is-empty" : ""}`}>
                     {leaderboard.length > 0 && (
-                      <table className="leaderboard-table" aria-label="Лидерборд игроков">
+                      <table className="leaderboard-table" aria-label={tr("Лидерборд игроков", "Player leaderboard")}>
                         <thead>
                           <tr>
                             <th scope="col">#</th>
-                            <th scope="col">Игрок</th>
+                            <th scope="col">{tr("Игрок", "Player")}</th>
                             <th scope="col">MMR</th>
-                            <th scope="col">Счет</th>
+                            <th scope="col">{tr("Счет", "Record")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -4522,13 +4523,13 @@ export default function App() {
                         </tbody>
                       </table>
                     )}
-                    {!leaderboard.length && !leaderboardError && <p className="menu-note menu-empty-state leaderboard-empty-state">Лидерборд пока пуст.</p>}
+                    {!leaderboard.length && !leaderboardError && <p className="menu-note menu-empty-state leaderboard-empty-state">{tr("Лидерборд пока пуст.", "Leaderboard is empty.")}</p>}
                   </div>
                   <div className="leaderboard-controls">
                     <label className="field-label leaderboard-search">
                       <input
                         className="menu-field"
-                        aria-label="Поиск"
+                        aria-label={tr("Поиск", "Search")}
                         value={leaderboardSearch}
                         onChange={(event) => {
                           setLeaderboardSearch(event.target.value);
@@ -4539,12 +4540,12 @@ export default function App() {
                       <Search className="leaderboard-search-icon" size={15} aria-hidden="true" />
                     </label>
                     <div className="leaderboard-pagination">
-                      <button type="button" aria-label="Предыдущая страница" disabled={leaderboardPage <= 1} onClick={() => setLeaderboardPage((page) => Math.max(1, page - 1))}>
-                        <ChevronLeft size={16} /> Назад
+                      <button type="button" aria-label={tr("Предыдущая страница", "Previous page")} disabled={leaderboardPage <= 1} onClick={() => setLeaderboardPage((page) => Math.max(1, page - 1))}>
+                        <ChevronLeft size={16} /> {tr("Назад", "Back")}
                       </button>
                       <span>{leaderboardPage} / {leaderboardTotalPages}</span>
                       <button type="button" disabled={leaderboardPage >= leaderboardTotalPages} onClick={() => setLeaderboardPage((page) => Math.min(leaderboardTotalPages, page + 1))}>
-                        Далее <ChevronRight size={16} />
+                        {tr("Далее", "Next")} <ChevronRight size={16} />
                       </button>
                     </div>
                   </div>
@@ -4555,13 +4556,13 @@ export default function App() {
                 <section className="menu-panel menu-empty-panel">
                   <div className="menu-empty-state">
                     <h2>DLC</h2>
-                    <p>В разработке. Позже здесь появятся DLC-наборы для покупки.</p>
-                    {!currentUser && <p className="menu-note">Для покупки будущих DLC понадобится вход в аккаунт.</p>}
+                    <p>{tr("В разработке. Позже здесь появятся DLC-наборы для покупки.", "In development. DLC packs will appear here later.")}</p>
+                    {!currentUser && <p className="menu-note">{tr("Для покупки будущих DLC понадобится вход в аккаунт.", "Sign in will be required to buy future DLC.")}</p>}
                   </div>
                 </section>
               )}
 
-              <div className="menu-utility-actions" aria-label="Дополнительно">
+              <div className="menu-utility-actions" aria-label={tr("Дополнительно", "Extra actions")}>
                 <div className="menu-utility-buttons">
                   <button
                     title={ui(language, "rules")}
@@ -4591,13 +4592,13 @@ export default function App() {
                     <Info size={17} /> {ui(language, "about")}
                   </button>
                   <button
-                    title="Лицензии"
+                    title={tr("Лицензии", "Licenses")}
                     onClick={() => {
                       playEffect("ui-click");
                       setShowLicenses(true);
                     }}
                   >
-                    <ScrollText size={17} /> Лицензии
+                    <ScrollText size={17} /> {tr("Лицензии", "Licenses")}
                   </button>
                 </div>
                 <div className="menu-support-links" aria-label={ui(language, "supportProject")}>
@@ -4695,7 +4696,7 @@ export default function App() {
         </div>
         <div className="top-actions">
           <div className={`sync-pill sync-${rankedSession ? "online" : syncStatus}`}>
-            {rankedSession && "Рейтинговый матч · online"}
+            {rankedSession && tr("Рейтинговый матч · online", "Ranked match ? online")}
             <span hidden={Boolean(rankedSession)}>
             {lobby ? `${ui(language, "lobbyCode").toLowerCase()} ${lobby.code} · ${ui(language, "you").toLowerCase()} ${lobby.playerId}` : ui(language, "localTable")} · {syncStatus}
             </span>
@@ -5251,7 +5252,7 @@ export default function App() {
                 <Settings size={18} /> {ui(language, "settings")}
               </button>
               <button onClick={requestExitToMenu}>
-                <LogOut size={18} /> {rankedSession ? "Сдаться" : ui(language, "exitToMenu")}
+                <LogOut size={18} /> {rankedSession ? tr("Сдаться", "Forfeit") : ui(language, "exitToMenu")}
               </button>
             </div>
           </section>
@@ -5263,13 +5264,13 @@ export default function App() {
           <section className="confirm-modal" role="dialog" aria-label={ui(language, "exitToMenu")}>
             <h2>{ui(language, "exitToMenu")}</h2>
             <p>{ui(language, "exitConfirmText")}</p>
-            {rankedSession && state.phase !== "game_end" && <p>Игроку будет засчитано поражение.</p>}
+            {rankedSession && state.phase !== "game_end" && <p>{tr("Игроку будет засчитано поражение.", "This will count as a loss.")}</p>}
             <div className="confirm-actions">
               <button className="primary-action" onClick={cancelExitToMenu}>
                 {ui(language, "stay")}
               </button>
               <button onClick={() => void confirmExitToMenu()}>
-                <LogOut size={18} /> {rankedSession && state.phase !== "game_end" ? "Сдаться" : ui(language, "exit")}
+                <LogOut size={18} /> {rankedSession && state.phase !== "game_end" ? tr("Сдаться", "Forfeit") : ui(language, "exit")}
               </button>
             </div>
           </section>
@@ -5427,11 +5428,11 @@ export default function App() {
 
       {showLicenses && (
         <div className="modal-backdrop">
-          <div className="about-modal license-modal" role="dialog" aria-label="Лицензии">
+          <div className="about-modal license-modal" role="dialog" aria-label={tr("Лицензии", "Licenses")}>
             <button className="modal-close" aria-label={ui(language, "close")} onClick={() => setShowLicenses(false)}>
               <X size={18} />
             </button>
-            <h2>Лицензии</h2>
+            <h2>{tr("Лицензии", "Licenses")}</h2>
             <p>{MATCH_FOUND_LICENSE}</p>
           </div>
         </div>
