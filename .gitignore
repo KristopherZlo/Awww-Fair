@@ -15,3 +15,23 @@ coverage/
 tmp/
 uploads/
 Ai-helper/
+ai-helper/
+
+# Local AI assistant artifacts
+superpowers/
+docs/superpowers/
+.codex/
+.claude/
+.cursor/
+.continue/
+.windsurf/
+.mcp/
+.openai/
+.aider*
+.cursorrules
+.github/copilot-instructions.md
+mcp.json
+mcp-config.json
+AGENTS.md
+CLAUDE.md
+GEMINI.md
