@@ -140,11 +140,21 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.match-history\s*\{[\s\S]*align-content:\s*start;/);
     expect(css).toMatch(/\.match-history h2\s*\{[\s\S]*font-size:\s*1rem;/);
     expect(css).toMatch(/\.profile-panel\.is-signed-in\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
-    expect(css).toMatch(/\.profile-account-header\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(280px,\s*0\.78fr\)\s+auto;/);
-    expect(css).toMatch(/\.profile-main\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(300px,\s*0\.74fr\);/);
-    expect(css).toMatch(/\.profile-settings-grid\s*\{[\s\S]*grid-template-columns:\s*minmax\(148px,\s*0\.42fr\)\s+minmax\(0,\s*1fr\);/);
+    expect(css).toMatch(/\.profile-tabs\s*\{[\s\S]*display:\s*flex;[\s\S]*border-bottom:\s*1px solid/);
+    expect(css).toMatch(/\.profile-tabs\s+\[role="tab"\]\.active::after\s*\{[\s\S]*background:\s*#f7d99b;/);
+    expect(css).toMatch(/\.profile-overview-stats\s*\{[\s\S]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/);
+    expect(css).toMatch(/\.profile-mmr-chart\s*\{[\s\S]*width:\s*100%;/);
+    expect(css).toMatch(/\.profile-main\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+    expect(css).toMatch(/\.profile-settings-grid\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/\.profile-avatar-editor\s*\{[\s\S]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\);/);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.profile-overview-stats[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
     expect(css).not.toMatch(/\.profile-avatar-card\s*\{/);
     expect(css).toMatch(/\.avatar-crop-backdrop\s*\{[\s\S]*position:\s*fixed;/);
+    expect(css).toMatch(/\.avatar-crop-area\s*\{[\s\S]*aspect-ratio:\s*1\s*\/\s*1;/);
+    expect(css).toMatch(/\.avatar-crop-area > img\s*\{[\s\S]*object-fit:\s*cover;/);
+    expect(css).toMatch(/\.avatar-crop-box\s*\{[\s\S]*border-radius:\s*50%;/);
+    expect(css).toMatch(/\.crop-grid-v\s*\{[\s\S]*display:\s*none;/);
+    expect(css).toMatch(/\.crop-handle\s*\{[\s\S]*border-radius:\s*50%;/);
     expect(css).toMatch(/\.avatar-crop-actions button,\s*\.avatar-crop-actions \.profile-upload-button\s*\{[\s\S]*background:\s*rgba\(255,\s*250,\s*240,\s*0\.08\);[\s\S]*color:\s*#f8ead2;/);
     expect(css).toMatch(/\.avatar-crop-actions \.primary-action\s*\{[\s\S]*background:\s*#f7d99b;[\s\S]*color:\s*#20140c;/);
   });
@@ -194,6 +204,33 @@ describe("app layout CSS", () => {
     expect(css).toMatch(/\.custom-turn-time input\[type="range"\]::\-webkit-slider-runnable-track\s*\{[\s\S]*background:\s*rgba\(247,\s*217,\s*155,\s*0\.24\);/);
     expect(css).toMatch(/\.custom-turn-time input\[type="range"\]::\-webkit-slider-thumb\s*\{[\s\S]*-webkit-appearance:\s*none;[\s\S]*background:\s*#f7d99b;/);
     expect(css).toMatch(/\.custom-turn-time input\[type="range"\]::\-moz-range-thumb\s*\{[\s\S]*background:\s*#f7d99b;/);
+  });
+
+  it("dims disabled settings volume rows", () => {
+    const css = readAppCss();
+
+    expect(css).toMatch(/\.range-row:has\(input\[type="range"\]:disabled\)\s*\{[\s\S]*opacity:\s*0\.72;/);
+  });
+
+  it("lays out sale forecast toggles with an icon column", () => {
+    const css = readAppCss();
+    const toggle = ruleBody(css, ".sale-result-toggle");
+
+    expect(toggle).toMatch(/display:\s*grid;/);
+    expect(toggle).toMatch(/grid-template-columns:\s*14px\s+minmax\(0,\s*1fr\);/);
+    expect(css).toMatch(/\.sale-result-chevron\s*\{[\s\S]*flex-shrink:\s*0;/);
+    expect(css).not.toMatch(/\.sale-result-toggle::before[\s\S]*content:\s*"v"/);
+    expect(css).not.toMatch(/\.sale-result-toggle::before[\s\S]*content:\s*">"/);
+  });
+
+  it("keeps expanded sales forecast rows readable", () => {
+    const css = readAppCss();
+
+    expect(css).toMatch(/\.sale-result-title,\s*\.sale-result-meta\s*\{[\s\S]*white-space:\s*normal;[\s\S]*overflow-wrap:\s*anywhere;/);
+    expect(css).toMatch(/\.sale-result-body,\s*\.last-sale-review-body\s*\{[\s\S]*min-width:\s*0;/);
+    expect(css).toMatch(/\.formula\s*\{[\s\S]*margin-top:\s*0;/);
+    expect(css).toMatch(/\.formula b,\s*\.formula span,\s*\.formula strong\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
+    expect(css).not.toMatch(/\.forecast-mode \.sale-result-card:not\(\.expanded\)[^{]*\{[^}]*min-height:\s*0;/);
   });
 
   it("caps leaderboard pagination buttons and embeds search icon in the field", () => {

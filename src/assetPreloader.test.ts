@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearImagePreloadCacheForTest, preloadImage, preloadImages } from "./assetPreloader";
+import { clearImagePreloadCacheForTest, preloadImage } from "./assetPreloader";
 
 let requestedSources: string[] = [];
 
@@ -32,9 +32,10 @@ describe("assetPreloader", () => {
   });
 
   it("starts loading each requested image in the background", () => {
-    preloadImages(["/assets/customer-atlas-128.webp", "/assets/product-atlas.webp"]);
+    preloadImage("/assets/market-bg.webp");
+    preloadImage("/assets/cutscene/aaakh-01.webp");
 
-    expect(requestedSources).toEqual(["/assets/customer-atlas-128.webp", "/assets/product-atlas.webp"]);
+    expect(requestedSources).toEqual(["/assets/market-bg.webp", "/assets/cutscene/aaakh-01.webp"]);
   });
 
   it("does not request the same image twice", () => {

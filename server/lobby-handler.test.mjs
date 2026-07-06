@@ -261,7 +261,7 @@ describe("lobby handler hardening", () => {
     expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
   });
 
-  it("rejects direct lobby state replacement when server-side rules are configured", async () => {
+  it("does not expose direct lobby state replacement", async () => {
     const server = await startTestServer(createLobbyHandler({ ...secureLobbyOptions, ...deterministicIds() }));
     cleanups.push(server.close);
     const created = await readJson(
@@ -280,8 +280,8 @@ describe("lobby handler hardening", () => {
     });
     const viewed = await readJson(await fetch(`${server.url}/api/lobbies/${created.code}`, { headers: { Authorization: `Bearer ${created.token}` } }));
 
-    expect(forged.status).toBe(403);
-    expect(await readJson(forged)).toEqual({ error: "Direct lobby state updates are disabled." });
+    expect(forged.status).toBe(404);
+    expect(await readJson(forged)).toEqual({ error: "Unknown lobby route." });
     expect(viewed.state).toEqual(state);
   });
 

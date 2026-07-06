@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -71,42 +71,6 @@ function resizeCustomers(size, outputDir) {
   }
 }
 
-function buildAtlas(size, inputDir, outputFile) {
-  const files = customers.map((id) => join(inputDir, `${id}.png`));
-  runMagick([
-    "montage",
-    ...files,
-    "-background",
-    "none",
-    "-tile",
-    "4x4",
-    "-geometry",
-    `${size}x${size}+0+0`,
-    "-strip",
-    outputFile
-  ]);
-}
-
-function identify(file) {
-  const result = spawnSync("magick", ["identify", "-format", "%wx%h %b", file], { encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`identify failed for ${file}`);
-  }
-  return `${basename(file)} ${result.stdout}`;
-}
-
 ensureSourceCopies();
 resizeCustomers(256, customerDir256);
 resizeCustomers(128, customerDir128);
-
-const atlas128 = join(publicAssets, "customer-atlas-128.png");
-const atlas256 = join(publicAssets, "customer-atlas-256.png");
-const legacyAtlas = join(publicAssets, "customer-atlas.png");
-
-buildAtlas(128, customerDir128, atlas128);
-buildAtlas(256, customerDir256, atlas256);
-copyFileSync(atlas256, legacyAtlas);
-
-console.log(identify(atlas128));
-console.log(identify(atlas256));
-console.log(identify(legacyAtlas));

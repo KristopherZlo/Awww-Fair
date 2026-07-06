@@ -3,7 +3,7 @@ import { appAssetUrl } from "./assetUrl";
 
 describe("appAssetUrl", () => {
   it("uses document-relative asset URLs when Vite builds with relative base", () => {
-    expect(appAssetUrl("product-atlas.png", "./")).toBe("assets/product-atlas.png");
+    expect(appAssetUrl("market-bg.webp", "./")).toBe("assets/market-bg.webp");
     expect(appAssetUrl("sounds/money.wav", ".")).toBe("assets/sounds/money.wav");
   });
 
@@ -12,6 +12,6 @@ describe("appAssetUrl", () => {
   });
 
   it("normalizes leading slashes in asset names", () => {
-    expect(appAssetUrl("/customer-atlas-128.png", "/")).toBe("/assets/customer-atlas-128.png");
+    expect(appAssetUrl("/cutscene/aaakh-01.webp", "/")).toBe("/assets/cutscene/aaakh-01.webp");
   });
 });

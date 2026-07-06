@@ -58,7 +58,7 @@ The server handles LAN lobbies, accounts, OAuth, avatars, 2FA, ranked queue, mat
 
 Local progress and local matches use `localStorage`. Shared game events use a replay reducer on the server.
 
-Assets are stored in `public/assets`. Customer atlas generation lives in `scripts/build-customer-atlases.mjs`.
+Assets are stored in `public/assets`. Customer resizing lives in `scripts/build-customer-atlases.mjs`.
 
 ## Code Layout
 

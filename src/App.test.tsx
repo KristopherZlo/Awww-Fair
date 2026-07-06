@@ -419,6 +419,16 @@ describe("App layout shell", () => {
     expect(lastRound.container.querySelector(".next-customer")).toBeNull();
   });
 
+  it("labels trends as a timeline from current to next round", () => {
+    saveGameState({}, null, { language: "en" });
+    const { container } = render(<App />);
+    const labels = Array.from(container.querySelectorAll(".trend-strip .trend-copy em")).map((label) => label.textContent?.trim());
+
+    expect(labels).toContain("Now");
+    expect(labels).toContain("Active");
+    expect(labels).toContain("Next round");
+  });
+
   it("marks completed party goals red for the local player when the opponent earned them and green for the earner", () => {
     saveGameState({ partyGoals: [completedGoalForB] });
     const localA = render(<App />);
@@ -559,6 +569,12 @@ describe("App layout shell", () => {
     expect(forecastPanel).not.toBeNull();
     expect(firstToggle).not.toBeNull();
     expect(firstToggle).toHaveAttribute("aria-expanded", "false");
+    expect(firstToggle).toHaveTextContent("Family");
+    expect(firstToggle).toHaveTextContent("Toy");
+    expect(firstToggle).toHaveTextContent("3 / 5");
+    expect(firstToggle).toHaveTextContent("needs +2");
+    expect(firstToggle?.querySelector(".sale-result-chevron")).not.toBeNull();
+    expect(forecastPanel?.querySelector(".sale-result-body")).toBeNull();
   });
 
   it("keeps multiple forecast formulas expanded independently", () => {
@@ -611,7 +627,7 @@ describe("App layout shell", () => {
 
     await startHotseatGame(user);
 
-    expect(screen.getByText(/Главный тренд/i)).toBeInTheDocument();
+    expect(container.querySelector(".trend-card.focus-trend em")).toHaveTextContent("Сейчас");
     expect(container.querySelector(".trend-card.focus-trend")).not.toBeNull();
     expect(container.querySelector(".trend-card .trend-copy")).not.toBeNull();
     expect(container.querySelector(".customer-card .customer-copy")).not.toBeNull();
@@ -683,7 +699,7 @@ describe("App layout shell", () => {
     expect(sprite?.src).toContain(".png");
   });
 
-  it("presents the play menu with text tabs, ranked matchmaking, story mode, and custom table", () => {
+  it("presents the play menu with text tabs, compact guest ranked prompt, story mode, and custom table", () => {
     const { container } = render(<App />);
     const playTabs = within(container.querySelector(".play-tabs") as HTMLElement).getAllByRole("tab");
 
@@ -694,8 +710,11 @@ describe("App layout shell", () => {
     expect(container.querySelector(".event-panel")).toBeNull();
     expect(container.querySelector(".play-tabs")).not.toBeNull();
     expect(container.querySelector(".ranked-match-card")).not.toBeNull();
+    expect(container.querySelector(".ranked-match-card.is-guest")).not.toBeNull();
     expect(screen.getByRole("tab", { name: /Рейтинг 1vs1/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Играть$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Играть$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Google/i })).toHaveAttribute("href", "/api/auth/google/start");
+    expect(screen.getByRole("link", { name: /Discord/i })).toHaveAttribute("href", "/api/auth/discord/start");
     expect(screen.queryByText(/Поиск соперника/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Готов$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/код лобби/i)).not.toBeInTheDocument();
@@ -892,7 +911,7 @@ describe("App layout shell", () => {
     await user.click(screen.getByRole("tab", { name: /Профиль/i }));
 
     expect((await screen.findAllByText(/Player One/i)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/1518 MMR/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/1518 MMR/i)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/\+18 MMR/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: /История MMR/i }));
@@ -907,6 +926,148 @@ describe("App layout shell", () => {
     expect(rows[1]).toHaveClass("is-loss");
     expect(screen.getByText("vs Opponent 1")).toBeInTheDocument();
     expect(screen.queryByText("vs Opponent 21")).not.toBeInTheDocument();
+  });
+
+  it("separates profile overview, settings, and account deletion into internal tabs", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          return Response.json({
+            user: {
+              id: "p1",
+              displayName: "Player One",
+              avatarUrl: null,
+              avatarShape: "circle",
+              email: "player@example.com",
+              twoFactorEnabled: false,
+              deactivatedAt: null,
+              deleteAfter: null
+            }
+          });
+        }
+        if (url === "/api/ranked/rating") {
+          return Response.json({
+            rating: {
+              playerId: "p1",
+              mmr: 1518,
+              rankedGames: 4,
+              wins: 3,
+              losses: 1,
+              lastRankedAt: "2026-05-21T00:00:00.000Z",
+              isCalibrating: false,
+              calibrationGamesRemaining: 0,
+              penalty: { leaveWarnings: 0, cleanGamesUntilForgiven: null, cooldownUntil: null, queueBlocked: false }
+            }
+          });
+        }
+        if (String(url).startsWith("/api/ranked/history")) {
+          return Response.json({
+            history: [
+              {
+                matchId: "m1",
+                playerAId: "p1",
+                playerBId: "p2",
+                winnerId: "p1",
+                loserId: "p2",
+                playerACoins: 10,
+                playerBCoins: 5,
+                playerASales: 4,
+                playerBSales: 2,
+                playerAMmrBefore: 1500,
+                playerBMmrBefore: 1500,
+                playerAMmrAfter: 1518,
+                playerBMmrAfter: 1482,
+                mmrChange: 18,
+                firstPlayerId: "p1",
+                createdAt: "2026-05-21T00:00:00.000Z"
+              }
+            ]
+          });
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<App />);
+    await user.click(screen.getByRole("tab", { name: /^Профиль$/i }));
+
+    const overviewTab = await screen.findByRole("tab", { name: /^Обзор$/i });
+    expect(overviewTab).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("img", { name: "MMR" })).toBeInTheDocument();
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Ник$/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Подтверждение удаления/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /^Настройки$/i }));
+    expect(await screen.findByLabelText(/^Ник$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Настроить 2FA/i })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "MMR" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Подтверждение удаления/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /^Удаление аккаунта$/i }));
+    expect(await screen.findByLabelText(/Подтверждение удаления/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Ник$/i)).not.toBeInTheDocument();
+  });
+
+  it("localizes the account deletion confirmation phrase in English", async () => {
+    const user = userEvent.setup();
+    saveGameState({ phase: "menu" }, null, { language: "en" });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Response.json({
+          user: {
+            id: "p1",
+            displayName: "Player One",
+            avatarUrl: null,
+            avatarShape: "circle",
+            email: "player@example.com",
+            twoFactorEnabled: false,
+            deactivatedAt: null,
+            deleteAfter: null
+          }
+        });
+      }
+      if (url === "/api/ranked/rating") {
+        return Response.json({ rating: { playerId: "p1", mmr: 1518, rankedGames: 1, wins: 1, losses: 0, lastRankedAt: null } });
+      }
+      if (String(url).startsWith("/api/ranked/history")) {
+        return Response.json({ history: [] });
+      }
+      if (url === "/api/auth/deactivate" && init?.method === "POST") {
+        expect(init.body).toBe(JSON.stringify({ confirmation: "УДАЛИТЬ ПРОФИЛЬ" }));
+        return Response.json({
+          user: {
+            id: "p1",
+            displayName: "Player One",
+            avatarUrl: null,
+            avatarShape: "circle",
+            email: "player@example.com",
+            twoFactorEnabled: false,
+            deactivatedAt: new Date().toISOString(),
+            deleteAfter: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+          }
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: /^Profile$/i }));
+    await user.click(await screen.findByRole("tab", { name: /^Delete account$/i }));
+
+    const confirmation = await screen.findByLabelText(/Deletion confirmation/i);
+    expect(confirmation).toHaveAttribute("placeholder", "DELETE PROFILE");
+    expect(screen.queryByPlaceholderText("УДАЛИТЬ ПРОФИЛЬ")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Delete profile$/i })).toBeDisabled();
+
+    await user.type(confirmation, "DELETE PROFILE");
+    await user.click(screen.getByRole("button", { name: /^Delete profile$/i }));
+
+    expect(await screen.findByText(/Profile will be deleted in/i)).toBeInTheDocument();
   });
 
   it("edits profile data and restricts the menu while profile deletion is pending", async () => {
@@ -957,6 +1118,7 @@ describe("App layout shell", () => {
     expect(document.querySelector(".profile-sidebar")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Круг$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Скругл/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /^Настройки$/i }));
     await user.clear(await screen.findByLabelText(/Ник/i));
     await user.type(screen.getByLabelText(/Ник/i), "New Nick");
     expect(screen.queryByRole("dialog", { name: /Кадр аватарки/i })).not.toBeInTheDocument();
@@ -968,10 +1130,13 @@ describe("App layout shell", () => {
     expect(await screen.findByText("Профиль обновлён.")).toBeInTheDocument();
     expect(screen.getAllByText("New Nick").length).toBeGreaterThan(0);
 
+    await user.click(screen.getByRole("tab", { name: /^Удаление аккаунта$/i }));
     await user.type(screen.getByLabelText(/Подтверждение удаления/i), "УДАЛИТЬ ПРОФИЛЬ");
     await user.click(screen.getByRole("button", { name: /^Удалить профиль$/i }));
 
-    expect(await screen.findByText(/Профиль будет удалён через/i)).toBeInTheDocument();
+    const deletionTimer = await screen.findByText(/Профиль будет удалён через/i);
+    expect(deletionTimer).toBeInTheDocument();
+    expect(deletionTimer).not.toHaveTextContent(/\.\.$/);
     expect(screen.getByRole("tab", { name: /Играть/i })).toBeDisabled();
     expect(screen.getByRole("tab", { name: /Лидерборд/i })).toBeDisabled();
     expect(screen.getByRole("tab", { name: /DLC/i })).toBeDisabled();
@@ -1013,6 +1178,7 @@ describe("App layout shell", () => {
     render(<App />);
 
     await user.click(screen.getByRole("tab", { name: /Профиль/i }));
+    await user.click(screen.getByRole("tab", { name: /^Настройки$/i }));
     await user.click(await screen.findByRole("button", { name: /Настроить 2FA/i }));
     expect(await screen.findByRole("img", { name: /QR-код 2FA/i })).toBeInTheDocument();
     await user.type(screen.getByLabelText(/Код из приложения/i), "123456");
@@ -1093,7 +1259,8 @@ describe("App layout shell", () => {
 
     render(<App />);
 
-    const rankedButton = await waitFor(() => document.querySelector<HTMLButtonElement>(".ranked-action")!);
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>(".ranked-action")).not.toBeNull());
+    const rankedButton = document.querySelector<HTMLButtonElement>(".ranked-action")!;
 
     await waitFor(() => expect(rankedButton).toBeDisabled());
     expect(rankedButton.textContent).toContain("Доступно через");
@@ -1355,7 +1522,8 @@ describe("App layout shell", () => {
 
     const { container } = render(<App />);
 
-    await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".ranked-action")!));
+    await waitFor(() => expect(container.querySelector<HTMLButtonElement>(".ranked-action")).not.toBeNull());
+    await user.click(container.querySelector<HTMLButtonElement>(".ranked-action")!);
     act(() => {
       mockAudioInstances.find((audio) => /matchfound\.mp3/.test(audio.src))?.emit("ended");
     });
@@ -1440,7 +1608,8 @@ describe("App layout shell", () => {
 
     const { container } = render(<App />);
 
-    await user.click(await waitFor(() => container.querySelector<HTMLButtonElement>(".ranked-action")!));
+    await waitFor(() => expect(container.querySelector<HTMLButtonElement>(".ranked-action")).not.toBeNull());
+    await user.click(container.querySelector<HTMLButtonElement>(".ranked-action")!);
     act(() => {
       mockAudioInstances.find((audio) => /matchfound\.mp3/.test(audio.src))?.emit("ended");
     });

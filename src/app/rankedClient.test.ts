@@ -47,7 +47,7 @@ describe("ranked client", () => {
   it("explains when the ranked API proxy is unavailable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Bad Gateway", { status: 502 })));
 
-    await expect(loadLeaderboard()).rejects.toThrow(/API server unavailable.*npm run dev:lan/i);
+    await expect(loadLeaderboard()).rejects.toThrow(/API server unavailable.*npm run lan/i);
   });
 
   it("joins ranked queue", async () => {

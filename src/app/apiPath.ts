@@ -46,10 +46,6 @@ export function apiPath(path: string, options: ApiPathOptions = {}) {
   return `${prefix}/api/${suffix}`.replace(/\/{2,}/g, "/");
 }
 
-export function apiHref(path: string, options: ApiPathOptions = {}) {
-  return apiPath(path, options);
-}
-
 export function normalizeApiAssetUrl(url: string | null, options: ApiPathOptions = {}) {
   if (!url?.startsWith("/api/")) {
     return url;

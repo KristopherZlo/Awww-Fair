@@ -62,7 +62,7 @@ describe("XAMPP environment helpers", () => {
   });
 
   it("fails closed when dangerous dev runtime flags are enabled for XAMPP", () => {
-    for (const flag of ["AUTH_DEV_LOGIN", "DEV_MEMORY_STORE", "LOBBY_TRUST_CLIENT_STATE"]) {
+    for (const flag of ["AUTH_DEV_LOGIN", "DEV_MEMORY_STORE"]) {
       const env = {};
       applyXamppDefaults(env);
       env[flag] = "true";

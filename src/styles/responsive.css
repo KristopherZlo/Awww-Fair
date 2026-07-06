@@ -156,6 +156,50 @@
   }
 }
 
+@media (max-width: 760px) {
+  .profile-tabs {
+    gap: 18px;
+    overflow-x: auto;
+  }
+
+  .profile-tabs [role="tab"] {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .profile-overview-account {
+    align-items: flex-start;
+  }
+
+  .profile-overview-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-overview-stat:nth-child(2) {
+    border-right: 0;
+  }
+
+  .profile-overview-stat:nth-child(-n + 2) {
+    border-bottom: 1px solid rgba(248, 234, 210, 0.12);
+  }
+
+  .profile-main,
+  .profile-settings-grid,
+  .two-factor-setup,
+  .two-factor-disable {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-chart-section {
+    min-height: 230px;
+    padding: 10px;
+  }
+
+  .profile-mmr-chart {
+    min-height: 170px;
+  }
+}
+
 @media (max-width: 680px) {
   .menu-box {
     grid-template-rows: auto auto auto auto auto;
@@ -186,10 +230,6 @@
   .custom-table-actions,
   .match-history-row,
   .oauth-actions,
-  .profile-main,
-  .profile-settings-grid,
-  .two-factor-setup,
-  .two-factor-disable,
   .dev-login-row {
     grid-template-columns: 1fr;
   }
@@ -207,18 +247,12 @@
     overflow: visible;
   }
 
-  .profile-panel.is-signed-in .profile-account-header,
   .profile-panel.is-signed-in .profile-main,
   .profile-panel.is-signed-in .profile-danger,
   .profile-panel.is-signed-in .profile-status,
   .profile-panel.is-signed-in .lobby-error,
   .profile-panel.is-signed-in .menu-note {
     grid-column: 1;
-  }
-
-  .profile-panel.is-signed-in .profile-account-header {
-    grid-template-columns: 1fr;
-    align-items: center;
   }
 
   .profile-panel.is-signed-in .profile-account-summary {
@@ -230,19 +264,17 @@
     height: 58px;
   }
 
-  .profile-panel.is-signed-in .profile-stat-list {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .profile-panel.is-signed-in .profile-stat-row {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    text-align: center;
-  }
-
   .profile-panel.is-signed-in .profile-danger {
     grid-template-columns: 1fr;
+  }
+
+  .profile-overview-account {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .profile-calibration-status {
+    margin-left: 68px;
   }
 
   .play-tabs {

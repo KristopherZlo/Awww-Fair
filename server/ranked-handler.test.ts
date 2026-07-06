@@ -258,17 +258,20 @@ describe("ranked handler", () => {
 
   it("records bot ranked actions on the server when the bot has the active turn", async () => {
     const store = new MemoryRankedStore([{ playerId: "human", mmr: 1500, rankedGames: 0, ratingGames: 0, calibrationGames: 0, wins: 0, losses: 0, lastRankedAt: null }]);
-    const service = new RankedService({ store, now: () => 1_000, idFactory: () => "match-bot", seedFactory: () => "seed-1", botDelayFactory: () => 0 });
+    let now = 1_000;
+    const service = new RankedService({ store, now: () => now, idFactory: () => "match-bot", seedFactory: () => "seed-1", botDelayFactory: () => 0 });
     await service.joinQueue("human");
     const status = await service.statusForPlayer("human");
     if (status.status !== "matched") throw new Error("Expected bot match.");
     expect(status.match.firstPlayerId).toBe(status.match.playerBId);
 
+    expect(await service.eventsForPlayer("human", "match-bot")).toEqual([]);
+
+    now = 11_000;
     const events = await service.eventsForPlayer("human", "match-bot");
 
     expect(events.length).toBeGreaterThan(0);
     expect(events.every((event) => event.actorId === status.match.playerBId)).toBe(true);
-    expect(events.at(-1)?.eventType).toBe("ready");
   });
 
   it("rejects oversized ranked JSON bodies before parsing", async () => {

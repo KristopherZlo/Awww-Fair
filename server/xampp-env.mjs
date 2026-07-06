@@ -15,7 +15,7 @@ export const XAMPP_DEFAULT_ENV = {
   PUBLIC_PORT: "80"
 };
 
-const XAMPP_FORBIDDEN_RUNTIME_FLAGS = ["AUTH_DEV_LOGIN", "DEV_MEMORY_STORE", "LOBBY_TRUST_CLIENT_STATE"];
+const XAMPP_FORBIDDEN_RUNTIME_FLAGS = ["AUTH_DEV_LOGIN", "DEV_MEMORY_STORE"];
 
 export function parseEnvFile(content) {
   const values = {};

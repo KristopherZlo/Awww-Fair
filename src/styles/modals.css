@@ -99,6 +99,10 @@
   opacity: 0.45;
 }
 
+.range-row:has(input[type="range"]:disabled) {
+  opacity: 0.72;
+}
+
 .track-status {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;

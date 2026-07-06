@@ -119,6 +119,38 @@ describe("ranked matchmaking", () => {
     expect(matched.match.initialState.aiPlayerId).toBe("B");
   });
 
+  it("waits before recording ranked bot turn events", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    let now = 1_000;
+    const store = new MemoryRankedStore();
+    const service = new RankedService({
+      store,
+      now: () => now,
+      idFactory: () => "match-bot",
+      seedFactory: () => "seed-1",
+      botDelayFactory: () => 0
+    });
+
+    try {
+      await service.joinQueue("human");
+      const matched = await service.statusForPlayer("human");
+      if (matched.status !== "matched") throw new Error("Expected bot match.");
+
+      expect(await service.eventsForPlayer("human", matched.match.id)).toEqual([]);
+
+      now = 6_999;
+      expect(await service.eventsForPlayer("human", matched.match.id)).toEqual([]);
+
+      now = 7_000;
+      const events = await service.eventsForPlayer("human", matched.match.id);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].actorId).toBe(matched.match.playerBId);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it("records calibration bot matches in history without exposing public MMR until five calibration games finish", async () => {
     const store = new MemoryRankedStore();
     const service = new RankedService({

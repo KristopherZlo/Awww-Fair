@@ -56,8 +56,8 @@ import {
   MIN_TURN_TIME_SECONDS,
   clampTurnTime
 } from "./app/gameConfig";
-import { localHintMove, localHintValue } from "./app/localHints";
-import { apiHref, apiPath } from "./app/apiPath";
+import { localHintMove, localHintValue, shouldExposeLocalHintMarkers } from "./app/localHints";
+import { apiPath } from "./app/apiPath";
 import { LOBBY_API, lobbyAuthHeaders, parseLobbyResponse, sendLobbyEvent } from "./app/lobbyClient";
 import {
   cancelProfileDeletion,
@@ -111,7 +111,6 @@ import {
   saveCampaignProgress,
   saveSession
 } from "./app/persistence";
-import { useLocalHintMarkers } from "./app/useLocalHintMarkers";
 import type {
   AiMode,
   AudioSettings,
@@ -127,6 +126,7 @@ import type {
 } from "./app/types";
 import { TAGS } from "./data/cards";
 import { CustomerCard, InfluenceCard, ProductCard, TagPill, TrendCard, UpgradeCard } from "./components/cards";
+import { ProfileMmrChart } from "./components/profileMmrChart";
 import { SaleResultCards } from "./components/saleResults";
 import {
   hasUpgrade,
@@ -224,8 +224,10 @@ const LOBBY_VISIBLE_RETRY_DELAYS_MS = [5000, 10000, 20000] as const;
 const TURN_CUE_MS = 1200;
 const MATCH_FOUND_FALLBACK_MS = 3200;
 const UPGRADE_CHOICE_SECONDS = 20;
+const PROFILE_DELETE_SERVER_CONFIRMATION = "УДАЛИТЬ ПРОФИЛЬ";
 type MainMenuTab = "play" | "profile" | "rating" | "history" | "dlc";
 type PlayModeTab = "ranked" | "story" | "hotseat" | "training" | "custom";
+type ProfileTab = "overview" | "settings" | "danger";
 type AvatarCropRect = { x: number; y: number; size: number };
 type AvatarCropDrag =
   | { kind: "move"; pointerId: number; startX: number; startY: number; rect: AvatarCropRect }
@@ -274,7 +276,7 @@ function formatDeletionCountdown(seconds: number): string {
   if (days <= 0 && hours <= 0) {
     return "меньше часа";
   }
-  return `${days} дн. ${hours} ч.`;
+  return `${days} дн. ${hours} ч`;
 }
 
 const CUTSCENE_FRAMES = [
@@ -691,6 +693,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<"local" | "online" | "syncing" | "offline">(() => (initialSession?.lobby ? "online" : "local"));
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [playModeTab, setPlayModeTab] = useState<PlayModeTab>("ranked");
+  const [profileTab, setProfileTab] = useState<ProfileTab>("overview");
   const [authError, setAuthError] = useState("");
   const [devLoginName, setDevLoginName] = useState("player");
   const [profileDisplayName, setProfileDisplayName] = useState("");
@@ -735,7 +738,7 @@ export default function App() {
   const [expandedSaleResultKeys, setExpandedSaleResultKeys] = useState<Set<string>>(() => new Set());
   const [lastSaleReviewOpen, setLastSaleReviewOpen] = useState(false);
   const [turnCue, setTurnCue] = useState<{ key: string; label: string; expiresAt: number } | null>(null);
-  const localHintMarkersEnabled = useLocalHintMarkers();
+  const localHintMarkersEnabled = shouldExposeLocalHintMarkers();
   const lobbyRef = useRef<LobbySession | null>(null);
   const applyingRemoteRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -811,6 +814,9 @@ export default function App() {
     setTwoFactorRecoveryCodes([]);
     setProfileDeleteConfirmation("");
     setProfileStatus("");
+    if (!currentUser) {
+      setProfileTab("overview");
+    }
   }, [currentUser?.id]);
 
   useEffect(() => {
@@ -853,6 +859,7 @@ export default function App() {
     }
     setMenuView("main");
     setMenuTab("profile");
+    setProfileTab("danger");
     setRankedQueue("idle");
     setRankedStatus("");
     setRankedSession(null);
@@ -1808,47 +1815,6 @@ export default function App() {
     }, 360);
   }
 
-  function publishLobbyState(next: GameState, session = lobbyRef.current, updateSync = true) {
-    if (!session || applyingRemoteRef.current) {
-      return;
-    }
-
-    if (updateSync) {
-      setSyncStatus("syncing");
-    }
-    void fetch(`${LOBBY_API}/${session.code}/state`, {
-      method: "PUT",
-      headers: lobbyAuthHeaders(session, { "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        token: session.token,
-        playerId: session.playerId,
-        version: session.version,
-        state: next
-      })
-    })
-      .then(parseLobbyResponse)
-      .then((payload) => {
-        setLobby((current) =>
-          current && current.code === payload.code
-            ? {
-                ...current,
-                version: payload.version,
-                seats: payload.seats
-              }
-            : current
-        );
-        if (updateSync) {
-          setSyncStatus("online");
-        }
-      })
-      .catch((error: Error) => {
-        if (updateSync) {
-          setLobbyError(error.message);
-          setSyncStatus("offline");
-        }
-      });
-  }
-
   function sendLobbyLeave(session: LobbySession) {
     const body = JSON.stringify({
       token: session.token,
@@ -2014,7 +1980,7 @@ export default function App() {
     }
     setAvatarCropSourceFile(file);
     setAvatarCropPreviewUrl(URL.createObjectURL(file));
-    setAvatarCropRect({ x: 0.16, y: 0.1, size: 0.74 });
+    setAvatarCropRect({ x: 0.13, y: 0.13, size: 0.74 });
   }
 
   function closeAvatarCrop() {
@@ -2068,12 +2034,19 @@ export default function App() {
     canvas.height = 256;
     const context = canvas.getContext("2d");
     if (!context) {
+      bitmap.close?.();
       return file;
     }
-    const sourceSize = Math.min(bitmap.width, bitmap.height) * rect.size;
-    const sourceX = Math.max(0, Math.min(bitmap.width - sourceSize, rect.x * bitmap.width));
-    const sourceY = Math.max(0, Math.min(bitmap.height - sourceSize, rect.y * bitmap.height));
+    const coverScale = Math.max(1 / bitmap.width, 1 / bitmap.height);
+    const displayedWidth = bitmap.width * coverScale;
+    const displayedHeight = bitmap.height * coverScale;
+    const offsetX = (1 - displayedWidth) / 2;
+    const offsetY = (1 - displayedHeight) / 2;
+    const sourceSize = rect.size / coverScale;
+    const sourceX = Math.max(0, Math.min(bitmap.width - sourceSize, (rect.x - offsetX) / coverScale));
+    const sourceY = Math.max(0, Math.min(bitmap.height - sourceSize, (rect.y - offsetY) / coverScale));
     context.drawImage(bitmap, sourceX, sourceY, sourceSize, sourceSize, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png", 0.92));
     return blob ? new File([blob], "avatar.png", { type: "image/png" }) : file;
   }
@@ -2169,7 +2142,7 @@ export default function App() {
     setAuthError("");
     setProfileStatus("");
     try {
-      const updated = await deactivateProfile(profileDeleteConfirmation);
+      const updated = await deactivateProfile(PROFILE_DELETE_SERVER_CONFIRMATION);
       setCurrentUser(updated);
       setProfileDeleteConfirmation("");
     } catch (error) {
@@ -3929,7 +3902,11 @@ export default function App() {
   const profileDeletionPending = Boolean(currentUser?.deactivatedAt);
   const profileDeleteSecondsFallback = currentUser?.deleteAfter ? Math.max(0, Math.ceil((new Date(currentUser.deleteAfter).getTime() - Date.now()) / 1000)) : 0;
   const profileDeleteCountdownText = formatDeletionCountdown(profileDeleteSecondsLeft || profileDeleteSecondsFallback);
-  const profileDeleteConfirmationMatches = profileDeleteConfirmation.trim() === "УДАЛИТЬ ПРОФИЛЬ";
+  const profileDeleteConfirmationPhrase = tr(PROFILE_DELETE_SERVER_CONFIRMATION, "DELETE PROFILE");
+  const profileDeleteConfirmationMatches = profileDeleteConfirmation.trim() === profileDeleteConfirmationPhrase;
+  const profileHasChartHistory = matchHistory.some(
+    (match) => !match.isCalibration && (match.playerAId === currentUser?.id || match.playerBId === currentUser?.id)
+  );
   const cropBoxStyle = {
     left: `${avatarCropRect.x * 100}%`,
     top: `${avatarCropRect.y * 100}%`,
@@ -4071,7 +4048,26 @@ export default function App() {
 
                   <div className="play-layout">
                     {playModeTab === "ranked" && (
-                      <section className={`ranked-match-card${rankedQueueState === "waiting" ? " is-searching" : ""}`} aria-labelledby="ranked-title">
+                      <section className={`ranked-match-card${rankedQueueState === "waiting" ? " is-searching" : ""}${currentUser ? "" : " is-guest"}`} aria-labelledby="ranked-title">
+                        {!currentUser ? (
+                          <>
+                            <div className="ranked-card-top">
+                              <div>
+                                <h2 id="ranked-title">{tr("Рейтинг 1vs1", "Ranked 1v1")}</h2>
+                                <p>{tr("Войдите, чтобы играть ranked-матчи, видеть MMR и историю результатов.", "Sign in to play ranked, track MMR, and keep match history.")}</p>
+                              </div>
+                            </div>
+                            <div className="oauth-actions ranked-guest-actions">
+                              <a href={apiPath("auth/google/start")}>
+                                <GoogleGIcon /> Google
+                              </a>
+                              <a href={apiPath("auth/discord/start")}>
+                                <DiscordIcon /> Discord
+                              </a>
+                            </div>
+                          </>
+                        ) : (
+                          <>
                         <div className="ranked-card-top">
                           <div>
                             <h2 id="ranked-title">{tr("Рейтинг 1vs1", "Ranked 1v1")}</h2>
@@ -4099,7 +4095,6 @@ export default function App() {
                         </div>
 
                         <div className="play-start-action">
-                          {!currentUser && <p className="menu-note">{tr("Для рейтинга нужен вход в аккаунт.", "Sign in to play ranked.")}</p>}
                           {rankedWarningText && <p className="menu-note ranked-warning">{rankedWarningText}</p>}
                           {rankedStatus && <p className="menu-note">{rankedStatus}</p>}
                           <button className="ranked-action ranked-play-button play-start-button" disabled={rankedQueueState === "matched" || rankedQueueBlocked} onClick={() => void joinRanked()}>
@@ -4109,6 +4104,8 @@ export default function App() {
                             {rankedButtonTime && <span className="ranked-button-time">{rankedButtonTime}</span>}
                           </button>
                         </div>
+                          </>
+                        )}
                       </section>
                     )}
 
@@ -4219,183 +4216,272 @@ export default function App() {
                 <section className={`menu-panel profile-panel ${currentUser ? "is-signed-in" : "is-signed-out"}`}>
                   {currentUser ? (
                     <>
-                      <div className="profile-account-header">
-                        <div className="profile-account-summary">
-                          <div className="profile-avatar profile-avatar-large is-circle">{currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={32} />}</div>
-                          <div className="profile-identity">
-                            <strong>{currentUser.displayName}</strong>
-                            <span>{currentUser.email ?? tr("Аккаунт игрока", "Player account")}</span>
-                          </div>
-                        </div>
-                        <div className="profile-stat-list">
-                          <div className="profile-stat-row">
-                            <Trophy size={16} />
-                            <span>{tr("Рейтинг", "Rating")}</span>
-                            <strong>{profileRating ? profileRating.mmr ?? "?" : "..."}</strong>
-                          </div>
-                          <div className="profile-stat-row">
-                            <ScrollText size={16} />
-                            <span>{tr("Матчи", "Matches")}</span>
-                            <strong>{profileRating ? profileRating.rankedGames : "..."}</strong>
-                          </div>
-                          <div className="profile-stat-row">
-                            {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
-                            <span>2FA</span>
-                            <strong>{currentUser.twoFactorEnabled ? tr("Вкл.", "On") : tr("Выкл.", "Off")}</strong>
-                          </div>
-                        </div>
-                        <button className="profile-logout-button" type="button" onClick={() => void signOut()}>
-                          <LogOut size={16} /> {tr("Выйти", "Sign out")}
-                        </button>
-                      </div>
-                      <div className="profile-main">
-                        <section className="profile-settings-card">
-                          <div className="profile-section-heading">
-                            <div>
-                              <h2>
-                                <BadgeCheck size={18} /> {tr("Профиль", "Profile")}
-                              </h2>
-                            </div>
-                            <button type="button" className="primary-action" onClick={() => void submitProfileUpdate()} disabled={profileDeletionPending}>
-                              <Check size={16} /> {tr("Сохранить", "Save")}
-                            </button>
-                          </div>
-                          <div className="profile-settings-grid">
-                            <div className="profile-avatar-editor">
-                              <div className="profile-avatar profile-avatar-medium is-circle">
-                                {profileRemoveAvatar ? <User size={26} /> : profileAvatarPreviewUrl ? <img src={profileAvatarPreviewUrl} alt="" /> : currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={26} />}
-                              </div>
-                              <div className="profile-avatar-actions">
-                                <label className="profile-upload-button" htmlFor={avatarInputId}>
-                                  <Upload size={16} /> {tr("Загрузить", "Upload")}
-                                </label>
-                                <input
-                                  id={avatarInputId}
-                                  className="profile-file-input"
-                                  type="file"
-                                  accept="image/png,image/jpeg,image/webp"
-                                  aria-label={tr("Новая аватарка", "New avatar")}
-                                  disabled={profileDeletionPending}
-                                  onChange={(event) => {
-                                    openAvatarCrop(event.target.files?.[0] ?? null);
-                                    event.currentTarget.value = "";
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setProfileAvatarFile(null);
-                                    setProfileAvatarPreviewUrl((previewUrl) => {
-                                      if (previewUrl) {
-                                        URL.revokeObjectURL(previewUrl);
-                                      }
-                                      return "";
-                                    });
-                                    setProfileRemoveAvatar(true);
-                                  }}
-                                  disabled={profileDeletionPending || (!currentUser.avatarUrl && !profileAvatarFile)}
-                                >
-                                  <Trash2 size={16} /> {tr("Удалить", "Remove")}
-                                </button>
-                              </div>
-                            </div>
-                            <div className="profile-fields">
-                              <label className="field-label">
-                                <span>{tr("Ник", "Name")}</span>
-                                <input className="menu-field" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} disabled={profileDeletionPending} />
-                              </label>
-                              <label className="field-label">
-                                <span>Email</span>
-                                <input className="menu-field" value={currentUser.email ?? ""} disabled />
-                              </label>
-                            </div>
-                          </div>
-                        </section>
-                        <section className="profile-settings-card">
-                          <div className="profile-section-heading">
-                            <div>
-                              <h2>
-                                <ShieldCheck size={18} /> 2FA
-                              </h2>
-                            </div>
-                            <span className={`profile-security-status ${currentUser.twoFactorEnabled ? "enabled" : ""}`}>
-                              {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
-                              {currentUser.twoFactorEnabled ? tr("Вкл.", "On") : tr("Выкл.", "Off")}
-                            </span>
-                          </div>
-                          {!currentUser.twoFactorEnabled && !twoFactorSetup && (
-                            <button type="button" className="profile-inline-action" onClick={() => void beginTwoFactorSetup()}>
-                              <Smartphone size={16} /> {tr("Настроить 2FA", "Set up 2FA")}
-                            </button>
-                          )}
-                          {twoFactorSetup && (
-                            <div className="two-factor-setup">
-                              <div className="two-factor-qr" aria-label={tr("QR-код 2FA", "2FA QR code")} role="img" dangerouslySetInnerHTML={{ __html: twoFactorSetup.qrCodeSvg }} />
-                              <div className="two-factor-code-panel">
-                                <div className="two-factor-step">
-                                  <QrCode size={18} />
-                                  <span>{tr("Сканировать", "Scan")}</span>
-                                </div>
-                                <label className="field-label">
-                                  <span>{tr("Код из приложения", "App code")}</span>
-                                  <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
-                                </label>
-                                <button type="button" className="primary-action" onClick={() => void submitTwoFactorEnable()} disabled={twoFactorCode.length !== 6}>
-                                  <KeyRound size={16} /> {tr("Включить", "Enable")}
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                          {currentUser.twoFactorEnabled && (
-                            <div className="two-factor-disable">
-                              <label className="field-label">
-                                <span>{tr("Код из приложения", "App code")}</span>
-                                <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
-                              </label>
-                              <button type="button" onClick={() => void submitTwoFactorDisable()} disabled={twoFactorCode.length !== 6}>
-                                <ShieldAlert size={16} /> {tr("Выключить", "Disable")}
-                              </button>
-                            </div>
-                          )}
-                          {twoFactorRecoveryCodes.length > 0 && (
-                            <div className="recovery-codes">
-                              {twoFactorRecoveryCodes.map((code) => (
-                                <code key={code}>{code}</code>
-                              ))}
-                            </div>
-                          )}
-                        </section>
-                      </div>
-                      <div className="profile-danger">
-                        {profileDeletionPending && <p className="profile-delete-timer">{tr("Профиль будет удалён через", "Profile will be deleted in")} {profileDeleteCountdownText}.</p>}
-                        {profileDeletionPending ? (
-                          <button type="button" onClick={() => void cancelProfileDeletionRequest()}>
-                            <RefreshCw size={16} /> {tr("Отменить удаление профиля", "Cancel profile deletion")}
+                      <div className="profile-tabs" role="tablist" aria-label={tr("Разделы профиля", "Profile sections")}>
+                        {([
+                          ["overview", tr("Обзор", "Overview")],
+                          ["settings", tr("Настройки", "Settings")],
+                          ["danger", tr("Удаление аккаунта", "Delete account")]
+                        ] as Array<[ProfileTab, string]>).map(([id, label]) => (
+                          <button
+                            aria-selected={profileTab === id}
+                            className={profileTab === id ? "active" : ""}
+                            key={id}
+                            onClick={() => setProfileTab(id)}
+                            role="tab"
+                            type="button"
+                          >
+                            {label}
                           </button>
-                        ) : (
-                          <>
-                            <label className="field-label">
-                              <span>{tr("Подтверждение удаления", "Deletion confirmation")}</span>
-                              <input className="menu-field" value={profileDeleteConfirmation} onChange={(event) => setProfileDeleteConfirmation(event.target.value)} placeholder="УДАЛИТЬ ПРОФИЛЬ" />
-                            </label>
-                            <button type="button" className="danger-action" onClick={() => void submitProfileDeletion()} disabled={!profileDeleteConfirmationMatches}>
-                              <X size={16} /> {tr("Удалить профиль", "Delete profile")}
-                            </button>
-                          </>
-                        )}
+                        ))}
                       </div>
-                      {profileStatus && <p className="profile-status">{profileStatus}</p>}
-                      {authError && <p className="lobby-error">{authError}</p>}
+
+                      {profileTab === "overview" && (
+                        <div className="profile-overview">
+                          <section className="profile-overview-account">
+                            <div className="profile-account-summary">
+                              <div className="profile-avatar profile-avatar-large is-circle">
+                                {currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={32} />}
+                              </div>
+                              <div className="profile-identity">
+                                <strong>{currentUser.displayName}</strong>
+                                <span>{currentUser.email ?? tr("Аккаунт игрока", "Player account")}</span>
+                              </div>
+                            </div>
+                            <span className="profile-calibration-status">
+                              {profileRating?.isCalibrating
+                                ? tr(
+                                    `Калибровка: осталось ${profileRating.calibrationGamesRemaining}`,
+                                    `Calibration: ${profileRating.calibrationGamesRemaining} left`
+                                  )
+                                : tr("Рейтинг определён", "Rating established")}
+                            </span>
+                          </section>
+
+                          <div className="profile-overview-stats">
+                            <div className="profile-overview-stat">
+                              <span>MMR</span>
+                              <strong>{profileRating ? `${profileRating.mmr ?? "?"} MMR` : "..."}</strong>
+                            </div>
+                            <div className="profile-overview-stat">
+                              <span>{tr("Матчи", "Matches")}</span>
+                              <strong>{profileRating ? profileRating.rankedGames : "..."}</strong>
+                            </div>
+                            <div className="profile-overview-stat">
+                              <span>{tr("Победы / поражения", "Wins / losses")}</span>
+                              <strong>{rankedRecordText}</strong>
+                            </div>
+                            <div className="profile-overview-stat">
+                              <span>{tr("Процент побед", "Win rate")}</span>
+                              <strong>{rankedWinRateText}</strong>
+                            </div>
+                          </div>
+
+                          <section className="profile-chart-section">
+                            <div className="profile-section-heading">
+                              <h2>
+                                <Trophy size={18} /> {tr("Изменение MMR", "MMR progress")}
+                              </h2>
+                              <span>{tr("Последние 20 матчей", "Last 20 matches")}</span>
+                            </div>
+                            {matchHistoryError ? <p className="lobby-error">{matchHistoryError}</p> : null}
+                            {!matchHistoryError && profileRating?.isCalibrating ? (
+                              <p className="menu-note">
+                                {tr(
+                                  "График появится после завершения калибровки.",
+                                  "The chart will appear after calibration is complete."
+                                )}
+                              </p>
+                            ) : null}
+                            {!matchHistoryError && !profileRating?.isCalibrating && profileHasChartHistory ? (
+                              <ProfileMmrChart history={matchHistory} playerId={currentUser.id} isCalibrating={false} />
+                            ) : null}
+                            {!matchHistoryError && !profileRating?.isCalibrating && !profileHasChartHistory ? (
+                              <p className="menu-note">{tr("Завершённых рейтинговых матчей пока нет.", "No completed ranked matches yet.")}</p>
+                            ) : null}
+                            {profileHasChartHistory && !profileRating?.isCalibrating ? (
+                              <div className="profile-chart-legend" aria-hidden="true">
+                                <span className="is-win">{tr("Победа", "Win")}</span>
+                                <span className="is-loss">{tr("Поражение", "Loss")}</span>
+                                <span className="is-draw">{tr("Ничья", "Draw")}</span>
+                              </div>
+                            ) : null}
+                          </section>
+                        </div>
+                      )}
+
+                      {profileTab === "settings" && (
+                        <div className="profile-settings">
+                          <div className="profile-main">
+                            <section className="profile-settings-card">
+                              <div className="profile-section-heading">
+                                <h2>
+                                  <BadgeCheck size={18} /> {tr("Профиль", "Profile")}
+                                </h2>
+                                <button type="button" className="primary-action" onClick={() => void submitProfileUpdate()} disabled={profileDeletionPending}>
+                                  <Check size={16} /> {tr("Сохранить", "Save")}
+                                </button>
+                              </div>
+                              <div className="profile-settings-grid">
+                                <div className="profile-avatar-editor">
+                                  <div className="profile-avatar profile-avatar-medium is-circle">
+                                    {profileRemoveAvatar ? <User size={26} /> : profileAvatarPreviewUrl ? <img src={profileAvatarPreviewUrl} alt="" /> : currentUser.avatarUrl ? <img src={currentUser.avatarUrl} alt="" /> : <User size={26} />}
+                                  </div>
+                                  <div className="profile-avatar-actions">
+                                    <label className="profile-upload-button" htmlFor={avatarInputId}>
+                                      <Upload size={16} /> {tr("Загрузить", "Upload")}
+                                    </label>
+                                    <input
+                                      id={avatarInputId}
+                                      className="profile-file-input"
+                                      type="file"
+                                      accept="image/png,image/jpeg,image/webp"
+                                      aria-label={tr("Новая аватарка", "New avatar")}
+                                      disabled={profileDeletionPending}
+                                      onChange={(event) => {
+                                        openAvatarCrop(event.target.files?.[0] ?? null);
+                                        event.currentTarget.value = "";
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setProfileAvatarFile(null);
+                                        setProfileAvatarPreviewUrl((previewUrl) => {
+                                          if (previewUrl) {
+                                            URL.revokeObjectURL(previewUrl);
+                                          }
+                                          return "";
+                                        });
+                                        setProfileRemoveAvatar(true);
+                                      }}
+                                      disabled={profileDeletionPending || (!currentUser.avatarUrl && !profileAvatarFile)}
+                                    >
+                                      <Trash2 size={16} /> {tr("Удалить", "Remove")}
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="profile-fields">
+                                  <label className="field-label">
+                                    <span>{tr("Ник", "Name")}</span>
+                                    <input className="menu-field" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} disabled={profileDeletionPending} />
+                                  </label>
+                                  <label className="field-label">
+                                    <span>Email</span>
+                                    <input className="menu-field" value={currentUser.email ?? ""} disabled />
+                                  </label>
+                                </div>
+                              </div>
+                            </section>
+                            <section className="profile-settings-card">
+                              <div className="profile-section-heading">
+                                <h2>
+                                  <ShieldCheck size={18} /> 2FA
+                                </h2>
+                                <span className={`profile-security-status ${currentUser.twoFactorEnabled ? "enabled" : ""}`}>
+                                  {currentUser.twoFactorEnabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                                  {currentUser.twoFactorEnabled ? tr("Вкл.", "On") : tr("Выкл.", "Off")}
+                                </span>
+                              </div>
+                              {!currentUser.twoFactorEnabled && !twoFactorSetup && (
+                                <button type="button" className="profile-inline-action" onClick={() => void beginTwoFactorSetup()}>
+                                  <Smartphone size={16} /> {tr("Настроить 2FA", "Set up 2FA")}
+                                </button>
+                              )}
+                              {twoFactorSetup && (
+                                <div className="two-factor-setup">
+                                  <div className="two-factor-qr" aria-label={tr("QR-код 2FA", "2FA QR code")} role="img" dangerouslySetInnerHTML={{ __html: twoFactorSetup.qrCodeSvg }} />
+                                  <div className="two-factor-code-panel">
+                                    <div className="two-factor-step">
+                                      <QrCode size={18} />
+                                      <span>{tr("Сканировать", "Scan")}</span>
+                                    </div>
+                                    <label className="field-label">
+                                      <span>{tr("Код из приложения", "App code")}</span>
+                                      <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
+                                    </label>
+                                    <button type="button" className="primary-action" onClick={() => void submitTwoFactorEnable()} disabled={twoFactorCode.length !== 6}>
+                                      <KeyRound size={16} /> {tr("Включить", "Enable")}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                              {currentUser.twoFactorEnabled && (
+                                <div className="two-factor-disable">
+                                  <label className="field-label">
+                                    <span>{tr("Код из приложения", "App code")}</span>
+                                    <input className="menu-field two-factor-code-field" value={twoFactorCode} inputMode="numeric" maxLength={6} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
+                                  </label>
+                                  <button type="button" onClick={() => void submitTwoFactorDisable()} disabled={twoFactorCode.length !== 6}>
+                                    <ShieldAlert size={16} /> {tr("Выключить", "Disable")}
+                                  </button>
+                                </div>
+                              )}
+                              {twoFactorRecoveryCodes.length > 0 && (
+                                <div className="recovery-codes">
+                                  {twoFactorRecoveryCodes.map((code) => (
+                                    <code key={code}>{code}</code>
+                                  ))}
+                                </div>
+                              )}
+                            </section>
+                          </div>
+                          <div className="profile-settings-actions">
+                            <button className="profile-logout-button" type="button" onClick={() => void signOut()}>
+                              <LogOut size={16} /> {tr("Выйти из аккаунта", "Sign out")}
+                            </button>
+                          </div>
+                          {profileStatus ? <p className="profile-status">{profileStatus}</p> : null}
+                          {authError ? <p className="lobby-error">{authError}</p> : null}
+                        </div>
+                      )}
+
+                      {profileTab === "danger" && (
+                        <section className="profile-danger-section">
+                          <div className="profile-section-heading compact">
+                            <h2>{tr("Удаление аккаунта", "Delete account")}</h2>
+                            <p>
+                              {tr(
+                                "После подтверждения профиль будет окончательно удалён через 14 дней.",
+                                "After confirmation, the profile will be permanently deleted in 14 days."
+                              )}
+                            </p>
+                          </div>
+                          <div className="profile-danger">
+                            {profileDeletionPending ? (
+                              <>
+                                <p className="profile-delete-timer">
+                                  {tr("Профиль будет удалён через", "Profile will be deleted in")} {profileDeleteCountdownText}.
+                                </p>
+                                <button type="button" onClick={() => void cancelProfileDeletionRequest()}>
+                                  <RefreshCw size={16} /> {tr("Отменить удаление профиля", "Cancel profile deletion")}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <label className="field-label">
+                                  <span>{tr("Подтверждение удаления", "Deletion confirmation")}</span>
+                                  <input className="menu-field" value={profileDeleteConfirmation} onChange={(event) => setProfileDeleteConfirmation(event.target.value)} placeholder={profileDeleteConfirmationPhrase} />
+                                </label>
+                                <button type="button" className="danger-action" onClick={() => void submitProfileDeletion()} disabled={!profileDeleteConfirmationMatches}>
+                                  <X size={16} /> {tr("Удалить профиль", "Delete profile")}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                          {profileStatus ? <p className="profile-status">{profileStatus}</p> : null}
+                          {authError ? <p className="lobby-error">{authError}</p> : null}
+                        </section>
+                      )}
                     </>
                   ) : (
                     <>
                       <h2>{tr("Войдите в аккаунт", "Sign in")}</h2>
                       <p>{tr("Без входа нельзя играть в рейтинг и покупать будущие DLC.", "Sign in to play ranked and buy future DLC.")}</p>
                       <div className="oauth-actions">
-                        <a href={apiHref("auth/google/start")}>
+                        <a href={apiPath("auth/google/start")}>
                           <GoogleGIcon /> Google
                         </a>
-                        <a href={apiHref("auth/discord/start")}>
+                        <a href={apiPath("auth/discord/start")}>
                           <DiscordIcon /> Discord
                         </a>
                       </div>
@@ -4732,13 +4818,14 @@ export default function App() {
 
       <section className="trend-strip">
         {state.activeTrends.map((trend, index) => (
-          <TrendCard key={trend.id} trend={trend} focused={index === 0} language={language} />
+          <TrendCard key={trend.id} trend={trend} focused={index === 0} language={language} stageLabel={index === 0 ? tr("Сейчас", "Now") : tr("Активно", "Active")} />
         ))}
         {nextTrend && showUpcomingTrends && (
           <div className="trend-card preview-card" title={`${ui(language, "soon")}: ${trendName(language, nextTrend)}: ${formatModifiers(nextTrend.modifiers, language)}`}>
             <Sparkles size={18} />
             <div className="trend-copy">
-              <strong>{ui(language, "soon")}: {trendName(language, nextTrend)}</strong>
+              <em>{tr("Следующий раунд", "Next round")}</em>
+              <strong>{trendName(language, nextTrend)}</strong>
               <span>{formatModifiers(nextTrend.modifiers, language)}</span>
             </div>
           </div>

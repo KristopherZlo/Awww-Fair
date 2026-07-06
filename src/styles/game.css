@@ -53,6 +53,10 @@
   text-transform: uppercase;
 }
 
+.preview-card .trend-copy em {
+  color: #f7d99b;
+}
+
 .preview-card {
   border-style: dashed;
   opacity: 0.86;
@@ -602,6 +606,13 @@ button.card {
   background: rgba(255, 250, 240, 0.08);
 }
 
+.sale-result-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  overflow: visible;
+}
+
 .forecast-mode .sale-results {
   gap: 5px;
 }
@@ -612,11 +623,6 @@ button.card {
   padding: 6px 7px;
 }
 
-.forecast-mode .sale-results details:not([open]),
-.forecast-mode .sale-result-card:not(.expanded) {
-  min-height: 0;
-}
-
 .sale-results summary,
 .sale-result-toggle,
 .last-sale-review-toggle {
@@ -625,8 +631,12 @@ button.card {
   line-height: 1.18;
 }
 
-.sale-result-toggle,
-.last-sale-review-toggle {
+.sale-result-toggle {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
   width: 100%;
   justify-content: flex-start;
   border: 0;
@@ -636,7 +646,49 @@ button.card {
   text-align: left;
 }
 
-.sale-result-toggle::before,
+.last-sale-review-toggle {
+  display: inline-flex;
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: #fff7ed;
+  padding: 0;
+  text-align: left;
+}
+
+.sale-result-chevron {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #f8d9a3;
+}
+
+.sale-result-summary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sale-result-title,
+.sale-result-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.12;
+}
+
+.sale-result-meta {
+  color: #d8c29f;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.sale-result-meta.needs-work {
+  color: #f7d99b;
+}
+
 .last-sale-review-toggle::before {
   content: ">";
   display: inline-block;
@@ -644,7 +696,6 @@ button.card {
   color: #f8d9a3;
 }
 
-.sale-result-toggle[aria-expanded="true"]::before,
 .last-sale-review-toggle[aria-expanded="true"]::before {
   content: "v";
 }
@@ -653,6 +704,7 @@ button.card {
 .last-sale-review-body {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .last-sale-review {
@@ -668,11 +720,19 @@ button.card {
 .formula {
   display: grid;
   gap: 3px;
-  margin-top: 7px;
+  margin-top: 0;
+  min-width: 0;
   padding: 6px;
   border-radius: 7px;
   background: rgba(255, 250, 240, 0.08);
   font-size: 0.82rem;
+}
+
+.formula b,
+.formula span,
+.formula strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .formula.winner {

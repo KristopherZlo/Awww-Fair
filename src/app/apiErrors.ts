@@ -17,7 +17,7 @@ export function apiErrorMessage(response: Response, fallback: string, serverLabe
     if (isXamppPublicPath(options.pathname ?? currentPathname())) {
       return `${serverLabel} unavailable (HTTP ${response.status}). Apache is serving the app, but the Node API is not responding. Start it with npm run xampp:api and keep that terminal open.`;
     }
-    return `${serverLabel} unavailable (HTTP ${response.status}). Start the full local server with npm run dev:lan.`;
+    return `${serverLabel} unavailable (HTTP ${response.status}). Start the full local server with npm run lan.`;
   }
 
   return fallback;

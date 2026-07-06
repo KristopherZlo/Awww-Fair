@@ -166,14 +166,24 @@ export function CustomerCard({ customer, focusTags, language }: { customer: Cust
   );
 }
 
-export function TrendCard({ trend, focused = false, language }: { trend: TrendCardType; focused?: boolean; language: Language }) {
+export function TrendCard({
+  trend,
+  focused = false,
+  language,
+  stageLabel
+}: {
+  trend: TrendCardType;
+  focused?: boolean;
+  language: Language;
+  stageLabel?: string;
+}) {
   const label = trendName(language, trend);
   const modifiers = formatTrendModifiers(trend.modifiers, language, focused);
   return (
     <div className={`trend-card ${focused ? "focus-trend" : ""}`} title={`${label}: ${modifiers}`}>
       <Sparkles size={18} />
       <div className="trend-copy">
-        {focused && <em>{ui(language, "focusTrend")}</em>}
+        {(stageLabel || focused) && <em>{stageLabel ?? ui(language, "focusTrend")}</em>}
         <strong>{label}</strong>
         <span>{modifiers}</span>
       </div>

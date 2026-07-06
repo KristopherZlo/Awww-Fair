@@ -8,9 +8,9 @@ describe("API error messages", () => {
     expect(apiErrorMessage(response, "fallback", "API server", { pathname: "/trendmarket/" })).toMatch(/npm run xampp:api/);
   });
 
-  it("keeps the dev LAN command outside the XAMPP public path", () => {
+  it("keeps the LAN command outside the XAMPP public path", () => {
     const response = new Response("Service Unavailable", { status: 503 });
 
-    expect(apiErrorMessage(response, "fallback", "API server", { pathname: "/" })).toMatch(/npm run dev:lan/);
+    expect(apiErrorMessage(response, "fallback", "API server", { pathname: "/" })).toMatch(/npm run lan/);
   });
 });

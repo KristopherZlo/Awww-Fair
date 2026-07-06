@@ -8,10 +8,9 @@
 - `src/app/persistence.ts` owns localStorage loading, validation, and normalization for saved sessions and campaign progress.
 - `src/app/lobbyClient.ts` owns browser lobby API constants, bearer-token headers, and response parsing.
 - `src/app/presentation.ts` owns shared view formatting helpers for logs, scores, trends, and sale formulas.
-- `src/app/useLocalHintMarkers.ts` isolates browser-only debug marker state from the main component.
 - `src/components/` contains reusable JSX that has no authority over game state transitions.
 - `src/styles.css` is only the CSS entrypoint. The real styles live in focused files under `src/styles/`.
-- `server/lobby-server.mjs` is the boot file. `server/lobby-handler.mjs` contains the testable LAN lobby handler.
+- `server/lobby-server.ts` is the boot file. `server/lobby-handler.mjs` contains the testable LAN lobby handler.
 
 ## Test Profiles
 

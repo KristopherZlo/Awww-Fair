@@ -128,6 +128,8 @@ type MariaDbRankedPool = Pick<Pool, "query"> & {
 
 const RECONNECT_WINDOW_MS = 60 * 1000;
 const FALLBACK_BOT_SEARCH_MS = 30 * 1000;
+const RANKED_BOT_TURN_DELAY_MIN_MS = 2_000;
+const RANKED_BOT_TURN_DELAY_MAX_MS = 10_000;
 const CLEAN_GAMES_FOR_FORGIVENESS = 5;
 
 export class RankedCooldownError extends Error {
@@ -329,6 +331,9 @@ export function leaveCooldownSeconds(leaveCount: number): number {
 }
 
 export class RankedService {
+  // ponytail: in-memory delay is enough for one API process; persist if running multiple ranked workers.
+  private readonly botTurnReadyAt = new Map<string, number>();
+
   constructor(
     private readonly options: {
       store: RankedStore;
@@ -741,19 +746,34 @@ export class RankedService {
     }
 
     for (let guard = 0; guard < 128; guard += 1) {
-      const state = await this.replayStateForMatch(match);
-      const event = this.nextBotEvent(match, state);
+      const activeMatch = match;
+      const events = await this.options.store.eventsForMatch(activeMatch.id);
+      const state = events.reduce(
+        (current, event) =>
+          applyRankedReplayEvent(current, { actorId: event.actorId, eventType: event.eventType, payload: event.payload }, { playerAId: activeMatch.playerAId, playerBId: activeMatch.playerBId }),
+        activeMatch.initialState
+      );
+      const event = this.nextBotEvent(activeMatch, state);
       if (!event) {
         return;
       }
+      const now = this.options.now?.() ?? Date.now();
+      const previousEventAt = events.at(-1)?.createdAt ?? activeMatch.createdAt;
+      const delayKey = `${activeMatch.id}:${events.length}`;
+      const readyAt = this.botTurnReadyAt.get(delayKey) ?? previousEventAt + randomDelay(RANKED_BOT_TURN_DELAY_MIN_MS, RANKED_BOT_TURN_DELAY_MAX_MS);
+      this.botTurnReadyAt.set(delayKey, readyAt);
+      if (now < readyAt) {
+        return;
+      }
+      this.botTurnReadyAt.delete(delayKey);
       await this.options.store.recordMatchEvent({
-        matchId: match.id,
+        matchId: activeMatch.id,
         actorId: event.actorId,
         round: state.round,
         phase: state.phase,
         eventType: event.eventType,
         payload: event.payload,
-        createdAt: this.options.now?.() ?? Date.now()
+        createdAt: now
       });
       match = (await this.options.store.matchById(matchId)) ?? match;
       if (match.status !== "active") {

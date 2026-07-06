@@ -28,10 +28,6 @@ export function preloadImage(source: string | null | undefined) {
   image.src = source;
 }
 
-export function preloadImages(sources: readonly string[]) {
-  sources.forEach(preloadImage);
-}
-
 export function clearImagePreloadCacheForTest() {
   preloadedImageSources.clear();
 }

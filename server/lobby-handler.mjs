@@ -79,10 +79,6 @@ function roomView(room, seat) {
   };
 }
 
-function directStateUpdatesEnabled(env) {
-  return env.LOBBY_TRUST_CLIENT_STATE === "true";
-}
-
 function touchSeat(room, seat, now) {
   if (seat && room.seats[seat]) {
     room.seats[seat].lastSeenAt = now;
@@ -296,7 +292,6 @@ export function createLobbyHandler(options = {}) {
   const tokenFactory = options.tokenFactory ?? defaultTokenFactory;
   const initialStateFactory = options.initialStateFactory ?? null;
   const applyEvent = options.applyEvent ?? null;
-  const allowDirectStateUpdates = directStateUpdatesEnabled(env) && !applyEvent;
   const requireAuth = options.requireAuth ?? false;
   const authenticateRequest = options.authenticateRequest ?? null;
 
@@ -364,11 +359,7 @@ export function createLobbyHandler(options = {}) {
         }
 
         const body = await readBody(request, maxBodyBytes);
-        const initialState = initialStateFactory
-          ? initialStateFactory(body)
-          : allowDirectStateUpdates
-            ? body.state
-            : null;
+        const initialState = initialStateFactory ? initialStateFactory(body) : null;
         if (!initialState) {
           throw new HttpError(503, "Server lobby rules are not configured.");
         }
@@ -463,26 +454,6 @@ export function createLobbyHandler(options = {}) {
         }
         touchSeat(room, seat, now());
         room.state = nextState;
-        room.version += 1;
-        room.updatedAt = now();
-        json(response, request, env, 200, roomView(room, seat));
-        return;
-      }
-
-      if (request.method === "PUT" && parts[3] === "state") {
-        if (!allowDirectStateUpdates) {
-          throw new HttpError(403, "Direct lobby state updates are disabled.");
-        }
-        const body = await readBody(request, maxBodyBytes);
-        const seat = findSeatForActor(room, tokenFromAuthorization(request) ?? body.token, actor);
-        if (!seat || seat !== body.playerId) {
-          throw new HttpError(401, "Invalid lobby token.");
-        }
-        if (!body.state) {
-          throw new HttpError(400, "Game state is required.");
-        }
-        touchSeat(room, seat, now());
-        room.state = body.state;
         room.version += 1;
         room.updatedAt = now();
         json(response, request, env, 200, roomView(room, seat));

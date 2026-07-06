@@ -8,8 +8,6 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "dev:5175": "node server/lan-dev-server.mjs",
-    "dev:lan": "node server/lan-dev-server.mjs",
     "lan": "node server/lan-dev-server.mjs",
     "lobby": "tsx server/lobby-server.ts",
     "db:migrate": "tsx server/migrate.ts",
